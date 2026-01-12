@@ -61,7 +61,8 @@ impl Override {
     /// "value" as Global, "job=value" as Job
     pub fn parse(s: &str) -> Self {
         match s.split_once('=') {
-            Some((job, value)) if !job.contains('/') && !job.contains('\\') => Override::Job { // in case there is an = in a path
+            Some((job, value)) if !job.contains('/') && !job.contains('\\') => Override::Job {
+                // in case there is an = in a path
                 name: job.to_string(),
                 value: value.to_string(),
             },

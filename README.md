@@ -108,7 +108,6 @@ job-name:
 - name: Build project          # optional: display name
   run: make build              # required: command to execute
   workdir: /app/src            # optional: working directory
-  shell: /bin/bash -c          # optional: shell (default: /bin/sh -c)
   timeout: 10m                 # optional: step timeout
   env:                         # optional: environment variables
     CC: clang
