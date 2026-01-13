@@ -54,7 +54,7 @@ pub struct Job {
 /// I don't see why something would take longer than 2 hours realistically.
 /// I have definitely compiled gRPC for over an hour, but 2 hours is some lunacy.
 /// If it does, the user can specify it themselves.
-pub const MAX_TIMEOUT: u64 = 86400;
+pub const MAX_TIMEOUT: u64 = 7200;
 
 pub const DEFAULT_VM_PORT: u16 = 22;
 
