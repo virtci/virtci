@@ -341,9 +341,13 @@ impl JobRunner {
 
                 return Ok(());
             }
-            StepKind::Copy(_copy_spec) => {
-                // TODO: implement SFTP copy
-                println!("{}", "  (copy not yet implemented)".dimmed().italic());
+            StepKind::Copy(copy_spec) => {
+                let from = copy_spec.from.clone();
+                let to = copy_spec.to.clone();
+                let ignore: Vec<String> = Vec::new(); // TODO: add ignore to CopySpec if needed
+
+                ssh::copy_files(self.host_port, creds, &from, &to, &ignore).await?;
+
                 return Ok(());
             }
             StepKind::Offline(offline) => {
