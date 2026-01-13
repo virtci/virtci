@@ -10,6 +10,7 @@ Currently just supports QEMU.
 # test_windows.yml
 windows-11-x64:
     image: ~/Documents/windows-11-x64.qcow2
+    arch: amd64
     cpus: 2
     memory: 8G
     user: dev
@@ -24,6 +25,7 @@ windows-11-x64:
 
 windows-11-arm64:
     image: ~/Documents/windows-11-arm64.qcow2
+    arch: arm64
     cpus: 2
     memory: 8G
     user: dev

@@ -1,6 +1,7 @@
 mod cli;
 mod job;
 mod yaml;
+mod ssh;
 
 fn main() {
     let args: cli::Args = argh::from_env();
@@ -51,11 +52,9 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
         let job_arch: job::Arch = {
             let cli_arch = cli::resolve_for_job(&arch_overrides, &name);
             if let Some(arch_str) = cli_arch {
-                job::Arch::parse(arch_str)
-                    .expect(&format!("Invalid architecture: {}", arch_str))
+                job::Arch::parse(arch_str).expect(&format!("Invalid architecture: {}", arch_str))
             } else if let Some(ref yaml_arch) = pair.1.arch {
-                job::Arch::parse(yaml_arch)
-                    .expect(&format!("Invalid architecture: {}", yaml_arch))
+                job::Arch::parse(yaml_arch).expect(&format!("Invalid architecture: {}", yaml_arch))
             } else {
                 job::Arch::default()
             }
