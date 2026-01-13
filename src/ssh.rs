@@ -30,6 +30,8 @@ fn is_port_available(port: u16) -> bool {
 }
 
 pub fn wait_for_ssh(port: u16, timeout_secs: u64) -> Option<u64> {
+    use std::io::{BufRead, BufReader};
+
     let timeout = Duration::from_secs(timeout_secs);
     let poll_interval = Duration::from_secs(SSH_POLL_INTERVAL);
     let connect_timeout = Duration::from_secs(5);
@@ -43,8 +45,26 @@ pub fn wait_for_ssh(port: u16, timeout_secs: u64) -> Option<u64> {
 
         let addr = format!("127.0.0.1:{}", port);
         match TcpStream::connect_timeout(&addr.parse().unwrap(), connect_timeout) {
-            Ok(_) => return Some(elapsed.as_secs()),
-            Err(_) => std::thread::sleep(poll_interval),
+            Ok(stream) => {
+                // QEMU can make the SSH "available" even while the VM is still booting.
+                // So must check for a "banner" thingy such as "SSH-2.0-OpenSSH_8.9"
+                stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+                let mut reader = BufReader::new(stream);
+                let mut banner = String::new();
+                match reader.read_line(&mut banner) {
+                    Ok(_n) => {
+                        if banner.starts_with("SSH-") {
+                            return Some(elapsed.as_secs());
+                        }
+                    }
+                    Err(_e) => {
+                    }
+                }
+                std::thread::sleep(poll_interval);
+            }
+            Err(_e) => {
+                std::thread::sleep(poll_interval);
+            }
         }
     }
 }

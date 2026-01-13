@@ -39,8 +39,35 @@ fn main() {
     match args.command {
         cli::Command::Run(run_args) => {
             let jobs = extract_yaml_workflows(run_args);
+            run_jobs(jobs);
         }
     }
+}
+
+fn run_jobs(jobs: Vec<job::Job>) {
+    use colored::Colorize;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create tokio runtime");
+
+    for job in jobs {
+        let job_name = job.name.clone();
+        println!("{}", format!("=== Job {} ===", job_name).cyan().bold());
+
+        let result = rt.block_on(job::run_job(job));
+
+        match result {
+            Ok(_) => println!("{}\n", format!("=== Job {} completed ===", job_name).green().bold()),
+            Err(e) => {
+                eprintln!("{}", format!("=== Job {} failed: {} ===", job_name, e).red().bold());
+                std::process::exit(1);
+            }
+        }
+    }
+
+    println!("{}", "All jobs completed successfully".green().bold());
 }
 
 fn setup_signal_handlers() {
