@@ -1,5 +1,6 @@
 mod cli;
 mod job;
+mod platform;
 mod ssh;
 mod yaml;
 
@@ -62,9 +63,17 @@ fn run_jobs(jobs: Vec<job::Job>) {
         let result = rt.block_on(job::run_job(job));
 
         match result {
-            Ok(_) => println!("{}\n", format!("=== Job {} completed ===", job_name).green().bold()),
+            Ok(_) => println!(
+                "{}\n",
+                format!("=== Job {} completed ===", job_name).green().bold()
+            ),
             Err(e) => {
-                eprintln!("{}", format!("=== Job {} failed: {} ===", job_name, e).red().bold());
+                eprintln!(
+                    "{}",
+                    format!("=== Job {} failed: {} ===", job_name, e)
+                        .red()
+                        .bold()
+                );
                 std::process::exit(1);
             }
         }
@@ -86,7 +95,10 @@ fn run_cleanup(args: cli::CleanupArgs) {
     }
 
     if args.list {
-        println!("{}", format!("Found {} temporary VCI file(s):", files.len()).cyan());
+        println!(
+            "{}",
+            format!("Found {} temporary VCI file(s):", files.len()).cyan()
+        );
         for file in &files {
             println!("  {}", file.display());
         }
@@ -104,7 +116,10 @@ fn run_cleanup(args: cli::CleanupArgs) {
     }
 
     // confirm each deletion, very important
-    println!("{}", format!("Found {} temporary VCI file(s)", files.len()).cyan());
+    println!(
+        "{}",
+        format!("Found {} temporary VCI file(s)", files.len()).cyan()
+    );
     for file in &files {
         print!("Delete {}? [y/N] ", file.display());
         io::stdout().flush().ok();
@@ -158,7 +173,7 @@ fn setup_signal_handlers() {
 async fn signal_handler() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::{signal, SignalKind};
 
         let mut sigint = signal(SignalKind::interrupt()).unwrap();
         let mut sigterm = signal(SignalKind::terminate()).unwrap();

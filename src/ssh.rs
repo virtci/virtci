@@ -1,6 +1,6 @@
-use russh::keys::PrivateKeyWithHashAlg;
 use russh::keys::ssh_key;
-use russh::{ChannelMsg, client};
+use russh::keys::PrivateKeyWithHashAlg;
+use russh::{client, ChannelMsg};
 use russh_sftp::client::SftpSession;
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
@@ -60,8 +60,7 @@ pub fn wait_for_ssh(port: u16, timeout_secs: u64) -> Option<u64> {
                             return Some(elapsed.as_secs());
                         }
                     }
-                    Err(_e) => {
-                    }
+                    Err(_e) => {}
                 }
                 std::thread::sleep(poll_interval);
             }
@@ -248,7 +247,7 @@ pub fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a s
     if !to_starts && !from_starts {
         panic!("Cannot use SFTP to copy files from the host to itself!");
     }
-    
+
     if to_starts {
         return (CopyDirection::HostToVm, from, &to[3..]);
     } else {
@@ -291,7 +290,9 @@ pub async fn copy_files(
         }
     }
 
-    sftp.close().await.map_err(|e| format!("Failed to close SFTP: {}", e))?;
+    sftp.close()
+        .await
+        .map_err(|e| format!("Failed to close SFTP: {}", e))?;
     handle
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
@@ -317,7 +318,8 @@ async fn copy_host_to_vm(
         let final_remote = if sftp.try_exists(remote_path).await.unwrap_or(false) {
             if let Ok(meta) = sftp.metadata(remote_path).await {
                 if meta.is_dir() {
-                    let file_name = local.file_name()
+                    let file_name = local
+                        .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| "file".to_string());
                     format!("{}/{}", remote_path.trim_end_matches('/'), file_name)
@@ -344,7 +346,8 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote_path: &str) -> Res
     let contents = std::fs::read(local)
         .map_err(|e| format!("Failed to read local file {:?}: {}", local, e))?;
 
-    let mut file = sftp.create(remote_path)
+    let mut file = sftp
+        .create(remote_path)
         .await
         .map_err(|e| format!("Failed to create remote file {}: {}", remote_path, e))?;
 
@@ -385,7 +388,13 @@ async fn upload_dir_recursive(
         if local_path.is_file() {
             upload_file(sftp, &local_path, &remote_path).await?;
         } else if local_path.is_dir() {
-            Box::pin(upload_dir_recursive(sftp, &local_path, &remote_path, ignore)).await?;
+            Box::pin(upload_dir_recursive(
+                sftp,
+                &local_path,
+                &remote_path,
+                ignore,
+            ))
+            .await?;
         }
     }
 
@@ -421,7 +430,11 @@ async fn copy_vm_to_host(
     }
 }
 
-async fn download_file(sftp: &SftpSession, remote_path: &str, local_path: &str) -> Result<(), String> {
+async fn download_file(
+    sftp: &SftpSession,
+    remote_path: &str,
+    local_path: &str,
+) -> Result<(), String> {
     let contents = sftp
         .read(remote_path)
         .await
@@ -473,7 +486,13 @@ async fn download_dir_recursive(
             .map_err(|e| format!("Failed to get metadata for {}: {}", remote_path, e))?;
 
         if metadata.is_dir() {
-            Box::pin(download_dir_recursive(sftp, &remote_path, &local_path, ignore)).await?;
+            Box::pin(download_dir_recursive(
+                sftp,
+                &remote_path,
+                &local_path,
+                ignore,
+            ))
+            .await?;
         } else {
             download_file(sftp, &remote_path, &local_path).await?;
         }

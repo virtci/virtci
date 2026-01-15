@@ -69,6 +69,11 @@ cargo install --path .
 
 ## All Options
 
+| Environment Variable | Description |
+|----------------------|-------------|
+| VCI_QEMU_BINARY | Full path to the QEMU binary / executable |
+| VCI_UEFI_FIRMWARE_DIR | Path to UEFI firmware that may be needed for QEMU |
+
 ### All CLI Options
 
 #### `vci run`

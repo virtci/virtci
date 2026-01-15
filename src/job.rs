@@ -7,9 +7,7 @@ use std::process::Child;
 fn expand_path(path: &str) -> PathBuf {
     if path.starts_with("~/") {
         // Unix: $HOME, Windows: $USERPROFILE
-        if let Some(home) = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-        {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             return PathBuf::from(home).join(&path[2..]);
         }
     }
@@ -33,12 +31,8 @@ impl Arch {
         }
     }
 
-    pub fn qemu_binary(&self) -> &'static str {
-        match self {
-            Arch::X64 => "qemu-system-x86_64",
-            Arch::ARM64 => "qemu-system-aarch64",
-            Arch::RISCV64 => "qemu-system-riscv64",
-        }
+    pub fn qemu_binary(&self) -> String {
+        crate::platform::qemu_binary(*self)
     }
 
     pub fn qemu_machine(&self) -> &'static str {
@@ -59,23 +53,7 @@ impl Arch {
 
     /// UEFI firmware needed. UTM does this automatically I believe.
     pub fn uefi_firmware(&self) -> Option<std::path::PathBuf> {
-        let base = if cfg!(target_os = "macos") {
-            std::path::PathBuf::from("/opt/homebrew/share/qemu")
-        } else {
-            std::path::PathBuf::from("/usr/share/qemu")
-        };
-
-        let firmware = match self {
-            Arch::X64 => base.join("edk2-x86_64-code.fd"),
-            Arch::ARM64 => base.join("edk2-aarch64-code.fd"),
-            Arch::RISCV64 => base.join("edk2-riscv-code.fd"),
-        };
-
-        if firmware.exists() {
-            Some(firmware)
-        } else {
-            None
-        }
+        crate::platform::find_uefi_firmware(*self)
     }
 
     pub fn default() -> Arch {
@@ -186,7 +164,11 @@ impl JobRunner {
 
         // hardware accel if possible
         #[cfg(target_os = "linux")]
-        cmd.arg("-accel").arg("kvm");
+        {
+            if crate::platform::is_kvm_available() {
+                cmd.arg("-accel").arg("kvm");
+            }
+        }
         #[cfg(target_os = "macos")]
         cmd.arg("-accel").arg("hvf");
         #[cfg(target_os = "windows")]
@@ -272,7 +254,10 @@ impl JobRunner {
         self.start_vm()
             .map_err(|e| format!("Failed to start VM: {}", e))?;
 
-        println!("{}", format!("Waiting for SSH on port {}...", self.host_port).dimmed());
+        println!(
+            "{}",
+            format!("Waiting for SSH on port {}...", self.host_port).dimmed()
+        );
         match ssh::wait_for_ssh(self.host_port, ssh::SSH_WAIT_TIMEOUT) {
             Some(secs) => println!("{}", format!("SSH ready after {}s", secs).dimmed()),
             None => {
@@ -290,7 +275,10 @@ impl JobRunner {
                 .unwrap_or_else(|| format!("Step {}", i + 1));
             let continue_on_error = self.job.steps[i].continue_on_error;
 
-            println!("{}", format!("Step {}: {}", i + 1, step_name).yellow().bold());
+            println!(
+                "{}",
+                format!("Step {}: {}", i + 1, step_name).yellow().bold()
+            );
 
             let result = self.run_step(i, &creds).await;
 
@@ -327,8 +315,7 @@ impl JobRunner {
 
                 let result = tokio::time::timeout(timeout_duration, ssh_future)
                     .await
-                    .map_err(|_| format!("Timed out after {}s", step.timeout))?
-                    ?;
+                    .map_err(|_| format!("Timed out after {}s", step.timeout))??;
 
                 // VM output stays default white
                 if !result.stdout.is_empty() {
@@ -359,7 +346,10 @@ impl JobRunner {
             }
             StepKind::Offline(offline) => {
                 let offline = *offline;
-                println!("{}", format!("  Restarting VM (offline={})...", offline).dimmed());
+                println!(
+                    "{}",
+                    format!("  Restarting VM (offline={})...", offline).dimmed()
+                );
                 self.restart_vm(offline)
                     .map_err(|e| format!("Failed to restart VM: {}", e))?;
 

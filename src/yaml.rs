@@ -77,7 +77,11 @@ pub fn parse_timeout_seconds(s: &str) -> u64 {
         (s, 1u64)
     };
 
-    return num.parse::<u64>().ok().map(|n| n * unit).unwrap_or(MAX_TIMEOUT);
+    return num
+        .parse::<u64>()
+        .ok()
+        .map(|n| n * unit)
+        .unwrap_or(MAX_TIMEOUT);
 }
 
 #[cfg(test)]

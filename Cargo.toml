@@ -7,8 +7,7 @@ edition = "2021"
 argh = "0.1.13"
 serde = { version = "1", features = ["derive"] }
 serde_yml = "0.0.12"
-ring = "0.17.14"
-russh = { version = "0.56", default-features = false, features = ["ring"] }
+russh = { version = "0.56", default-features = false, features = ["aws-lc-rs"] }
 russh-sftp = "2.0"
 tokio = { version = "1", features = ["rt", "net", "time", "io-util", "macros", "process", "sync", "signal"] }
 colored = "3"
