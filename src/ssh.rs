@@ -253,7 +253,7 @@ pub fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a s
     if to_starts {
         return (CopyDirection::HostToVm, from, &to[3..]);
     } else {
-        return (CopyDirection::VmToHost, &from[3..], to);
+        return (CopyDirection::VmToHost, to, &from[3..]);
     }
 }
 

@@ -51,6 +51,10 @@ sudo apt install openssh-server
 sudo systemctl enable ssh
 sudo systemctl start ssh
 
+# Setup passwordless sudo, replacing USERNAME with the user
+echo "USERNAME ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/USERNAME
+sudo chmod 440 /etc/sudoers.d/USERNAME
+
 sudo sysctl vm.mmap_rnd_bits
 # If you see a value of 32, it should be adjusted to 28 for thread sanitizer usage
 sudo nano /etc/sysctl.conf
