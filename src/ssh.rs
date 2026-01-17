@@ -173,7 +173,9 @@ pub async fn run_command(
                 stderr.extend_from_slice(&data)
             }
             Some(ChannelMsg::ExitStatus { exit_status }) => exit_code = exit_status,
-            Some(ChannelMsg::Eof) | None => break,
+            // exit status might be after EOF. Why? Idk
+            Some(ChannelMsg::Eof) => {},
+            None => break,
             _ => {}
         }
     }
