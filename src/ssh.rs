@@ -381,6 +381,14 @@ async fn upload_file(sftp: &SftpSession, local: &Path, remote_path: &str) -> Res
         .await
         .map_err(|e| format!("Failed to write remote file {}: {}", remote_path, e))?;
 
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to flush remote file {}: {}", remote_path, e))?;
+
+    file.shutdown()
+        .await
+        .map_err(|e| format!("Failed to close remote file {}: {}", remote_path, e))?;
+
     return Ok(());
 }
 
