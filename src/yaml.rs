@@ -5,6 +5,13 @@ use std::collections::HashMap;
 pub type Workflow = HashMap<String, Job>;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum UefiFirmware {
+    Boolean(bool),
+    Path(String),
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Job {
     pub image: Option<String>,
     pub arch: Option<String>,
@@ -14,6 +21,7 @@ pub struct Job {
     pub pass: Option<String>,
     pub key: Option<String>,
     pub port: Option<u16>,
+    pub uefi: Option<UefiFirmware>,
     pub steps: Vec<Step>,
 }
 

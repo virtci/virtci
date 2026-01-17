@@ -1,4 +1,4 @@
-# Windows Desktop Setup
+# Windows Setup
 
 It is recommend to use Windows Server for x64. For arm64, Windows 11 Home is acceptable. You may get Windows Server arm64 ISOs from Windows. You may use Windows 11 Home for x64 as well.
 
@@ -35,7 +35,7 @@ qemu-system-x86_64 \
 -cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time \
 -smp 4 \
 -m 8G \
--bios /usr/share/ovmf/OVMF.fd \
+-drive if=pflash,format=raw,readonly=on,file=/usr/share/ovmf/OVMF.fd \
 -drive file=windows-server.qcow2,format=qcow2,if=virtio \
 -cdrom PATH_SO_ISO_YOU_DOWNLOADED \
 -drive file=PATH_TO_VIRTIO_DRIVERS,media=cdrom \
@@ -79,7 +79,7 @@ qemu-system-x86_64 \
 -cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time \
 -smp 4 \
 -m 8G \
--bios /usr/share/ovmf/OVMF.fd \
+-drive if=pflash,format=raw,readonly=on,file=/usr/share/ovmf/OVMF.fd \
 -drive file=windows-server.qcow2,format=qcow2,if=virtio \
 -netdev user,id=net0,hostfwd=tcp::2222-:22 \
 -device virtio-net-pci,netdev=net0 \

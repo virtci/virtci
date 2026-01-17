@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Child;
 
-fn expand_path(path: &str) -> PathBuf {
+pub fn expand_path(path: &str) -> PathBuf {
     if path.starts_with("~/") {
         // Unix: $HOME, Windows: $USERPROFILE
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
@@ -78,6 +78,8 @@ pub struct Job {
     pub key: Option<String>,
     /// Port within the VM that SSH accesses.
     pub port: u16,
+    /// UEFI firmware path (None = legacy BIOS)
+    pub uefi_firmware: Option<PathBuf>,
     pub steps: Vec<Step>,
 }
 
@@ -154,8 +156,9 @@ impl JobRunner {
         cmd.arg("-m").arg(format!("{}M", self.job.memory));
         cmd.arg("-smp").arg(self.job.cpus.to_string());
 
-        if let Some(firmware) = self.job.arch.uefi_firmware() {
-            cmd.arg("-bios").arg(firmware);
+        if let Some(ref firmware) = self.job.uefi_firmware {
+            cmd.arg("-drive")
+                .arg(format!("if=pflash,format=raw,readonly=on,file={}", firmware.display()));
         }
 
         cmd.arg("-drive")

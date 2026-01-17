@@ -394,6 +394,26 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
             panic!("Expected at least 1 step");
         }
 
+        let job_uefi_firmware: Option<PathBuf> = match &pair.1.uefi {
+            Some(yaml::UefiFirmware::Boolean(true)) => {
+                platform::find_uefi_firmware(job_arch)
+            }
+            Some(yaml::UefiFirmware::Path(path)) => {
+                let expanded = job::expand_path(path);
+                if !expanded.exists() {
+                    panic!(
+                        "UEFI firmware file not found: {} (expanded to {})",
+                        path,
+                        expanded.display()
+                    );
+                }
+                Some(expanded)
+            }
+            Some(yaml::UefiFirmware::Boolean(false)) | None => {
+                None
+            }
+        };
+
         jobs.push(job::Job {
             name: name,
             image: job_image,
@@ -404,6 +424,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
             pass: job_pass,
             key: job_key,
             port: job_port,
+            uefi_firmware: job_uefi_firmware,
             steps: job_steps,
         });
     }
