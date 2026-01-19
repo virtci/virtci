@@ -80,7 +80,6 @@ pub struct Job {
     pub key: Option<String>,
     /// Port within the VM that SSH accesses.
     pub port: u16,
-    /// UEFI firmware path (None = legacy BIOS)
     pub uefi_firmware: Option<PathBuf>,
     pub steps: Vec<Step>,
 }
@@ -128,10 +127,16 @@ pub struct JobRunner {
     pub temp_image: PathBuf,
     qemu_process: Option<Child>,
     offline: bool,
+    guest_os: Option<ssh::GuestOs>,
+    _port_reservation: Option<std::net::TcpListener>,
 }
 
 impl JobRunner {
-    pub fn new(job: Job, host_port: u16) -> std::io::Result<Self> {
+    pub fn new(
+        job: Job,
+        host_port: u16,
+        port_reservation: std::net::TcpListener,
+    ) -> std::io::Result<Self> {
         let name = temp_image_name(host_port, &job.name);
         let temp_image = temp_path(&name);
 
@@ -146,6 +151,8 @@ impl JobRunner {
             temp_image,
             qemu_process: None,
             offline,
+            guest_os: None,
+            _port_reservation: Some(port_reservation),
         });
     }
 
@@ -159,8 +166,10 @@ impl JobRunner {
         cmd.arg("-smp").arg(self.job.cpus.to_string());
 
         if let Some(ref firmware) = self.job.uefi_firmware {
-            cmd.arg("-drive")
-                .arg(format!("if=pflash,format=raw,readonly=on,file={}", firmware.display()));
+            cmd.arg("-drive").arg(format!(
+                "if=pflash,format=raw,readonly=on,file={}",
+                firmware.display()
+            ));
         }
 
         cmd.arg("-drive")
@@ -202,6 +211,7 @@ impl JobRunner {
         let fancy_cmd = format!("{:?}", cmd).replace("\"", "");
         println!("{}", (&fancy_cmd as &str).dimmed());
         self.qemu_process = Some(cmd.spawn()?);
+        self._port_reservation = None;
         return Ok(());
     }
 
@@ -275,6 +285,8 @@ impl JobRunner {
             }
         }
 
+        self.guest_os = Some(ssh::detect_guest_os(self.host_port, &creds).await);
+
         for i in 0..self.job.steps.len() {
             let step_name = self.job.steps[i]
                 .name
@@ -322,7 +334,16 @@ impl JobRunner {
 
                 let result = tokio::time::timeout(timeout_duration, ssh_future)
                     .await
-                    .map_err(|_| format!("Timed out after {}s", step.timeout))??;
+                    .map_err(|_| {
+                        use colored::Colorize;
+                        eprintln!(
+                            "{}",
+                            format!("  Command timed out after {}s", step.timeout)
+                                .red()
+                                .bold()
+                        );
+                        format!("Timed out after {}s", step.timeout)
+                    })??;
 
                 // VM output stays default white
                 if !result.stdout.is_empty() {
@@ -343,11 +364,57 @@ impl JobRunner {
                 let to = copy_spec.to.clone();
                 let exclude = &copy_spec.exclude;
 
-                let copy_future = ssh::copy_files(self.host_port, creds, &from, &to, exclude);
+                // Try tar-over-SSH cause SFTP keeps having issues with windows
+                let copy_future =
+                    ssh::copy_files_tar(self.host_port, creds, &from, &to, exclude, self.guest_os);
 
                 tokio::time::timeout(timeout_duration, copy_future)
                     .await
                     .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
+
+                // Stupid line endings
+                if matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
+                    use colored::Colorize;
+                    println!(
+                        "{}",
+                        "  Converting files to Windows encoding (UTF-8 without BOM + CRLF)..."
+                            .dimmed()
+                    );
+
+                    let convert_script = r#"
+                        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                        $extensions = '*.c','*.cpp','*.h','*.hpp','*.cc','*.cxx','*.hxx'
+                        $files = Get-ChildItem -Recurse -Include $extensions
+                        $count = 0
+                        $files | ForEach-Object {
+                            try {
+                                $bytes = [IO.File]::ReadAllBytes($_.FullName)
+                                $content = [System.Text.Encoding]::UTF8.GetString($bytes)
+                                $content = $content -replace "`r`n","`n" -replace "`r","`n" -replace "`n","`r`n"
+                                [IO.File]::WriteAllText($_.FullName, $content, $utf8NoBom)
+                                $count++
+                            } catch { }
+                        }
+                        Write-Host "Converted $count files"
+                    "#;
+
+                    let convert_result = ssh::run_command(
+                        self.host_port,
+                        creds,
+                        convert_script,
+                        None,
+                        &std::collections::HashMap::new(),
+                    )
+                    .await;
+
+                    if let Ok(result) = convert_result {
+                        if !result.stdout.trim().is_empty() {
+                            println!("{}", format!("  {}", result.stdout.trim()).dimmed());
+                        }
+                    } else {
+                        println!("{}", "  Warning: File conversion failed".yellow());
+                    }
+                }
 
                 return Ok(());
             }
@@ -355,14 +422,21 @@ impl JobRunner {
                 let offline = *offline;
                 println!(
                     "{}",
-                    format!("  Syncing filesystem before restart...", ).dimmed()
+                    format!("  Syncing filesystem before restart...",).dimmed()
                 );
 
-                // sync fs writes
+                // filesystem sync
+                let sync_cmd = match self.guest_os {
+                    Some(ssh::GuestOs::Windows) => {
+                        "Write-VolumeCache -DriveLetter C ; Start-Sleep -Seconds 2"
+                    }
+                    _ => "sync", // Unix/Linux/macOS
+                };
+
                 let sync_result = ssh::run_command(
                     self.host_port,
                     creds,
-                    "sync",
+                    sync_cmd,
                     None,
                     &std::collections::HashMap::new(),
                 )
@@ -372,7 +446,11 @@ impl JobRunner {
                     println!("{}", "  Warning: sync command failed".yellow());
                 }
 
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let wait_time = match self.guest_os {
+                    Some(ssh::GuestOs::Windows) => 3,
+                    _ => 1,
+                };
+                tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
 
                 println!(
                     "{}",
@@ -400,10 +478,10 @@ impl Drop for JobRunner {
 }
 
 pub async fn run_job(job: Job) -> Result<(), String> {
-    let host_port =
+    let (host_port, port_reservation) =
         ssh::find_available_port().ok_or_else(|| "No available ports in range".to_string())?;
 
-    let mut runner = JobRunner::new(job, host_port)
+    let mut runner = JobRunner::new(job, host_port, port_reservation)
         .map_err(|e| format!("Failed to create job runner: {}", e))?;
 
     crate::set_cleanup_path(runner.temp_image.clone());

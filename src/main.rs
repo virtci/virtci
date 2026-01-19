@@ -395,9 +395,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
         }
 
         let job_uefi_firmware: Option<PathBuf> = match &pair.1.uefi {
-            Some(yaml::UefiFirmware::Boolean(true)) => {
-                platform::find_uefi_firmware(job_arch)
-            }
+            Some(yaml::UefiFirmware::Boolean(true)) => platform::find_uefi_firmware(job_arch),
             Some(yaml::UefiFirmware::Path(path)) => {
                 let expanded = job::expand_path(path);
                 if !expanded.exists() {
@@ -409,9 +407,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
                 }
                 Some(expanded)
             }
-            Some(yaml::UefiFirmware::Boolean(false)) | None => {
-                None
-            }
+            Some(yaml::UefiFirmware::Boolean(false)) | None => None,
         };
 
         jobs.push(job::Job {
