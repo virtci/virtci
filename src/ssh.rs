@@ -379,18 +379,28 @@ pub fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a s
     }
 }
 
-fn expand_remote_tilde(path: &str, username: &str) -> String {
+fn expand_remote_tilde(path: &str, username: &str, guest_os: Option<GuestOs>) -> String {
     if path == "~" {
         if username == "root" {
             return "/root".to_string();
         } else {
-            return format!("/home/{}", username);
+            let home_base = if matches!(guest_os, Some(GuestOs::MacOS)) {
+                "/Users"
+            } else {
+                "/home"
+            };
+            return format!("{}/{}", home_base, username);
         }
     } else if let Some(rest) = path.strip_prefix("~/") {
         if username == "root" {
             return format!("/root/{}", rest);
         } else {
-            return format!("/home/{}/{}", username, rest);
+            let home_base = if matches!(guest_os, Some(GuestOs::MacOS)) {
+                "/Users"
+            } else {
+                "/home"
+            };
+            return format!("{}/{}/{}", home_base, username, rest);
         }
     }
     return path.to_string();
@@ -407,8 +417,8 @@ pub async fn copy_files_tar(
     let (direction, local_path, remote_path) = parse_copy_paths(from, to);
 
     let remote_path = match direction {
-        CopyDirection::HostToVm => expand_remote_tilde(remote_path, &creds.user),
-        CopyDirection::VmToHost => expand_remote_tilde(remote_path, &creds.user),
+        CopyDirection::HostToVm => expand_remote_tilde(remote_path, &creds.user, guest_os),
+        CopyDirection::VmToHost => expand_remote_tilde(remote_path, &creds.user, guest_os),
     };
 
     match direction {
@@ -716,12 +726,13 @@ pub async fn copy_files(
     from: &str,
     to: &str,
     ignore: &[String],
+    guest_os: Option<GuestOs>,
 ) -> Result<(), String> {
     let (direction, local_path, remote_path) = parse_copy_paths(from, to);
 
     let remote_path = match direction {
-        CopyDirection::HostToVm => expand_remote_tilde(remote_path, &creds.user),
-        CopyDirection::VmToHost => expand_remote_tilde(remote_path, &creds.user),
+        CopyDirection::HostToVm => expand_remote_tilde(remote_path, &creds.user, guest_os),
+        CopyDirection::VmToHost => expand_remote_tilde(remote_path, &creds.user, guest_os),
     };
 
     let remote_path = normalize_sftp_path(&remote_path);
