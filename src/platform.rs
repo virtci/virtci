@@ -18,6 +18,18 @@ pub fn qemu_binary(arch: crate::job::Arch) -> String {
     return base.to_string();
 }
 
+pub fn qemu_img_binary() -> String {
+    if let Ok(custom) = std::env::var("VCI_QEMU_IMG_BINARY") {
+        return custom;
+    }
+
+    #[cfg(target_os = "windows")]
+    return "qemu-img.exe".to_string();
+
+    #[cfg(not(target_os = "windows"))]
+    return "qemu-img".to_string();
+}
+
 pub fn find_uefi_firmware(arch: crate::job::Arch) -> Option<PathBuf> {
     let mut search_paths = Vec::new();
 

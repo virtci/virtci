@@ -150,6 +150,35 @@ pub fn temp_path(name: &str) -> PathBuf {
     return path;
 }
 
+fn create_backing_file(
+    source_path: &std::path::Path,
+    dest_path: &std::path::Path,
+) -> std::io::Result<()> {
+    let qemu_img = crate::platform::qemu_img_binary();
+
+    let output = std::process::Command::new(&qemu_img)
+        .args([
+            "create",
+            "-f", "qcow2",
+            "-b", &source_path.display().to_string(),
+            "-F", "qcow2",
+            &dest_path.display().to_string(),
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "Failed to create backing image: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 pub struct JobRunner {
     pub job: Job,
     pub host_port: u16,
@@ -175,7 +204,7 @@ impl JobRunner {
         let temp_image = temp_path(&name);
 
         let source_image = expand_path(&job.image);
-        std::fs::copy(&source_image, &temp_image)?;
+        create_backing_file(&source_image, &temp_image)?;
 
         // Temp UEFI vars if doing the split firmware code + vars
         let temp_vars = if let Some(yaml::UefiFirmware::Split(ref split)) = job.uefi {
@@ -188,7 +217,7 @@ impl JobRunner {
             None
         };
 
-        // Other additional drives must be copied, like OpenCore.qcow2 on mac
+        // Other additional drives use backing files, like OpenCore.qcow2 on mac
         let mut temp_additional_drives = Vec::new();
         if let Some(ref drives) = job.additional_drives {
             for (idx, drive_spec) in drives.iter().enumerate() {
@@ -203,7 +232,7 @@ impl JobRunner {
                     let source_path = expand_path(file_path);
                     let temp_name = format!("vci-{}-{}-drive-{}.qcow2", host_port, &job.name, idx);
                     let temp_path = temp_path(&temp_name);
-                    std::fs::copy(&source_path, &temp_path)?;
+                    create_backing_file(&source_path, &temp_path)?;
 
                     let updated_spec = drive_spec.replace(
                         &format!("file={}", file_path),
