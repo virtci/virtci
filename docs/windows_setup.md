@@ -18,6 +18,51 @@ This will assume you are using an x64 virtual machine. For ARM64, rather than la
 qemu-img create -f qcow2 windows-x64.qcow2 STORAGE_HERE
 ```
 
+Download VirtIO Windows Drivers [virtio-win.iso](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso)
+
+```sh
+cp /usr/share/OVMF/OVMF_VARS_4M.fd ./OVMF_VARS_4M.fd
+cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd ./OVMF_VARS_4M.ms.fd
+
+mkdir -p /tmp/emulated_tpm
+swtpm socket --tpmstate dir=/tmp/emulated_tpm --ctrl type=unixio,path=/tmp/emulated_tpm/swtpm-sock --tpm2 --daemon
+```
+
+```sh
+# Install from the ISO you got
+# Replace PATH_SO_ISO_YOU_DOWNLOADED with the actual ISO path
+# Replace PATH_TO_VIRTIO_DRIVERS with the virtio-win.iso path
+# For the PATH_TO_VIRTIO_DRIVERS, you may need the absolute path
+qemu-system-x86_64 \
+-machine type=q35,accel=kvm \
+-cpu host,hv_relaxed,hv_spinlocks=0x1fff,hv_vapic,hv_time \
+-smp 4 \
+-m 8G \
+-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.ms.fd \
+-drive if=pflash,format=raw,file=./OVMF_VARS_4M.ms.fd \
+-drive file=windows-x64.qcow2,format=qcow2,if=ide \
+-cdrom $HOME/vm/iso/Win11_25H2_English_x64.iso \
+-drive file=$HOME/vm/iso/virtio-win-0.1.285.iso,media=cdrom,index=1 \
+-boot d \
+-netdev user,id=net0 \
+-device virtio-net-pci,netdev=net0 \
+-device qemu-xhci,id=xhci \
+-device usb-tablet \
+-chardev socket,id=chrtpm,path=/tmp/emulated_tpm/swtpm-sock \
+-tpmdev emulator,id=tpm0,chardev=chrtpm \
+-device tpm-tis,tpmdev=tpm0 \
+-display gtk \
+-vga virtio
+```
+
+When you see "Press any key to boot from CD or DVD", do so.
+
+1. Open Device Manager (right-click Start → Device Manager)
+2. Look for "Ethernet Controller" or similar under "Other devices" with a yellow warning icon
+3. Right-click it → "Update driver"
+4. Choose "Browse my computer for drivers"
+5. Browse to D:\NetKVM\w11\amd64\ (or try D:\NetKVM\2k22\amd64\ if w11 doesn't work)
+6. Click "Next" and let it install
 
 ## Windows Server Setup
 

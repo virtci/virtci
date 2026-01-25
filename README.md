@@ -131,6 +131,7 @@ job-name:
   key: ~/.ssh/id_ed25519            # optional: SSH private key (alternative to pass)
   port: 22                          # optional: SSH port
   uefi: true                        # optional: UEFI firmware (see UEFI section below)
+  tpm: true                         # optional: Enable TPM 2.0 emulation (requires swtpm)
   steps:                            # List of steps to execute
     - ...
 ```
@@ -163,6 +164,34 @@ uefi:
 ```
 
 The split mode adheres to [UEFI pflash conventions](https://github.com/tianocore/tianocore.github.io/wiki/How-to-run-OVMF), creating a temporary copy of the vars file for each VM instance.
+
+##### TPM 2.0 Emulation
+
+Enables TPM 2.0 emulation for VMs that need it like Windows 11
+
+```yaml
+tpm: true    # Enables TPM 2.0 via swtpm
+```
+
+`swtpm` must be installed on the host system
+
+- Linux: `apt install swtpm` or `dnf install swtpm` or whatever else
+- macOS: `brew install swtpm`
+
+```yaml
+windows-11-x64:
+  image: ~/path/to/windows-11.qcow2
+  uefi:
+    code: /usr/share/OVMF/OVMF_CODE_4M.ms.fd
+    vars: /usr/share/OVMF/OVMF_VARS_4M.ms.fd
+  tpm: true
+  cpus: 4
+  memory: 8G
+  user: dev
+  pass: dev
+  steps:
+    - ...
+```
 
 ##### Advanced QEMU Configuration
 

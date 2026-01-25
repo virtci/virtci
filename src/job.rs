@@ -109,6 +109,7 @@ pub struct Job {
     pub additional_drives: Option<Vec<String>>,
     pub additional_devices: Option<Vec<String>>,
     pub qemu_args: Option<Vec<String>>,
+    pub tpm: Option<bool>,
     pub steps: Vec<Step>,
 }
 
@@ -156,6 +157,9 @@ pub struct JobRunner {
     pub temp_vars: Option<PathBuf>,
     pub temp_additional_drives: Vec<(String, PathBuf)>, // (original_spec, temp_path)
     qemu_process: Option<Child>,
+    tpm_process: Option<Child>,
+    tpm_state_dir: Option<PathBuf>,
+    tpm_socket_path: Option<PathBuf>,
     offline: bool,
     guest_os: Option<ssh::GuestOs>,
     _port_reservation: Option<std::net::TcpListener>,
@@ -212,6 +216,15 @@ impl JobRunner {
             }
         }
 
+        let (tpm_state_dir, tpm_socket_path) = if job.tpm == Some(true) {
+            let state_dir = temp_path(&format!("vci-{}-{}-tpm", host_port, &job.name));
+            std::fs::create_dir_all(&state_dir)?;
+            let socket_path = state_dir.join("swtpm-sock");
+            (Some(state_dir), Some(socket_path))
+        } else {
+            (None, None)
+        };
+
         let offline = matches!(job.steps[0].kind, StepKind::Offline(true));
 
         return Ok(Self {
@@ -221,6 +234,9 @@ impl JobRunner {
             temp_vars,
             temp_additional_drives,
             qemu_process: None,
+            tpm_process: None,
+            tpm_state_dir,
+            tpm_socket_path,
             offline,
             guest_os: None,
             _port_reservation: Some(port_reservation),
@@ -318,6 +334,15 @@ impl JobRunner {
         cmd.arg("-netdev").arg(netdev);
         cmd.arg("-device").arg("virtio-net-pci,netdev=net0");
 
+        // TPM stuff
+        if let Some(ref socket_path) = self.tpm_socket_path {
+            cmd.arg("-chardev")
+                .arg(format!("socket,id=chrtpm,path={}", socket_path.display()));
+            cmd.arg("-tpmdev")
+                .arg("emulator,id=tpm0,chardev=chrtpm");
+            cmd.arg("-device").arg("tpm-tis,tpmdev=tpm0");
+        }
+
         if let Some(ref additional_devices) = self.job.additional_devices {
             for device in additional_devices {
                 let expanded_device = expand_path_in_string(device);
@@ -337,6 +362,23 @@ impl JobRunner {
     }
 
     pub fn start_vm(&mut self) -> std::io::Result<()> {
+        if let (Some(ref state_dir), Some(ref socket_path)) = (&self.tpm_state_dir, &self.tpm_socket_path) {
+            let mut tpm_cmd = std::process::Command::new("swtpm");
+            tpm_cmd
+                .arg("socket")
+                .arg("--tpmstate")
+                .arg(format!("dir={}", state_dir.display()))
+                .arg("--ctrl")
+                .arg(format!("type=unixio,path={}", socket_path.display()))
+                .arg("--tpm2")
+                .arg("--daemon");
+
+            self.tpm_process = Some(tpm_cmd.spawn()?);
+
+            // Give swtpm a moment to initialize
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
         let mut cmd = self.build_qemu_cmd();
         let fancy_cmd = format!("{:?}", cmd).replace("\"", "");
         println!("{}", (&fancy_cmd as &str).dimmed());
@@ -351,6 +393,13 @@ impl JobRunner {
             let _ = process.wait();
         }
         self.qemu_process = None;
+
+        // Stop swtpm daemon if it's running
+        if let Some(ref mut process) = self.tpm_process {
+            let _ = process.kill();
+            let _ = process.wait();
+        }
+        self.tpm_process = None;
     }
 
     pub fn restart_vm(&mut self, offline: bool) -> std::io::Result<()> {
@@ -383,6 +432,10 @@ impl JobRunner {
             if !temp_path.as_os_str().is_empty() {
                 let _ = std::fs::remove_file(temp_path);
             }
+        }
+        // Clean up TPM state directory
+        if let Some(ref tpm_state_dir) = self.tpm_state_dir {
+            let _ = std::fs::remove_dir_all(tpm_state_dir);
         }
     }
 

@@ -36,6 +36,7 @@ pub struct Job {
     pub additional_drives: Option<Vec<String>>,
     pub additional_devices: Option<Vec<String>>,
     pub qemu_args: Option<Vec<String>>,
+    pub tpm: Option<bool>,
     pub steps: Vec<Step>,
 }
 
