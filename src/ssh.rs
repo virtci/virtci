@@ -191,6 +191,17 @@ pub async fn run_command(
     workdir: Option<&str>,
     env: &HashMap<String, String>,
 ) -> Result<CommandResult, String> {
+    run_command_with_os(port, creds, command, workdir, env, None).await
+}
+
+pub async fn run_command_with_os(
+    port: u16,
+    creds: &SshCredentials,
+    command: &str,
+    workdir: Option<&str>,
+    env: &HashMap<String, String>,
+    guest_os: Option<GuestOs>,
+) -> Result<CommandResult, String> {
     let handle = connect(port, creds).await?;
 
     let mut channel = handle
@@ -198,7 +209,7 @@ pub async fn run_command(
         .await
         .map_err(|e| format!("Failed to open channel: {}", e))?;
 
-    let full_command = build_command(command, workdir, env);
+    let full_command = build_command(command, workdir, env, guest_os);
 
     channel
         .exec(true, full_command)
@@ -260,6 +271,7 @@ pub async fn run_command_binary(
     command: &str,
     workdir: Option<&str>,
     env: &HashMap<String, String>,
+    guest_os: Option<GuestOs>,
 ) -> Result<BinaryCommandResult, String> {
     let handle = connect(port, creds).await?;
 
@@ -268,7 +280,7 @@ pub async fn run_command_binary(
         .await
         .map_err(|e| format!("Failed to open channel: {}", e))?;
 
-    let full_command = build_command(command, workdir, env);
+    let full_command = build_command(command, workdir, env, guest_os);
 
     channel
         .exec(true, full_command)
@@ -316,8 +328,11 @@ pub async fn run_command_binary(
     })
 }
 
-fn build_command(command: &str, workdir: Option<&str>, env: &HashMap<String, String>) -> String {
+fn build_command(command: &str, workdir: Option<&str>, env: &HashMap<String, String>, guest_os: Option<GuestOs>) -> String {
     let mut parts = Vec::new();
+
+    let is_windows = matches!(guest_os, Some(GuestOs::Windows));
+    let separator = if is_windows { "; " } else { " && " };
 
     for (key, value) in env {
         if !is_valid_env_key(key) {
@@ -333,7 +348,7 @@ fn build_command(command: &str, workdir: Option<&str>, env: &HashMap<String, Str
     }
 
     parts.push(command.to_string());
-    parts.join(" && ")
+    parts.join(separator)
 }
 
 fn is_valid_env_key(key: &str) -> bool {
@@ -640,6 +655,7 @@ async fn copy_vm_to_host_tar(
         &tar_cmd,
         None,
         &std::collections::HashMap::new(),
+        guest_os,
     )
     .await?;
 

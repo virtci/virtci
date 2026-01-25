@@ -595,12 +595,13 @@ impl JobRunner {
                         Write-Host "Converted $count files"
                     "#;
 
-                    let convert_result = ssh::run_command(
+                    let convert_result = ssh::run_command_with_os(
                         self.host_port,
                         creds,
                         convert_script,
                         Some(target_dir),
                         &std::collections::HashMap::new(),
+                        self.guest_os,
                     )
                     .await;
 
