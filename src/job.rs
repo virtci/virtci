@@ -456,9 +456,20 @@ impl JobRunner {
     }
 
     pub fn restart_vm(&mut self, offline: bool) -> std::io::Result<()> {
-        self.stop_vm();
+        if let Some(ref mut process) = self.qemu_process {
+            let _ = process.kill();
+            let _ = process.wait();
+        }
+        self.qemu_process = None;
+
         self.offline = offline;
-        self.start_vm()
+
+        let mut cmd = self.build_qemu_cmd();
+        let fancy_cmd = format!("{:?}", cmd).replace("\"", "");
+        println!("{}", (&fancy_cmd as &str).dimmed());
+        self.qemu_process = Some(cmd.spawn()?);
+
+        return Ok(());
     }
 
     pub fn is_running(&mut self) -> bool {
