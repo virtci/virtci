@@ -412,7 +412,18 @@ fn build_command(
 
     // do in the VM workdir
     if let Some(dir) = workdir {
-        parts.push(format!("cd '{}'", dir.replace("'", "'\\''")));
+        if dir.starts_with("~/") {
+            let path_after_tilde = &dir[2..];
+            let escaped = path_after_tilde
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("$", "\\$");
+            parts.push(format!("cd \"$HOME/{}\"", escaped));
+        } else if dir == "~" {
+            parts.push("cd \"$HOME\"".to_string());
+        } else {
+            parts.push(format!("cd '{}'", dir.replace("'", "'\\''")));
+        }
     }
 
     parts.push(command.to_string());
