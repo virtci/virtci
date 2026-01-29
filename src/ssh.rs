@@ -400,8 +400,14 @@ fn build_command(
         if !is_valid_env_key(key) {
             continue;
         }
-        let escaped = value.replace("'", "'\\''");
-        parts.push(format!("export {}='{}'", key, escaped));
+
+        if is_windows {
+            let escaped = value.replace("'", "''");
+            parts.push(format!("$env:{}='{}'", key, escaped));
+        } else {
+            let escaped = value.replace("'", "'\\''");
+            parts.push(format!("export {}='{}'", key, escaped));
+        }
     }
 
     // do in the VM workdir

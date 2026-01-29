@@ -132,30 +132,78 @@ job-name:
   port: 22                          # optional: SSH port
   uefi: true                        # optional: UEFI firmware (see UEFI section below)
   tpm: true                         # optional: Enable TPM 2.0 emulation (requires swtpm)
+  host_env:                         # optional: pass host env vars to VM (see below)
+    - GITHUB_TOKEN
+    - MY_SECRET_KEY
   steps:                            # List of steps to execute
     - ...
 ```
 
 `arch` may be one of: `x86_64`, `x64`, `amd64`, `aarch64`, `arm64`, `riscv64`
 
+##### Passing Environment Variables from Host to VM
+
+The `host_env` field allows you to pass environment variables from the host process to the VM. This is essential for passing secrets when running as a self-hosted CI runner.
+
+Example:
+
+```yaml
+mac-build:
+  image: ~/macos.qcow2
+  user: dev
+  pass: dev
+  host_env:
+    - APP_ID                        # Read from host env
+    - APP_PRIVATE_KEY
+    - APPLICATION_P12_FILE_BASE64
+    - APPLICATION_P12_PASSWORD
+  steps:
+    - name: Import Certificates
+      run: |
+        echo $APPLICATION_P12_FILE_BASE64 | base64 --decode > application.p12
+        security import application.p12 -k build.keychain -P $APPLICATION_P12_PASSWORD
+```
+
+GitHub Actions Integration:
+
+```yaml
+# .github/workflows/build.yml
+jobs:
+  mac-build:
+    runs-on: self-hosted
+    env:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+      APPLICATION_P12_FILE_BASE64: ${{ secrets.APPLICATION_P12_FILE_BASE64 }}
+      APPLICATION_P12_PASSWORD: ${{ secrets.APPLICATION_P12_PASSWORD }}
+    steps:
+      - name: Build in VM
+        run: vci run workflow.yml
+```
+
+Behavior:
+
+- Environment variables are passed to each step via SSH
+- Variables only exist during step execution, not persistent in the VM
+
 ##### UEFI Firmware Configuration
 
 The `uefi` field supports three modes:
 
-**Auto-detect system UEFI:**
+Auto-detect system UEFI:
 
 ```yaml
 uefi: true    # finds system OVMF.md
 uefi: false   # no firmware
 ```
 
-**Monolithic UEFI file:**
+Monolithic UEFI file:
 
 ```yaml
 uefi: /usr/share/ovmf/OVMF.fd    # monolithic file used by some stuff
 ```
 
-**Split code/vars (recommended for macOS, Windows, Secure Boot):**
+Split code/vars (recommended for macOS, Windows, Secure Boot):
 
 ```yaml
 uefi:

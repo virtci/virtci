@@ -37,6 +37,8 @@ pub struct Job {
     pub additional_devices: Option<Vec<String>>,
     pub qemu_args: Option<Vec<String>>,
     pub tpm: Option<bool>,
+    #[serde(default)]
+    pub host_env: Vec<String>,
     pub steps: Vec<Step>,
 }
 

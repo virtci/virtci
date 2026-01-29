@@ -110,6 +110,7 @@ pub struct Job {
     pub additional_devices: Option<Vec<String>>,
     pub qemu_args: Option<Vec<String>>,
     pub tpm: Option<bool>,
+    pub host_env: Vec<String>,
     pub steps: Vec<Step>,
 }
 
@@ -612,7 +613,25 @@ impl JobRunner {
             StepKind::Run(command) => {
                 let command = command.clone();
                 let workdir = step.workdir.clone();
-                let env = step.env.clone();
+
+                let mut env = HashMap::new();
+
+                for var_name in &self.job.host_env {
+                    if let Ok(value) = std::env::var(var_name) {
+                        env.insert(var_name.clone(), value);
+                    }
+                }
+
+                for (key, value) in &step.env {
+                    if env.contains_key(key) {
+                        eprintln!(
+                            "{}",
+                            format!("Warning: Step env variable '{}' overrides host_env", key)
+                                .yellow()
+                        );
+                    }
+                    env.insert(key.clone(), value.clone());
+                }
 
                 let ssh_future =
                     ssh::run_command(self.host_port, creds, &command, workdir.as_deref(), &env);
