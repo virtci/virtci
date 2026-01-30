@@ -472,21 +472,6 @@ impl JobRunner {
         return Ok(());
     }
 
-    pub fn is_running(&mut self) -> bool {
-        if let Some(ref mut process) = self.qemu_process {
-            match process.try_wait() {
-                Ok(Some(_)) => {
-                    self.qemu_process = None;
-                    return false;
-                }
-                Ok(None) => return true,
-                Err(_) => return false,
-            }
-        } else {
-            return false;
-        }
-    }
-
     fn cleanup_temp_image(&self) {
         let _ = std::fs::remove_file(&self.temp_image);
         if let Some(ref temp_vars) = self.temp_vars {
@@ -662,7 +647,7 @@ impl JobRunner {
 
                 // Try tar-over-SSH cause SFTP keeps having issues with windows
                 let copy_future =
-                    ssh::copy_files_tar(self.host_port, creds, &from, &to, exclude, self.guest_os);
+                    ssh::copy_files_tar(self.host_port, creds, &from, &to, exclude, self.guest_os, Some(timeout_duration));
 
                 tokio::time::timeout(timeout_duration, copy_future)
                     .await

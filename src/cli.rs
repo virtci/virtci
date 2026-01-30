@@ -1,5 +1,5 @@
 use argh::FromArgs;
-use std::{default, path::PathBuf};
+use std::path::PathBuf;
 
 /// VCI: Virtual Machine CI Runner
 #[derive(FromArgs, Debug)]

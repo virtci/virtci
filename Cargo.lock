@@ -2177,10 +2177,12 @@ name = "vci"
 version = "0.1.0"
 dependencies = [
  "argh",
+ "cc",
  "colored",
  "russh",
  "russh-sftp",
  "serde",
+ "serde_json",
  "serde_yml",
  "tokio",
 ]

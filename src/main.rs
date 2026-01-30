@@ -2,6 +2,7 @@ mod cli;
 mod job;
 mod platform;
 mod ssh;
+mod transfer_lock;
 mod yaml;
 
 use std::path::PathBuf;
@@ -277,7 +278,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
 
         let job_mem: u64 = {
             let temp = cli::resolve_for_job(&mem_overrides, &name);
-            let mut num: u64 = 0;
+            let mut num: u64;
             match temp {
                 Some(s) => {
                     num = cli::parse_mem_mb(temp.unwrap())
@@ -351,7 +352,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
 
         let job_port: u16 = {
             let temp = cli::resolve_for_job(&port_overrides, &name);
-            let mut num: u16 = 0;
+            let mut num: u16;
             if temp.is_some() {
                 num = temp.unwrap().parse::<u16>().expect("Expected number");
             } else {
