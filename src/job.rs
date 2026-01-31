@@ -654,7 +654,19 @@ impl JobRunner {
                     .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
 
                 // Stupid line endings
-                if matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
+                let should_convert = if matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
+                    let source_path = std::path::Path::new(&from);
+                    if source_path.is_file() {
+                        let ext = source_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        matches!(ext.to_lowercase().as_str(), "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" | "hxx")
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                };
+
+                if should_convert {
                     use colored::Colorize;
                     println!(
                         "{}",
