@@ -716,7 +716,9 @@ async fn copy_vm_to_host_tar(
     .await?;
     let is_dir = test_result.stdout.trim() == "DIR";
 
-    // Build tar command with exclusions on remote
+    // powershell may corrupt tar binary data??
+    let is_windows = matches!(guest_os, Some(GuestOs::Windows));
+
     let mut exclude_args = String::new();
     for pattern in ignore {
         exclude_args.push_str(&format!(" --exclude=\"{}\"", pattern));
@@ -724,7 +726,12 @@ async fn copy_vm_to_host_tar(
 
     let tar_cmd = if is_dir {
         // For directories: tar from within the directory
-        format!("tar czf - -C \"{}\"{} .", remote_path, exclude_args)
+        let base_cmd = format!("tar czf - -C \"{}\"{} .", remote_path, exclude_args);
+        if is_windows {
+            format!("cmd /c {}", base_cmd)
+        } else {
+            base_cmd
+        }
     } else {
         // For files: tar from parent directory with specific filename
         let path = std::path::Path::new(remote_path);
@@ -734,10 +741,15 @@ async fn copy_vm_to_host_tar(
             .and_then(|f| f.to_str())
             .ok_or_else(|| format!("Invalid filename in path: {}", remote_path))?;
 
-        format!(
+        let base_cmd = format!(
             "tar czf - -C \"{}\"{} \"{}\"",
             parent, exclude_args, filename
-        )
+        );
+        if is_windows {
+            format!("cmd /c {}", base_cmd)
+        } else {
+            base_cmd
+        }
     };
 
     eprintln!("[TAR] Creating archive from remote: {}", remote_path);
@@ -794,6 +806,17 @@ async fn copy_vm_to_host_tar(
 
     eprintln!("[TAR] Extracting to: {}", extract_dir);
 
+    // archive should starts with gzip magic bytes
+    if result.stdout.len() < 2 || result.stdout[0] != 0x1f || result.stdout[1] != 0x8b {
+        let preview: Vec<u8> = result.stdout.iter().take(64).cloned().collect();
+        let preview_str = String::from_utf8_lossy(&preview);
+        return Err(format!(
+            "Remote tar output is not a valid gzip archive. First bytes: {:02x?}, as text: '{}'",
+            &result.stdout[..std::cmp::min(16, result.stdout.len())],
+            preview_str.chars().take(64).collect::<String>()
+        ));
+    }
+
     let mut tar_process = Command::new("tar")
         .args(&["xzf", "-", "-C", &extract_dir])
         .stdin(Stdio::piped())
@@ -802,10 +825,33 @@ async fn copy_vm_to_host_tar(
         .spawn()
         .map_err(|e| format!("Failed to spawn tar extract: {}", e))?;
 
+    const CHUNK_SIZE: usize = 64 * 1024; // 64KB good size
+    let data = &result.stdout;
+    let mut bytes_written = 0usize;
+
     if let Some(mut stdin) = tar_process.stdin.take() {
-        stdin
-            .write_all(&result.stdout)
-            .map_err(|e| format!("Failed to write to tar stdin: {}", e))?;
+        for chunk in data.chunks(CHUNK_SIZE) {
+            match stdin.write_all(chunk) {
+                Ok(()) => {
+                    bytes_written += chunk.len();
+                }
+                Err(e) => {
+                    drop(stdin);
+                    let output = tar_process.wait_with_output().ok();
+                    let stderr = output
+                        .as_ref()
+                        .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "Failed to write to tar stdin after {} of {} bytes: {}. Tar stderr: {}",
+                        bytes_written,
+                        data.len(),
+                        e,
+                        if stderr.is_empty() { "(empty)" } else { &stderr }
+                    ));
+                }
+            }
+        }
     }
 
     let output = tar_process
