@@ -654,7 +654,8 @@ impl JobRunner {
                     .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
 
                 // Stupid line endings
-                let should_convert = if matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
+                let is_host_to_vm = to.starts_with("vm:");
+                let should_convert = if is_host_to_vm && matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
                     let source_path = std::path::Path::new(&from);
                     if source_path.is_file() {
                         let ext = source_path.extension().and_then(|e| e.to_str()).unwrap_or("");
