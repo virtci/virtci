@@ -806,6 +806,9 @@ async fn copy_vm_to_host_tar(
 
     eprintln!("[TAR] Extracting to: {}", extract_dir);
 
+    std::fs::create_dir_all(&extract_dir)
+        .map_err(|e| format!("Failed to create extraction directory {}: {}", extract_dir, e))?;
+
     // archive should starts with gzip magic bytes
     if result.stdout.len() < 2 || result.stdout[0] != 0x1f || result.stdout[1] != 0x8b {
         let preview: Vec<u8> = result.stdout.iter().take(64).cloned().collect();
