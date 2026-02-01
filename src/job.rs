@@ -328,14 +328,20 @@ impl JobRunner {
                 self.temp_image.display()
             ));
         } else {
-            let drive_arg = match self.job.arch {
-                Arch::ARM64 | Arch::RISCV64 => format!(
-                    "file={},format=qcow2,if=virtio,bootindex=0",
-                    self.temp_image.display()
-                ),
-                Arch::X64 => format!("file={},format=qcow2", self.temp_image.display()),
+            match self.job.arch {
+                Arch::ARM64 | Arch::RISCV64 => {
+                    cmd.arg("-drive").arg(format!(
+                        "id=SystemDisk,if=none,file={},format=qcow2",
+                        self.temp_image.display()
+                    ));
+                    cmd.arg("-device")
+                        .arg("virtio-blk-pci,drive=SystemDisk,bootindex=0");
+                }
+                Arch::X64 => {
+                    cmd.arg("-drive")
+                        .arg(format!("file={},format=qcow2", self.temp_image.display()));
+                }
             };
-            cmd.arg("-drive").arg(drive_arg);
         }
 
         cmd.arg("-display").arg("none");
@@ -657,8 +663,15 @@ impl JobRunner {
                 let exclude = &copy_spec.exclude;
 
                 // Try tar-over-SSH cause SFTP keeps having issues with windows
-                let copy_future =
-                    ssh::copy_files_tar(self.host_port, creds, &from, &to, exclude, self.guest_os, Some(timeout_duration));
+                let copy_future = ssh::copy_files_tar(
+                    self.host_port,
+                    creds,
+                    &from,
+                    &to,
+                    exclude,
+                    self.guest_os,
+                    Some(timeout_duration),
+                );
 
                 tokio::time::timeout(timeout_duration, copy_future)
                     .await
@@ -666,17 +679,24 @@ impl JobRunner {
 
                 // Stupid line endings
                 let is_host_to_vm = to.starts_with("vm:");
-                let should_convert = if is_host_to_vm && matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
-                    let source_path = std::path::Path::new(&from);
-                    if source_path.is_file() {
-                        let ext = source_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                        matches!(ext.to_lowercase().as_str(), "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" | "hxx")
+                let should_convert =
+                    if is_host_to_vm && matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
+                        let source_path = std::path::Path::new(&from);
+                        if source_path.is_file() {
+                            let ext = source_path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("");
+                            matches!(
+                                ext.to_lowercase().as_str(),
+                                "c" | "cpp" | "h" | "hpp" | "cc" | "cxx" | "hxx"
+                            )
+                        } else {
+                            true
+                        }
                     } else {
-                        true
-                    }
-                } else {
-                    false
-                };
+                        false
+                    };
 
                 if should_convert {
                     use colored::Colorize;
