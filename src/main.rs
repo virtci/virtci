@@ -449,6 +449,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
             additional_devices: pair.1.additional_devices.clone(),
             qemu_args: pair.1.qemu_args.clone(),
             tpm: pair.1.tpm.clone(),
+            nvme: pair.1.nvme,
             host_env: pair.1.host_env.clone(),
             steps: job_steps,
         });

@@ -109,7 +109,8 @@ pub struct Job {
     pub additional_drives: Option<Vec<String>>,
     pub additional_devices: Option<Vec<String>>,
     pub qemu_args: Option<Vec<String>>,
-    pub tpm: Option<bool>,
+    pub tpm: Option<yaml::TpmConfig>,
+    pub nvme: bool,
     pub host_env: Vec<String>,
     pub steps: Vec<Step>,
 }
@@ -245,7 +246,12 @@ impl JobRunner {
             }
         }
 
-        let (tpm_state_dir, tpm_socket_path) = if job.tpm == Some(true) {
+        let tpm_enabled = match &job.tpm {
+            Some(yaml::TpmConfig::Enabled(true)) => true,
+            Some(yaml::TpmConfig::Device(_)) => true,
+            _ => false,
+        };
+        let (tpm_state_dir, tpm_socket_path) = if tpm_enabled {
             let state_dir = temp_path(&format!("vci-{}-{}-tpm", host_port, &job.name));
             std::fs::create_dir_all(&state_dir)?;
             let socket_path = state_dir.join("swtpm-sock");
@@ -322,6 +328,7 @@ impl JobRunner {
 
         // main disk
         // if=none only when additional_devices will attach it
+        // windows arm64 requires nvme? At least when made with UTM? Idk
         if self.job.additional_devices.is_some() {
             cmd.arg("-drive").arg(format!(
                 "id=SystemDisk,if=none,file={},format=qcow2",
@@ -334,8 +341,13 @@ impl JobRunner {
                         "id=SystemDisk,if=none,file={},format=qcow2",
                         self.temp_image.display()
                     ));
-                    cmd.arg("-device")
-                        .arg("virtio-blk-pci,drive=SystemDisk,bootindex=0");
+                    if self.job.nvme {
+                        cmd.arg("-device")
+                            .arg("nvme,drive=SystemDisk,serial=SystemDisk,bootindex=0");
+                    } else {
+                        cmd.arg("-device")
+                            .arg("virtio-blk-pci,drive=SystemDisk,bootindex=0");
+                    }
                 }
                 Arch::X64 => {
                     cmd.arg("-drive")
@@ -374,14 +386,16 @@ impl JobRunner {
         cmd.arg("-device").arg("virtio-net-pci,netdev=net0");
 
         // TPM stuff
-        // arm64 tpm-tis-device, x64: tpm-tis
         if let Some(ref socket_path) = self.tpm_socket_path {
             cmd.arg("-chardev")
                 .arg(format!("socket,id=chrtpm,path={}", socket_path.display()));
             cmd.arg("-tpmdev").arg("emulator,id=tpm0,chardev=chrtpm");
-            let tpm_device = match self.job.arch {
-                Arch::ARM64 | Arch::RISCV64 => "tpm-tis-device,tpmdev=tpm0",
-                Arch::X64 => "tpm-tis,tpmdev=tpm0",
+            let tpm_device = match &self.job.tpm {
+                Some(yaml::TpmConfig::Device(device)) => format!("{},tpmdev=tpm0", device),
+                _ => match self.job.arch {
+                    Arch::ARM64 | Arch::RISCV64 => "tpm-tis-device,tpmdev=tpm0".to_string(),
+                    Arch::X64 => "tpm-tis,tpmdev=tpm0".to_string(),
+                },
             };
             cmd.arg("-device").arg(tpm_device);
         }

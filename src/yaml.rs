@@ -22,6 +22,13 @@ pub enum UefiFirmware {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum TpmConfig {
+    Enabled(bool),
+    Device(String),
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Job {
     pub image: Option<String>,
     pub arch: Option<String>,
@@ -36,7 +43,9 @@ pub struct Job {
     pub additional_drives: Option<Vec<String>>,
     pub additional_devices: Option<Vec<String>>,
     pub qemu_args: Option<Vec<String>>,
-    pub tpm: Option<bool>,
+    pub tpm: Option<TpmConfig>,
+    #[serde(default)]
+    pub nvme: bool,
     #[serde(default)]
     pub host_env: Vec<String>,
     pub steps: Vec<Step>,
