@@ -330,7 +330,7 @@ impl JobRunner {
         } else {
             let drive_arg = match self.job.arch {
                 Arch::ARM64 | Arch::RISCV64 => format!(
-                    "file={},format=qcow2,if=virtio",
+                    "file={},format=qcow2,if=virtio,bootindex=0",
                     self.temp_image.display()
                 ),
                 Arch::X64 => format!("file={},format=qcow2", self.temp_image.display()),
@@ -368,13 +368,13 @@ impl JobRunner {
         cmd.arg("-device").arg("virtio-net-pci,netdev=net0");
 
         // TPM stuff
-        // arm64 tpm-tis-device, x64 uses tpm-tis
+        // arm64 virt tpm-crb-device, x64 tpm-tis
         if let Some(ref socket_path) = self.tpm_socket_path {
             cmd.arg("-chardev")
                 .arg(format!("socket,id=chrtpm,path={}", socket_path.display()));
             cmd.arg("-tpmdev").arg("emulator,id=tpm0,chardev=chrtpm");
             let tpm_device = match self.job.arch {
-                Arch::ARM64 | Arch::RISCV64 => "tpm-tis-device,tpmdev=tpm0",
+                Arch::ARM64 | Arch::RISCV64 => "tpm-crb-device,tpmdev=tpm0",
                 Arch::X64 => "tpm-tis,tpmdev=tpm0",
             };
             cmd.arg("-device").arg(tpm_device);
