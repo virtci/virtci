@@ -328,8 +328,14 @@ impl JobRunner {
                 self.temp_image.display()
             ));
         } else {
-            cmd.arg("-drive")
-                .arg(format!("file={},format=qcow2", self.temp_image.display()));
+            let drive_arg = match self.job.arch {
+                Arch::ARM64 | Arch::RISCV64 => format!(
+                    "file={},format=qcow2,if=virtio",
+                    self.temp_image.display()
+                ),
+                Arch::X64 => format!("file={},format=qcow2", self.temp_image.display()),
+            };
+            cmd.arg("-drive").arg(drive_arg);
         }
 
         cmd.arg("-display").arg("none");
