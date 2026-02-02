@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[cfg(unix)]
@@ -56,6 +56,7 @@ impl std::fmt::Display for LockMetadata {
 
 pub struct FileLock {
     file: File,
+    path: PathBuf,
 }
 
 pub enum FileLockError {
@@ -96,7 +97,10 @@ impl FileLock {
                 .map_err(|_| FileLockError::Other)?;
             file.flush().map_err(|_| FileLockError::Other)?;
 
-            return Ok(FileLock { file });
+            return Ok(FileLock {
+                file: file,
+                path: path.as_ref().to_path_buf(),
+            });
         } else {
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
@@ -107,6 +111,14 @@ impl FileLock {
             }
             return Err(FileLockError::Other);
         }
+    }
+
+    pub fn get_path(&self) -> &PathBuf {
+        return &self.path;
+    }
+
+    pub fn get_file_mut(&mut self) -> &mut File {
+        return &mut self.file;
     }
 
     #[cfg(unix)]

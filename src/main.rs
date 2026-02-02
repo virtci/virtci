@@ -1,4 +1,6 @@
+mod backend;
 mod cli;
+mod file_lock;
 mod job;
 mod platform;
 mod ssh;
