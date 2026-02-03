@@ -10,6 +10,10 @@ mod yaml;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
+    return std::env::temp_dir().join("vci");
+});
+
 /// Right now, VMs are run synchronously. In the event of any error we can
 /// handle (excluding total system failure),
 /// we still want to not leave the user with non-cleaned up files.

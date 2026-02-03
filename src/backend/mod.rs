@@ -3,9 +3,9 @@ use std::str::FromStr;
 pub mod qemu;
 
 pub trait VmBackend {
-    fn clone_image(&self) -> Result<(), ()>;
+    fn setup_clone(&mut self) -> Result<(), ()>;
 
-    fn start_vm(&mut self, offline: bool);
+    fn start_vm(&mut self, offline: bool) -> Result<(), ()>;
 
     fn stop_vm(&mut self);
 }
