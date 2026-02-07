@@ -1,6 +1,9 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+
+pub mod setup_qemu;
 
 pub(crate) static VCI_HOME_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
     if let Some(vci_home) = std::env::var_os("VCI_HOME") {
@@ -53,12 +56,13 @@ pub enum Arch {
     RISCV64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GuestOs {
-    Windows,
     Linux,
     MacOS,
-    Unknown,
+    Windows,
+    FreeBSD,
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,4 +101,36 @@ pub struct ImageDescription {
     pub arch: Arch,
     pub backend: BackendConfig,
     pub ssh: SshConfig,
+}
+
+pub fn read_line(prompt: &str) -> Result<String, String> {
+    print!("{}", prompt);
+    io::stdout().flush().map_err(|e| e.to_string())?;
+
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| e.to_string())?;
+
+    return Ok(input.trim().to_string());
+}
+
+pub fn read_line_with_default(prompt: &str, default: &str) -> Result<String, String> {
+    let full_prompt = format!("{} [{}]: ", prompt, default);
+    let input = read_line(&full_prompt)?;
+
+    if input.is_empty() {
+        return Ok(default.to_string());
+    } else {
+        return Ok(input);
+    }
+}
+
+pub fn expand_path(path: &str) -> PathBuf {
+    if path.starts_with("~/") {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            return PathBuf::from(home).join(&path[2..]);
+        }
+    }
+    return PathBuf::from(path);
 }

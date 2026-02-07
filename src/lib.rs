@@ -5,8 +5,8 @@ mod job;
 mod platform;
 mod ssh;
 mod transfer_lock;
-mod yaml;
 mod vm_image;
+mod yaml;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -464,4 +464,3 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<job::Job> {
 
     return jobs;
 }
-
