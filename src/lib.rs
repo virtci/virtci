@@ -6,6 +6,7 @@ mod platform;
 mod ssh;
 mod transfer_lock;
 mod yaml;
+mod vm_image;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
