@@ -72,6 +72,21 @@ pub enum BackendConfig {
     Tart(TartConfig),
 }
 
+impl BackendConfig {
+    pub fn as_qemu(&self) -> Option<&QemuConfig> {
+        match self {
+            Self::Qemu(config) => return Some(&config),
+            _ => return None,
+        }
+    }
+    pub fn as_tart(&self) -> Option<&TartConfig> {
+        match self {
+            Self::Tart(config) => Some(&config),
+            _ => return None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QemuConfig {
     pub image: String,

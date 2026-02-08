@@ -507,7 +507,10 @@ fn prompt_advanced_options(
     };
 
     println!("  Defaults for {:?} {:?}:", os, arch);
-    println!("    TPM: {}", if default_tpm { "enabled" } else { "disabled" });
+    println!(
+        "    TPM: {}",
+        if default_tpm { "enabled" } else { "disabled" }
+    );
     if matches!(os, GuestOs::Windows) {
         println!("      (Windows 11 requires TPM)");
     }
@@ -611,7 +614,9 @@ fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>
     println!("  OpenCore Bootloader");
     println!("    macOS on QEMU x64 requires an OpenCore bootloader image.");
     println!("    See the following links for potential setup:");
-    println!("    - https://github.com/quickemu-project/quickemu/wiki/03-Create-macOS-virtual-machines");
+    println!(
+        "    - https://github.com/quickemu-project/quickemu/wiki/03-Create-macOS-virtual-machines"
+    );
     println!("    - https://github.com/kholia/OSX-KVM");
 
     let opencore_path = loop {
@@ -646,7 +651,8 @@ fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>
     )];
 
     let additional_devices = vec![
-        "isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc".to_string(),
+        "isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc"
+            .to_string(),
         "ahci,id=ahci".to_string(),
         "ide-hd,bus=ahci.0,drive=BootLoader,bootindex=0".to_string(),
         "virtio-blk-pci,drive=SystemDisk".to_string(),
@@ -677,7 +683,14 @@ fn print_summary(config: &ImageDescription) {
                 println!("    UEFI: disabled (legacy BIOS)");
             }
             println!("    TPM: {}", if qemu.tpm { "enabled" } else { "disabled" });
-            println!("    NVMe: {}", if qemu.nvme { "enabled" } else { "disabled (virtio-blk)" });
+            println!(
+                "    NVMe: {}",
+                if qemu.nvme {
+                    "enabled"
+                } else {
+                    "disabled (virtio-blk)"
+                }
+            );
             if let Some(ref cpu) = qemu.cpu_model {
                 println!("    CPU model: {}", cpu);
             }
@@ -723,8 +736,7 @@ fn save_config(config: &ImageDescription) -> Result<(), String> {
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-    std::fs::write(&file_path, json)
-        .map_err(|e| format!("Failed to write config file: {}", e))?;
+    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {}", e))?;
 
     return Ok(());
 }

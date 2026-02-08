@@ -87,7 +87,6 @@ fn run_setup(args: cli::SetupArgs) {
             panic!("Tart setup is only available on macOS.");
         }
     }
-    
 }
 
 fn run_jobs(jobs: Vec<job::Job>) {

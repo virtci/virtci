@@ -2,12 +2,13 @@ use std::{io::Write, path::PathBuf, process::Child};
 
 use colored::Colorize;
 
-use super::Arch;
 use crate::{
-    backend::VmBackend,
+    backend::{qemu, VmBackend},
     file_lock::{FileLock, FileLockError},
     job::{expand_path, expand_path_in_string},
-    ssh, VCI_TEMP_PATH,
+    ssh::{self, SshTarget},
+    vm_image::{Arch, GuestOs, ImageDescription, UefiSplit},
+    VCI_TEMP_PATH,
 };
 
 pub struct QemuRunner {
@@ -18,82 +19,77 @@ pub struct QemuRunner {
     tpm_state_dir: Option<PathBuf>,
     tpm_socket_path: Option<PathBuf>,
     tpm_flock: Option<FileLock>,
-    guest_os: Option<ssh::GuestOs>,
     qemu_process: Option<Child>,
     tpm_process: Option<Child>,
 }
 
 pub struct QemuBackend {
     pub name: String,
-    pub base_image: String,
-    pub flock: FileLock,
-    pub arch: Arch,
+    pub base_image: ImageDescription,
     pub cpus: u32,
     /// Megabytes
-    pub memory: u64,
-    pub user: String,
-    pub pass: Option<String>,
-    pub key: Option<String>,
+    pub memory_mb: u64,
     /// Port within the VM that SSH accesses.
     pub inside_vm_port: u16,
-    pub uefi: Option<crate::yaml::UefiFirmware>,
-    pub cpu_model: Option<String>,
-    pub additional_drives: Option<Vec<String>>,
-    pub additional_devices: Option<Vec<String>>,
-    pub qemu_args: Option<Vec<String>>,
-    pub tpm: Option<crate::yaml::TpmConfig>,
-    pub nvme: bool,
     pub runner: Option<QemuRunner>,
 }
 
 impl QemuBackend {
+    fn new(
+        name: String,
+        base_image: ImageDescription,
+        cpus: u32,
+        memory_mb: u64,
+    ) -> Result<Self, ()> {
+        let mut backend = QemuBackend {
+            name: name,
+            base_image: base_image,
+            cpus: cpus,
+            memory_mb: memory_mb,
+            inside_vm_port: 22,
+            runner: None,
+        };
+
+        backend.setup_clone()?;
+
+        return Ok(backend);
+    }
+
     fn build_qemu_cmd(&self, offline: bool) -> std::process::Command {
-        let mut cmd = std::process::Command::new(qemu_system_binary(self.arch));
+        let qemu_config = self.base_image.backend.as_qemu().unwrap();
+        let mut cmd = std::process::Command::new(qemu_system_binary(self.base_image.arch));
 
-        cmd.arg("-machine").arg(qemu_machine(self.arch));
+        cmd.arg("-machine").arg(qemu_machine(self.base_image.arch));
 
-        if let Some(ref cpu_model) = self.cpu_model {
+        if let Some(ref cpu_model) = qemu_config.cpu_model {
             cmd.arg("-cpu").arg(cpu_model);
         } else {
-            cmd.arg("-cpu").arg(qemu_cpu(self.arch));
+            cmd.arg("-cpu").arg(qemu_cpu(self.base_image.arch));
         }
 
         cmd.arg("-name").arg(&self.name);
-        cmd.arg("-m").arg(format!("{}M", self.memory));
+        cmd.arg("-m").arg(format!("{}M", self.memory_mb));
         cmd.arg("-smp").arg(self.cpus.to_string());
 
-        if let Some(ref uefi) = self.uefi {
-            match uefi {
-                crate::yaml::UefiFirmware::Boolean(_) | crate::yaml::UefiFirmware::Path(_) => {
-                    // // Monolithic UEFI (use processed uefi_firmware path)
-                    // if let Some(ref firmware_path) = self.job.uefi_firmware {
-                    //     cmd.arg("-drive").arg(format!(
-                    //         "if=pflash,format=raw,readonly=on,file={}",
-                    //         firmware_path.display()
-                    //     ));
-                    // }
-                }
-                crate::yaml::UefiFirmware::Split(split) => {
-                    // Split UEFI: code (readonly) + vars (writable)
-                    let code_path = expand_path(&split.code);
-                    cmd.arg("-drive").arg(format!(
-                        "if=pflash,format=raw,unit=0,readonly=on,file={}",
-                        code_path.display()
-                    ));
-                    if self.runner.as_ref().unwrap().temp_uefi_vars.is_some() {
-                        cmd.arg("-drive").arg(format!(
-                            "if=pflash,format=raw,unit=1,file={}",
-                            self.runner
-                                .as_ref()
-                                .unwrap()
-                                .temp_uefi_vars
-                                .as_ref()
-                                .unwrap()
-                                .get_path()
-                                .display()
-                        ));
-                    }
-                }
+        if let Some(ref uefi) = qemu_config.uefi {
+            // Split UEFI: code (readonly) + vars (writable)
+            let code_path = expand_path(&uefi.code);
+            cmd.arg("-drive").arg(format!(
+                "if=pflash,format=raw,unit=0,readonly=on,file={}",
+                code_path.display()
+            ));
+            if self.runner.as_ref().unwrap().temp_uefi_vars.is_some() {
+                cmd.arg("-drive").arg(format!(
+                    "if=pflash,format=raw,unit=1,file={}",
+                    self.runner
+                        .as_ref()
+                        .unwrap()
+                        .temp_uefi_vars
+                        .as_ref()
+                        .unwrap()
+                        .get_path()
+                        .display()
+                ));
             }
         }
 
@@ -105,7 +101,7 @@ impl QemuBackend {
         // main disk
         // if=none only when additional_devices will attach it
         // windows arm64 requires nvme? At least when made with UTM? Idk
-        if self.additional_devices.is_some() {
+        if qemu_config.additional_devices.is_some() {
             cmd.arg("-drive").arg(format!(
                 "id=SystemDisk,if=none,file={},format=qcow2",
                 self.runner
@@ -116,7 +112,7 @@ impl QemuBackend {
                     .display()
             ));
         } else {
-            match self.arch {
+            match self.base_image.arch {
                 Arch::ARM64 | Arch::RISCV64 => {
                     cmd.arg("-drive").arg(format!(
                         "id=SystemDisk,if=none,file={},format=qcow2",
@@ -127,7 +123,7 @@ impl QemuBackend {
                             .get_path()
                             .display()
                     ));
-                    if self.nvme {
+                    if qemu_config.nvme {
                         cmd.arg("-device")
                             .arg("nvme,drive=SystemDisk,serial=SystemDisk,bootindex=0");
                     } else {
@@ -185,30 +181,27 @@ impl QemuBackend {
             cmd.arg("-chardev")
                 .arg(format!("socket,id=chrtpm,path={}", socket_path.display()));
             cmd.arg("-tpmdev").arg("emulator,id=tpm0,chardev=chrtpm");
-            let tpm_device = match &self.tpm {
-                Some(crate::yaml::TpmConfig::Device(device)) => format!("{},tpmdev=tpm0", device),
-                _ => match self.arch {
-                    Arch::ARM64 | Arch::RISCV64 => "tpm-tis-device,tpmdev=tpm0".to_string(),
-                    Arch::X64 => "tpm-tis,tpmdev=tpm0".to_string(),
-                },
+            let tpm_device = match self.base_image.arch {
+                Arch::ARM64 | Arch::RISCV64 => "tpm-tis-device,tpmdev=tpm0".to_string(),
+                Arch::X64 => "tpm-tis,tpmdev=tpm0".to_string(),
             };
             cmd.arg("-device").arg(tpm_device);
         }
 
-        if let Some(ref additional_devices) = self.additional_devices {
+        if let Some(ref additional_devices) = qemu_config.additional_devices {
             for device in additional_devices {
                 let expanded_device = expand_path_in_string(device);
                 cmd.arg("-device").arg(expanded_device);
             }
         }
 
-        // edge case raw args
-        if let Some(ref qemu_args) = self.qemu_args {
-            for arg in qemu_args {
-                let expanded_arg = expand_path_in_string(arg);
-                cmd.arg(expanded_arg);
-            }
-        }
+        // TODO need raw args?
+        // if let Some(ref qemu_args) = self.qemu_args {
+        //     for arg in qemu_args {
+        //         let expanded_arg = expand_path_in_string(arg);
+        //         cmd.arg(expanded_arg);
+        //     }
+        // }
 
         return cmd;
     }
@@ -220,14 +213,16 @@ impl VmBackend for QemuBackend {
     fn setup_clone(&mut self) -> Result<(), ()> {
         assert!(self.runner.is_none());
 
+        let qemu_config = self.base_image.backend.as_qemu().unwrap();
+
         let host_port_flock = get_port_flock().expect("Failed to get any port for QEMU");
 
-        let source_image = expand_path(&self.base_image);
+        let source_image = expand_path(&qemu_config.image);
         let temp_image =
             VCI_TEMP_PATH.join(format!("vci-{}-{}.qcow2", self.name, host_port_flock.1));
         let new_image_backed = create_backing_file(&source_image, &temp_image)?;
 
-        let temp_vars = if let Some(crate::yaml::UefiFirmware::Split(ref split)) = self.uefi {
+        let temp_vars = if let Some(ref split) = qemu_config.uefi {
             let temp_vars_path =
                 VCI_TEMP_PATH.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
             let mut vars_flock = FileLock::try_new(temp_vars_path).map_err(|_| ())?;
@@ -242,7 +237,7 @@ impl VmBackend for QemuBackend {
         };
 
         let mut temp_additional_drives = Vec::<(String, FileLock)>::new();
-        if let Some(ref drives) = self.additional_drives {
+        if let Some(ref drives) = qemu_config.additional_drives {
             for (idx, drive_spec) in drives.iter().enumerate() {
                 if let Some(file_start) = drive_spec.find("file=") {
                     let after_file = &drive_spec[file_start + 5..];
@@ -271,12 +266,7 @@ impl VmBackend for QemuBackend {
             }
         }
 
-        let tpm_enabled = match &self.tpm {
-            Some(crate::yaml::TpmConfig::Enabled(true)) => true,
-            Some(crate::yaml::TpmConfig::Device(_)) => true,
-            _ => false,
-        };
-        let (tpm_state_dir, tpm_socket_path, tpm_flock) = if tpm_enabled {
+        let (tpm_state_dir, tpm_socket_path, tpm_flock) = if qemu_config.tpm {
             let tpm_lock_file =
                 VCI_TEMP_PATH.join(&format!("vci-{}-{}-tpm.lock", self.name, host_port_flock.1));
             let tpm_flock_file = FileLock::try_new(tpm_lock_file).map_err(|_| ())?;
@@ -299,7 +289,6 @@ impl VmBackend for QemuBackend {
             tpm_flock: tpm_flock,
             qemu_process: None,
             tpm_process: None,
-            guest_os: None,
         };
 
         self.runner = Some(runner);
@@ -372,6 +361,57 @@ impl VmBackend for QemuBackend {
         }
 
         std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    fn ssh_target(&self) -> ssh::SshTarget {
+        return SshTarget {
+            ip: "127.0.0.1".to_string(),
+            port: self.runner.as_ref().unwrap().host_port.1,
+            cred: self.base_image.ssh.clone(),
+        };
+    }
+}
+
+impl Drop for QemuBackend {
+    fn drop(&mut self) {
+        if let Some(mut runner) = self.runner.take() {
+            if let Some(ref mut process) = runner.qemu_process {
+                let _ = process.kill();
+                let _ = process.wait();
+            }
+            if let Some(ref mut process) = runner.tpm_process {
+                let _ = process.kill();
+                let _ = process.wait();
+            }
+            if let Some(ref socket_path) = runner.tpm_socket_path {
+                let _ = std::fs::remove_file(socket_path);
+            }
+
+            let mut paths_to_delete: Vec<PathBuf> = Vec::new();
+            paths_to_delete.reserve_exact(5);
+            paths_to_delete.push(runner.host_port.0.get_path().clone());
+            paths_to_delete.push(runner.temp_image.get_path().clone());
+            if let Some(ref vars) = runner.temp_uefi_vars {
+                paths_to_delete.push(vars.get_path().clone());
+            }
+            for (_, ref flock) in &runner.temp_additional_drives {
+                paths_to_delete.push(flock.get_path().clone());
+            }
+            if let Some(ref flock) = runner.tpm_flock {
+                paths_to_delete.push(flock.get_path().clone());
+            }
+            let tpm_state_dir = runner.tpm_state_dir.clone();
+
+            // release flocks
+            drop(runner);
+
+            for path in &paths_to_delete {
+                let _ = std::fs::remove_file(path);
+            }
+            if let Some(ref dir) = tpm_state_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
     }
 }
 

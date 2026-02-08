@@ -2,19 +2,16 @@ use std::str::FromStr;
 
 pub mod qemu;
 
+use crate::{ssh::SshTarget, vm_image::Arch};
+
 pub trait VmBackend {
     fn setup_clone(&mut self) -> Result<(), ()>;
 
     fn start_vm(&mut self, offline: bool) -> Result<(), ()>;
 
     fn stop_vm(&mut self);
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Arch {
-    X64,
-    ARM64,
-    RISCV64,
+    fn ssh_target(&self) -> SshTarget;
 }
 
 impl FromStr for Arch {
