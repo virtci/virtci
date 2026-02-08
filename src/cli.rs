@@ -12,6 +12,7 @@ pub struct Args {
 #[argh(subcommand)]
 pub enum Command {
     Run(RunArgs),
+    Setup(SetupArgs),
     Cleanup(CleanupArgs),
 }
 
@@ -54,6 +55,19 @@ pub struct RunArgs {
     /// VM architecture: --arch x86_64 OR --arch job=aarch64 (default: host arch)
     #[argh(option)]
     pub arch: Vec<String>,
+}
+
+/// Interactive setup for a new VM image description
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "setup")]
+pub struct SetupArgs {
+    /// set up a QEMU-backed VM image
+    #[argh(switch)]
+    pub qemu: bool,
+
+    /// set up a Tart-backed VM image (macOS only)
+    #[argh(switch)]
+    pub tart: bool,
 }
 
 /// Clean up leftover temporary VM images

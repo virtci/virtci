@@ -50,10 +50,44 @@ pub fn run_vci() {
             let jobs = extract_yaml_workflows(run_args);
             run_jobs(jobs);
         }
+        cli::Command::Setup(setup_args) => {
+            run_setup(setup_args);
+        }
         cli::Command::Cleanup(cleanup_args) => {
             run_cleanup(cleanup_args);
         }
     }
+}
+
+fn run_setup(args: cli::SetupArgs) {
+    if args.qemu && args.tart {
+        panic!("Error: specify either --qemu or --tart, not both.");
+    }
+
+    if !args.qemu && !args.tart {
+        panic!("Error: specify a backend with --qemu or --tart.");
+    }
+
+    if args.qemu {
+        if let Err(e) = vm_image::setup_qemu::run_interactive_setup() {
+            panic!("Setup failed: {}", e);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if args.tart {
+            panic!("Tart setup is not yet implemented.");
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if args.tart {
+            panic!("Tart setup is only available on macOS.");
+        }
+    }
+    
 }
 
 fn run_jobs(jobs: Vec<job::Job>) {
