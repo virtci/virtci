@@ -96,7 +96,10 @@ pub struct SshConfig {
     pub key: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageDescription {
+    #[serde(skip_serializing)]
+    pub name: String,
     pub os: GuestOs,
     pub arch: Arch,
     pub backend: BackendConfig,

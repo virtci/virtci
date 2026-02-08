@@ -1,5 +1,3 @@
-use core::panic;
-
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, Arch, BackendConfig, GuestOs, ImageDescription,
     QemuConfig, SshConfig, UefiSplit, VCI_HOME_PATH,
@@ -29,6 +27,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
         prompt_advanced_options(guest_os, arch)?;
 
     let config = ImageDescription {
+        name: name,
         os: guest_os,
         arch,
         ssh,
@@ -43,12 +42,12 @@ pub fn run_interactive_setup() -> Result<(), String> {
         }),
     };
 
-    print_summary(&name, &config);
+    print_summary(&config);
 
-    if prompt_confirm("Save this configuration?")? {
-        save_config(&name, &config)?;
-        println!("\nSaved to {}/{}.vci", VCI_HOME_PATH.display(), name);
-        println!("Use in workflows with: image: {}", name);
+    if prompt_yes_no("Save this configuration?", true)? {
+        save_config(&config)?;
+        println!("\nSaved to {}/{}.vci", VCI_HOME_PATH.display(), config.name);
+        println!("Use in workflows with: image: {}", config.name);
     } else {
         println!("Setup cancelled.");
     }
@@ -323,13 +322,24 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
 }
 
 /// Step 6
-fn prompt_uefi_config(_os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, String> {
+fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, String> {
     println!("Step 6: UEFI Configuration");
+
+    if matches!(os, GuestOs::Windows) {
+        println!("  WARNING: Windows 11 requires UEFI. Only skip if using an older version.");
+    }
+    if matches!(arch, Arch::ARM64) {
+        println!("  NOTE: ARM64 VMs typically require UEFI firmware.");
+    }
+
     println!("  1) No UEFI (legacy BIOS)");
     println!("  2) UEFI (code + vars files)");
 
+    let default_uefi = matches!(os, GuestOs::Windows) || matches!(arch, Arch::ARM64);
+
     let choice = loop {
-        let input = read_line("Select UEFI mode [1-2]: ")?;
+        let default_str = if default_uefi { "2" } else { "1" };
+        let input = read_line_with_default("Select UEFI mode", default_str)?;
         match input.as_str() {
             "1" => break 1,
             "2" => break 2,
@@ -586,8 +596,8 @@ fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
         let input = read_line(&format!("{} [{}]: ", prompt, default_str))?;
         match input.to_lowercase().as_str() {
             "" => return Ok(default),
-            "y" | "yes" | "Y" | "Yes" => return Ok(true),
-            "n" | "no" | "N" | "No" => return Ok(false),
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
             _ => {
                 println!("  Error: Enter y or n.\n");
                 continue;
@@ -647,14 +657,74 @@ fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>
     Ok((Some(additional_drives), Some(additional_devices)))
 }
 
-fn print_summary(name: &str, config: &ImageDescription) {
-    todo!("Print summary")
+fn print_summary(config: &ImageDescription) {
+    println!();
+    println!("Configuration Summary");
+    println!("=====================");
+    println!("  Name: {}", config.name);
+    println!("  OS: {:?}", config.os);
+    println!("  Architecture: {:?}", config.arch);
+    println!();
+
+    match &config.backend {
+        BackendConfig::Qemu(qemu) => {
+            println!("  QEMU Backend:");
+            println!("    Image: {}", qemu.image);
+            if let Some(ref uefi) = qemu.uefi {
+                println!("    UEFI code: {}", uefi.code);
+                println!("    UEFI vars: {}", uefi.vars);
+            } else {
+                println!("    UEFI: disabled (legacy BIOS)");
+            }
+            println!("    TPM: {}", if qemu.tpm { "enabled" } else { "disabled" });
+            println!("    NVMe: {}", if qemu.nvme { "enabled" } else { "disabled (virtio-blk)" });
+            if let Some(ref cpu) = qemu.cpu_model {
+                println!("    CPU model: {}", cpu);
+            }
+            if let Some(ref drives) = qemu.additional_drives {
+                println!("    Additional drives: {}", drives.len());
+                for drive in drives {
+                    println!("      - {}", drive);
+                }
+            }
+            if let Some(ref devices) = qemu.additional_devices {
+                println!("    Additional devices: {}", devices.len());
+                for device in devices {
+                    println!("      - {}", device);
+                }
+            }
+        }
+        // BackendConfig::Tart(tart) => {
+        //     println!("  Tart Backend:");
+        //     println!("    VM name: {}", tart.vm_name);
+        // }
+        _ => {}
+    }
+
+    println!();
+    println!("  SSH:");
+    println!("    User: {}", config.ssh.user);
+    if config.ssh.pass.is_some() {
+        println!("    Auth: password");
+    } else if let Some(ref key) = config.ssh.key {
+        println!("    Auth: key ({})", key);
+    }
+    println!();
 }
 
-fn prompt_confirm(message: &str) -> Result<bool, String> {
-    todo!("Confirm prompt")
-}
+fn save_config(config: &ImageDescription) -> Result<(), String> {
+    if !VCI_HOME_PATH.exists() {
+        std::fs::create_dir_all(&*VCI_HOME_PATH)
+            .map_err(|e| format!("Failed to create VCI home directory: {}", e))?;
+    }
 
-fn save_config(name: &str, config: &ImageDescription) -> Result<(), String> {
-    todo!("Save config")
+    let file_path = VCI_HOME_PATH.join(format!("{}.vci", config.name));
+
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+    std::fs::write(&file_path, json)
+        .map_err(|e| format!("Failed to write config file: {}", e))?;
+
+    return Ok(());
 }
