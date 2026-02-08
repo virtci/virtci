@@ -486,7 +486,165 @@ fn prompt_advanced_options(
     ),
     String,
 > {
-    todo!("Step 7: Advanced options")
+    println!("Step 7: Advanced Options");
+
+    let default_tpm = matches!(os, GuestOs::Windows);
+    let default_nvme = false;
+    let is_macos_x64 = matches!((os, arch), (GuestOs::MacOS, Arch::X64));
+    let default_cpu_model: Option<&str> = match is_macos_x64 {
+        true => Some("Nehalem,vendor=GenuineIntel"),
+        false => None,
+    };
+
+    println!("  Defaults for {:?} {:?}:", os, arch);
+    println!("    TPM: {}", if default_tpm { "enabled" } else { "disabled" });
+    if matches!(os, GuestOs::Windows) {
+        println!("      (Windows 11 requires TPM)");
+    }
+    println!("    NVMe: disabled (virtio-blk)");
+    println!("      (Use NVMe if VM was created with UTM - UTM uses NVMe by default)");
+    println!("      (If VM fails to boot, try recreating config with NVMe enabled)");
+    if let Some(cpu) = default_cpu_model {
+        println!("    CPU model: {}", cpu);
+    }
+    if is_macos_x64 {
+        println!("    macOS x64 requires OpenCore bootloader and Apple SMC device");
+    }
+    println!();
+
+    let customize = prompt_yes_no("Customize advanced options?", false)?;
+
+    let tpm;
+    let nvme;
+    let cpu_model;
+    let additional_drives;
+    let additional_devices;
+
+    if customize {
+        println!();
+
+        if matches!(os, GuestOs::Windows) {
+            println!("  TPM (Trusted Platform Module)");
+            println!("    Windows 11 requires TPM 2.0");
+            tpm = prompt_yes_no("  Enable TPM?", default_tpm)?;
+        } else {
+            tpm = prompt_yes_no("Enable TPM?", default_tpm)?;
+        }
+
+        println!();
+        println!("  Storage Controller");
+        println!("    virtio-blk: Better performance, standard for QEMU");
+        println!("    NVMe: Required for VMs created with UTM (macOS VM manager)");
+        nvme = prompt_yes_no("  Use NVMe instead of virtio-blk?", default_nvme)?;
+
+        println!();
+        cpu_model = if let Some(default) = default_cpu_model {
+            let input = read_line_with_default("CPU model", default)?;
+            Some(input)
+        } else {
+            let input = read_line("CPU model (enter for auto): ")?;
+            if input.is_empty() {
+                None
+            } else {
+                Some(input)
+            }
+        };
+
+        if is_macos_x64 {
+            let (drives, devices) = prompt_macos_x64_config()?;
+            additional_drives = drives;
+            additional_devices = devices;
+        } else {
+            additional_drives = None;
+            additional_devices = None;
+        }
+    } else {
+        tpm = default_tpm;
+        nvme = default_nvme;
+        cpu_model = default_cpu_model.map(|s| s.to_string());
+
+        if is_macos_x64 {
+            // needs OpenCore anyways
+            println!();
+            println!("  macOS x64 requires OpenCore bootloader configuration.");
+            let (drives, devices) = prompt_macos_x64_config()?;
+            additional_drives = drives;
+            additional_devices = devices;
+        } else {
+            additional_drives = None;
+            additional_devices = None;
+        }
+    }
+
+    println!();
+    Ok((tpm, nvme, cpu_model, additional_drives, additional_devices))
+}
+
+fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
+    let default_str = if default { "Y/n" } else { "y/N" };
+    loop {
+        let input = read_line(&format!("{} [{}]: ", prompt, default_str))?;
+        match input.to_lowercase().as_str() {
+            "" => return Ok(default),
+            "y" | "yes" | "Y" | "Yes" => return Ok(true),
+            "n" | "no" | "N" | "No" => return Ok(false),
+            _ => {
+                println!("  Error: Enter y or n.\n");
+                continue;
+            }
+        }
+    }
+}
+
+fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>), String> {
+    println!();
+    println!("  OpenCore Bootloader");
+    println!("    macOS on QEMU x64 requires an OpenCore bootloader image.");
+    println!("    See the following links for potential setup:");
+    println!("    - https://github.com/quickemu-project/quickemu/wiki/03-Create-macOS-virtual-machines");
+    println!("    - https://github.com/kholia/OSX-KVM");
+
+    let opencore_path = loop {
+        let input = read_line("  OpenCore qcow2 path: ")?;
+        if input.is_empty() {
+            println!("    Error: OpenCore path is required for macOS x64.\n");
+            continue;
+        }
+
+        let expanded = expand_path(&input);
+        if !expanded.exists() {
+            println!("    Error: File does not exist: {}\n", expanded.display());
+            continue;
+        }
+        if !expanded.is_file() {
+            println!("    Error: Path is not a file: {}\n", expanded.display());
+            continue;
+        }
+
+        let absolute = expanded
+            .canonicalize()
+            .unwrap_or(expanded)
+            .to_string_lossy()
+            .to_string();
+
+        break absolute;
+    };
+
+    let additional_drives = vec![format!(
+        "id=BootLoader,if=none,format=qcow2,file={}",
+        opencore_path
+    )];
+
+    let additional_devices = vec![
+        "isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc".to_string(),
+        "ahci,id=ahci".to_string(),
+        "ide-hd,bus=ahci.0,drive=BootLoader,bootindex=0".to_string(),
+        "virtio-blk-pci,drive=SystemDisk".to_string(),
+    ];
+
+    println!("    Using: {}", opencore_path);
+
+    Ok((Some(additional_drives), Some(additional_devices)))
 }
 
 fn print_summary(name: &str, config: &ImageDescription) {
