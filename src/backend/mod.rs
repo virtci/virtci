@@ -2,10 +2,13 @@ use std::str::FromStr;
 
 pub mod qemu;
 
-use crate::{
-    ssh::SshTarget,
-    vm_image::{Arch, GuestOs},
-};
+use crate::vm_image::{Arch, GuestOs, SshConfig};
+
+pub struct SshTarget {
+    pub ip: String,
+    pub port: u16,
+    pub cred: SshConfig,
+}
 
 pub trait VmBackend {
     fn setup_clone(&mut self) -> Result<(), ()>;

@@ -7,12 +7,6 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub struct SshTarget {
-    pub ip: String,
-    pub port: u16,
-    pub cred: SshConfig,
-}
-
 const PORT_RANGE_START: u16 = 50000;
 const PORT_RANGE_END: u16 = 60000;
 

@@ -3,10 +3,9 @@ use std::{io::Write, path::PathBuf, process::Child};
 use colored::Colorize;
 
 use crate::{
-    backend::{qemu, VmBackend},
+    backend::{self, qemu, VmBackend},
     file_lock::{FileLock, FileLockError},
     job::{expand_path, expand_path_in_string},
-    ssh::{self, SshTarget},
     vm_image::{Arch, GuestOs, ImageDescription, UefiSplit},
     VCI_TEMP_PATH,
 };
@@ -363,8 +362,8 @@ impl VmBackend for QemuBackend {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    fn ssh_target(&self) -> ssh::SshTarget {
-        return SshTarget {
+    fn ssh_target(&self) -> backend::SshTarget {
+        return backend::SshTarget {
             ip: "127.0.0.1".to_string(),
             port: self.runner.as_ref().unwrap().host_port.1,
             cred: self.base_image.ssh.clone(),
