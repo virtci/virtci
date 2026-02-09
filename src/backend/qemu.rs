@@ -1,4 +1,4 @@
-use std::{io::Write, path::PathBuf, process::Child};
+use std::{io::{Seek, Write}, path::PathBuf, process::Child};
 
 use colored::Colorize;
 
@@ -226,10 +226,10 @@ impl VmBackend for QemuBackend {
                 VCI_TEMP_PATH.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
             let mut vars_flock = FileLock::try_new(temp_vars_path).map_err(|_| ())?;
             let contents = std::fs::read(expand_path(&split.vars)).map_err(|_| ())?;
-            vars_flock
-                .get_file_mut()
-                .write_all(&contents)
-                .map_err(|_| ())?;
+            let file = vars_flock.get_file_mut();
+            file.set_len(0).map_err(|_| ())?;
+            file.seek(std::io::SeekFrom::Start(0)).map_err(|_| ())?;
+            file.write_all(&contents).map_err(|_| ())?;
             Some(vars_flock)
         } else {
             None
