@@ -3,6 +3,7 @@ mod cli;
 mod file_lock;
 mod job;
 mod platform;
+mod run;
 mod ssh;
 mod transfer_lock;
 mod vm_image;

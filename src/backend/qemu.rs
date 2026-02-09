@@ -370,6 +370,10 @@ impl VmBackend for QemuBackend {
             cred: self.base_image.ssh.clone(),
         };
     }
+
+    fn os(&self) -> GuestOs {
+        return self.base_image.os;
+    }
 }
 
 impl Drop for QemuBackend {
