@@ -1,4 +1,4 @@
-use crate::run::{self, MAX_TIMEOUT};
+use crate::run::MAX_TIMEOUT;
 use serde::Deserialize;
 use std::collections::HashMap;
 

@@ -10,7 +10,7 @@ use std::{
 
 use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
-use russh::{client, ChannelMsg};
+use russh::client;
 
 use crate::{backend::SshTarget, backend::VmBackend, vm_image::GuestOs, yaml};
 
@@ -280,7 +280,7 @@ pub fn wait_for_ssh(ip: &str, port: u16, timeout_secs: u64) -> Option<u64> {
     }
 }
 
-struct ClientHandler;
+pub struct ClientHandler;
 
 impl client::Handler for ClientHandler {
     type Error = russh::Error;

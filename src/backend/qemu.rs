@@ -1,12 +1,16 @@
-use std::{io::{Seek, Write}, path::PathBuf, process::Child};
+use std::{
+    io::{Seek, Write},
+    path::PathBuf,
+    process::Child,
+};
 
 use colored::Colorize;
 
 use crate::{
-    backend::{self, qemu, VmBackend},
+    backend::{self, VmBackend},
     backend::{expand_path, expand_path_in_string},
-    file_lock::{FileLock, FileLockError},
-    vm_image::{Arch, GuestOs, ImageDescription, UefiSplit},
+    file_lock::FileLock,
+    vm_image::{Arch, GuestOs, ImageDescription},
     VCI_TEMP_PATH,
 };
 

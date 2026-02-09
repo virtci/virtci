@@ -286,34 +286,42 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
     let workflow: yaml::Workflow = yaml::parse_workflow(&file_contents)
         .unwrap_or_else(|e| panic!("Failed to parse workflow YAML: {}", e));
 
-    let image_overrides = cli::parse_overrides(&args.image);
-    let cpus_overrides = cli::parse_overrides(&args.cpus);
-    let mem_overrides = cli::parse_overrides(&args.mem);
+    // let image_overrides = cli::parse_overrides(&args.image);
+    // let cpus_overrides = cli::parse_overrides(&args.cpus);
+    // let mem_overrides = cli::parse_overrides(&args.mem);
 
     let mut jobs = Vec::<run::Job>::new();
     for (name, yaml_job) in workflow {
-        let image_name = cli::resolve_for_job(&image_overrides, &name)
-            .unwrap_or(&yaml_job.image)
-            .to_string();
+        // let image_name = cli::resolve_for_job(&image_overrides, &name)
+        //     .unwrap_or(&yaml_job.image)
+        //     .to_string();
+        let image_name = yaml_job.image;
 
         let image_desc = load_image_description(&image_name);
 
-        let cpus: u32 = match cli::resolve_for_job(&cpus_overrides, &name) {
-            Some(s) => s.parse::<u32>().expect("Expected number for --cpus"),
-            None => yaml_job.cpus.unwrap_or(cli::default_cpus()),
-        };
+        // let cpus: u32 = match cli::resolve_for_job(&cpus_overrides, &name) {
+        //     Some(s) => s.parse::<u32>().expect("Expected number for --cpus"),
+        //     None => yaml_job.cpus.unwrap_or(cli::default_cpus()),
+        // };
+        let cpus: u32 = yaml_job.cpus.unwrap_or(cli::default_cpus());
         assert!(cpus > 0, "Expected positive, non-zero CPU count");
 
-        let memory_mb: u64 = match cli::resolve_for_job(&mem_overrides, &name) {
+        // let memory_mb: u64 = match cli::resolve_for_job(&mem_overrides, &name) {
+        //     Some(s) => {
+        //         cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {}", s))
+        //     }
+        //     None => match yaml_job.memory.as_deref() {
+        //         Some(s) => {
+        //             cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {}", s))
+        //         }
+        //         None => cli::DEFAULT_MEM_MB,
+        //     },
+        // };
+        let memory_mb = match yaml_job.memory.as_deref() {
             Some(s) => {
                 cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {}", s))
             }
-            None => match yaml_job.memory.as_deref() {
-                Some(s) => {
-                    cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {}", s))
-                }
-                None => cli::DEFAULT_MEM_MB,
-            },
+            None => cli::DEFAULT_MEM_MB,
         };
         assert!(memory_mb > 0, "Expected positive, non-zero memory amount");
 
