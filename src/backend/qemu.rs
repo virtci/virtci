@@ -149,7 +149,7 @@ impl QemuBackend {
         // hardware accel if possible
         #[cfg(target_os = "linux")]
         {
-            if crate::platform::is_kvm_available() {
+            if is_kvm_available() {
                 cmd.arg("-accel").arg("kvm");
             }
         }

@@ -48,6 +48,13 @@ pub fn run_vci() {
 
     match args.command {
         cli::Command::Run(run_args) => {
+            std::fs::create_dir_all(&*VCI_TEMP_PATH).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to create temp directory {}: {}",
+                    VCI_TEMP_PATH.display(),
+                    e
+                )
+            });
             let jobs = extract_yaml_workflows(run_args);
             run_jobs(jobs);
         }
@@ -132,8 +139,7 @@ fn run_cleanup(args: cli::CleanupArgs) {
     use colored::Colorize;
     use std::io::{self, Write};
 
-    let temp_dir = std::env::temp_dir();
-    let files = find_vci_temp_files(&temp_dir);
+    let files = find_vci_temp_files(&VCI_TEMP_PATH);
 
     if files.is_empty() {
         println!("{}", "No temporary VCI files found".dimmed());
