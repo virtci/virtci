@@ -1,6 +1,7 @@
 use colored::Colorize;
 
 use crate::ssh::{self, SshAuth, SshCredentials};
+use crate::vm_image::GuestOs;
 use crate::yaml;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -195,7 +196,7 @@ pub struct JobRunner {
     tpm_state_dir: Option<PathBuf>,
     tpm_socket_path: Option<PathBuf>,
     offline: bool,
-    guest_os: Option<ssh::GuestOs>,
+    guest_os: Option<GuestOs>,
     _port_lock: Option<std::fs::File>,
 }
 
@@ -576,7 +577,7 @@ impl JobRunner {
             }
             Err(_) => {
                 println!("{}", "  OS detection timed out, assuming Windows".yellow());
-                ssh::GuestOs::Windows
+                GuestOs::Windows
             }
         };
         self.guest_os = Some(guest_os);
@@ -694,7 +695,7 @@ impl JobRunner {
                 // Stupid line endings
                 let is_host_to_vm = to.starts_with("vm:");
                 let should_convert =
-                    if is_host_to_vm && matches!(self.guest_os, Some(ssh::GuestOs::Windows)) {
+                    if is_host_to_vm && matches!(self.guest_os, Some(GuestOs::Windows)) {
                         let source_path = std::path::Path::new(&from);
                         if source_path.is_file() {
                             let ext = source_path
@@ -769,7 +770,7 @@ impl JobRunner {
 
                 // filesystem sync
                 let sync_cmd = match self.guest_os {
-                    Some(ssh::GuestOs::Windows) => {
+                    Some(GuestOs::Windows) => {
                         "Write-VolumeCache -DriveLetter C ; Start-Sleep -Seconds 2"
                     }
                     _ => "sync", // Unix/Linux/macOS
@@ -800,7 +801,7 @@ impl JobRunner {
                 }
 
                 let wait_time = match self.guest_os {
-                    Some(ssh::GuestOs::Windows) => 3,
+                    Some(GuestOs::Windows) => 3,
                     _ => 1,
                 };
                 tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;

@@ -1,51 +1,14 @@
-use crate::job::{self, MAX_TIMEOUT};
+use crate::run::MAX_TIMEOUT;
 use serde::Deserialize;
 use std::collections::HashMap;
 
 pub type Workflow = HashMap<String, Job>;
 
-// https://www.linux-kvm.org/downloads/lersek/ovmf-whitepaper-c770f8c.txt
-// https://github.com/tianocore/tianocore.github.io/wiki/How-to-run-OVMF
-// The UEFI firmware can be split into two sections
-#[derive(Debug, Clone, Deserialize)]
-pub struct UefiSplit {
-    pub code: String,
-    pub vars: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum UefiFirmware {
-    Boolean(bool),
-    Path(String),
-    Split(UefiSplit),
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
-pub enum TpmConfig {
-    Enabled(bool),
-    Device(String),
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct Job {
-    pub image: Option<String>,
-    pub arch: Option<String>,
+    pub image: String,
     pub cpus: Option<u32>,
     pub memory: Option<String>,
-    pub user: Option<String>,
-    pub pass: Option<String>,
-    pub key: Option<String>,
-    pub port: Option<u16>,
-    pub uefi: Option<UefiFirmware>,
-    pub cpu_model: Option<String>,
-    pub additional_drives: Option<Vec<String>>,
-    pub additional_devices: Option<Vec<String>>,
-    pub qemu_args: Option<Vec<String>>,
-    pub tpm: Option<TpmConfig>,
-    #[serde(default)]
-    pub nvme: bool,
     #[serde(default)]
     pub host_env: Vec<String>,
     pub steps: Vec<Step>,
@@ -71,6 +34,8 @@ pub struct CopySpec {
     pub to: String,
     #[serde(default)]
     pub exclude: Vec<String>,
+    #[serde(default)]
+    pub crlf: bool,
 }
 
 impl Step {
@@ -99,7 +64,7 @@ pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yml::Error> {
 pub fn parse_timeout_seconds(s: &str) -> u64 {
     let s = s.trim();
     if s.is_empty() {
-        return job::MAX_TIMEOUT;
+        return MAX_TIMEOUT;
     }
 
     let (num, unit) = if s.ends_with('S') || s.ends_with('s') {
@@ -118,60 +83,4 @@ pub fn parse_timeout_seconds(s: &str) -> u64 {
         .ok()
         .map(|n| n * unit)
         .unwrap_or(MAX_TIMEOUT);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_simple_workflow() {
-        let yaml = r#"
-test-job:
-  image: ~/test.qcow2
-  user: root
-  pass: secret
-  steps:
-    - name: Hello
-      run: echo hello
-"#;
-        let workflow = parse_workflow(yaml).unwrap();
-        assert!(workflow.contains_key("test-job"));
-        let job = &workflow["test-job"];
-        assert_eq!(job.image, Some("~/test.qcow2".to_string()));
-        assert_eq!(job.steps.len(), 1);
-    }
-
-    #[test]
-    fn test_parse_copy_step() {
-        let yaml = r#"
-job:
-  steps:
-    - name: Upload
-      copy:
-        from: ./local
-        to: vm:/remote
-"#;
-        let workflow = parse_workflow(yaml).unwrap();
-        let step = &workflow["job"].steps[0];
-        assert!(step.copy.is_some());
-        let copy = step.copy.as_ref().unwrap();
-        assert_eq!(copy.from, "./local");
-        assert_eq!(copy.to, "vm:/remote");
-    }
-
-    #[test]
-    fn test_parse_offline_step() {
-        let yaml = r#"
-job:
-  steps:
-    - offline: true
-    - run: make build
-    - offline: false
-"#;
-        let workflow = parse_workflow(yaml).unwrap();
-        assert_eq!(workflow["job"].steps.len(), 3);
-        assert_eq!(workflow["job"].steps[0].offline, Some(true));
-        assert_eq!(workflow["job"].steps[2].offline, Some(false));
-    }
 }

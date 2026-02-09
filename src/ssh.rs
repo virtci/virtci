@@ -1,3 +1,4 @@
+use crate::vm_image::{GuestOs, SshConfig};
 use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
 use russh::{client, ChannelMsg};
@@ -5,14 +6,6 @@ use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuestOs {
-    Windows,
-    Linux,
-    MacOS,
-    Unknown,
-}
 
 const PORT_RANGE_START: u16 = 50000;
 const PORT_RANGE_END: u16 = 60000;
@@ -235,7 +228,7 @@ pub async fn detect_guest_os(port: u16, creds: &SshCredentials) -> GuestOs {
     }
 
     eprintln!("[OS Detection] Could not detect OS, assuming Unknown");
-    GuestOs::Unknown
+    GuestOs::Other
 }
 
 pub async fn run_command(
