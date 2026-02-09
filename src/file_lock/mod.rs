@@ -120,6 +120,38 @@ impl FileLock {
         return &mut self.file;
     }
 
+    /// Try to acquire a flock on an existing file without creating it.
+    /// Returns Ok(FileLock) if the lock was acquired. The caller holds the
+    /// lock until the returned FileLock is dropped, preventing TOCTOU
+    /// races when cleaning up files from previous runs.
+    pub fn try_lock_exist<P: AsRef<Path>>(path: P) -> Result<Self, FileLockError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|_| FileLockError::Other)?;
+
+        let handle = Self::get_raw_handle(&file);
+        let locked = unsafe { try_lock_file_exclusive_native(handle) };
+
+        if locked {
+            Ok(FileLock {
+                file,
+                path: path.as_ref().to_path_buf(),
+            })
+        } else {
+            let mut file = file;
+            let mut contents = String::new();
+            file.seek(SeekFrom::Start(0)).ok();
+            if file.read_to_string(&mut contents).is_ok() {
+                if let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents) {
+                    return Err(FileLockError::OtherProcessBlock(blocking_metadata));
+                }
+            }
+            Err(FileLockError::Other)
+        }
+    }
+
     #[cfg(unix)]
     fn get_raw_handle(file: &File) -> RawHandle {
         file.as_raw_fd()

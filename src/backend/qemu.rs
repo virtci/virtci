@@ -4,8 +4,8 @@ use colored::Colorize;
 
 use crate::{
     backend::{self, qemu, VmBackend},
+    backend::{expand_path, expand_path_in_string},
     file_lock::{FileLock, FileLockError},
-    job::{expand_path, expand_path_in_string},
     vm_image::{Arch, GuestOs, ImageDescription, UefiSplit},
     VCI_TEMP_PATH,
 };
@@ -34,7 +34,7 @@ pub struct QemuBackend {
 }
 
 impl QemuBackend {
-    fn new(
+    pub fn new(
         name: String,
         base_image: ImageDescription,
         cpus: u32,
@@ -248,8 +248,8 @@ impl VmBackend for QemuBackend {
 
                     let source_path = expand_path(file_path);
                     let temp_path = VCI_TEMP_PATH.join(format!(
-                        "vci-{}-{}-drive-{}.qcow2",
-                        &self.name, host_port_flock.1, idx
+                        "vci-{}-drive{}-{}.qcow2",
+                        &self.name, idx, host_port_flock.1
                     ));
                     let drive_flock = create_backing_file(&source_path, &temp_path)?;
 
@@ -506,6 +506,94 @@ fn get_port_flock() -> Result<(FileLock, u16), ()> {
         }
     }
     return Err(());
+}
+
+pub fn cleanup_stale_qemu_files() {
+    let temp_dir = &*VCI_TEMP_PATH;
+
+    let entries: Vec<_> = match std::fs::read_dir(temp_dir) {
+        Ok(e) => e.filter_map(|e| e.ok()).collect(),
+        Err(_) => return,
+    };
+
+    for entry in &entries {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        let port_str = match name_str
+            .strip_prefix("vci-qemu-port-")
+            .and_then(|s| s.strip_suffix(".lock"))
+        {
+            Some(p) => p.to_string(),
+            None => continue,
+        };
+
+        let lock = match FileLock::try_lock_exist(entry.path()) {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let qcow2_suffix = format!("-{}.qcow2", port_str);
+        let vars_suffix = format!("-{}-VARS.fd", port_str);
+        let tpm_lock_suffix = format!("-{}-tpm.lock", port_str);
+        let tpm_dir_suffix = format!("-{}-tpm", port_str);
+
+        if let Ok(assoc_entries) = std::fs::read_dir(temp_dir) {
+            for assoc in assoc_entries.flatten() {
+                let aname = assoc.file_name();
+                let aname_str = aname.to_string_lossy();
+
+                if aname_str == *name_str {
+                    continue;
+                }
+
+                if aname_str.starts_with("vci-")
+                    && (aname_str.ends_with(&qcow2_suffix)
+                        || aname_str.ends_with(&vars_suffix)
+                        || aname_str.ends_with(&tpm_lock_suffix)
+                        || aname_str.ends_with(&tpm_dir_suffix))
+                {
+                    let path = assoc.path();
+                    if path.is_dir() {
+                        let _ = std::fs::remove_dir_all(&path);
+                    } else {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+
+        let _ = std::fs::remove_file(lock.get_path());
+        drop(lock);
+    }
+
+    let entries: Vec<_> = match std::fs::read_dir(temp_dir) {
+        Ok(e) => e.filter_map(|e| e.ok()).collect(),
+        Err(_) => return,
+    };
+
+    for entry in &entries {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        if !name_str.starts_with("vci-") || !name_str.ends_with("-tpm.lock") {
+            continue;
+        }
+
+        let lock = match FileLock::try_lock_exist(entry.path()) {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        let dir_name = name_str.strip_suffix(".lock").unwrap();
+        let dir_path = temp_dir.join(std::path::Path::new(dir_name));
+        if dir_path.is_dir() {
+            let _ = std::fs::remove_dir_all(&dir_path);
+        }
+
+        let _ = std::fs::remove_file(lock.get_path());
+        drop(lock);
+    }
 }
 
 fn create_backing_file(

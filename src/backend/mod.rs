@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr};
 
 pub mod qemu;
 
@@ -44,4 +44,32 @@ impl Default for Arch {
             other => panic!("Unsupported host architecture: {}", other),
         }
     }
+}
+
+pub fn expand_path(path: &str) -> PathBuf {
+    if path.starts_with("~/") {
+        // Unix: $HOME, Windows: $USERPROFILE
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            return PathBuf::from(home).join(&path[2..]);
+        }
+    }
+    PathBuf::from(path)
+}
+
+pub fn expand_path_in_string(s: &str) -> String {
+    if let Some(idx) = s.find("~/") {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            let home_str = home.to_string_lossy();
+            let before = &s[..idx];
+            let after = &s[idx + 2..];
+            return format!(
+                "{}{}{}{}",
+                before,
+                home_str,
+                std::path::MAIN_SEPARATOR,
+                after
+            );
+        }
+    }
+    s.to_string()
 }

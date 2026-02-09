@@ -16,6 +16,10 @@ use crate::{backend::SshTarget, backend::VmBackend, vm_image::GuestOs, yaml};
 
 pub const SSH_WAIT_TIMEOUT: u64 = 300;
 pub const SSH_POLL_INTERVAL: u64 = 2;
+/// I don't see why something would take longer than 2 hours realistically.
+/// I have definitely compiled gRPC for over an hour, but 2 hours is some lunacy.
+/// If it does, the user can specify it themselves.
+pub const MAX_TIMEOUT: u64 = 7200;
 
 /// Neat
 fn is_github_actions() -> bool {
