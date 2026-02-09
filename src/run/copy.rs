@@ -135,6 +135,7 @@ async fn copy_host_to_vm_tar(
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut exit_code: u32 = 0;
+    let mut got_exit_status = false;
     let mut sent_bytes = 0;
     const CHUNK_SIZE: usize = 32768; // 32KB
     let mut eof_sent = false;
@@ -162,7 +163,10 @@ async fn copy_host_to_vm_tar(
             Ok(Some(ChannelMsg::ExtendedData { data, ext })) if ext == 1 => {
                 stderr.extend_from_slice(&data)
             }
-            Ok(Some(ChannelMsg::ExitStatus { exit_status })) => exit_code = exit_status,
+            Ok(Some(ChannelMsg::ExitStatus { exit_status })) => {
+                exit_code = exit_status;
+                got_exit_status = true;
+            }
             Ok(Some(ChannelMsg::Eof)) => {}
             Ok(None) => {
                 done = true;
@@ -176,6 +180,10 @@ async fn copy_host_to_vm_tar(
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
+
+    if !got_exit_status {
+        return Err("SSH channel closed without providing an exit status".to_string());
+    }
 
     let stdout_str = String::from_utf8_lossy(&stdout);
     let stderr_str = String::from_utf8_lossy(&stderr);

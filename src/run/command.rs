@@ -62,9 +62,7 @@ pub async fn run_command(
             }
             Some(ChannelMsg::Eof) => {}
             None => {
-                if got_exit_status {
-                    break;
-                }
+                break;
             }
             _ => {}
         }
@@ -75,6 +73,10 @@ pub async fn run_command(
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
+
+    if !got_exit_status {
+        return Err("SSH channel closed without providing an exit status".to_string());
+    }
 
     return Ok(CommandResult {
         exit_code,
@@ -186,9 +188,7 @@ pub async fn run_command_binary(
             }
             Some(ChannelMsg::Eof) => {}
             None => {
-                if got_exit_status {
-                    break;
-                }
+                break;
             }
             _ => {}
         }
@@ -199,6 +199,10 @@ pub async fn run_command_binary(
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
+
+    if !got_exit_status {
+        return Err("SSH channel closed without providing an exit status".to_string());
+    }
 
     return Ok(BinaryCommandResult {
         exit_code,

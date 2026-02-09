@@ -295,7 +295,7 @@ impl client::Handler for ClientHandler {
 
 pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, String> {
     let mut config = client::Config {
-        inactivity_timeout: Some(Duration::from_secs(30)),
+        inactivity_timeout: None,
         ..Default::default()
     };
 
