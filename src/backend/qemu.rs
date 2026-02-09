@@ -1,8 +1,4 @@
-use std::{
-    io::{Seek, Write},
-    path::PathBuf,
-    process::Child,
-};
+use std::{path::PathBuf, process::Child};
 
 use colored::Colorize;
 
@@ -16,9 +12,9 @@ use crate::{
 
 pub struct QemuRunner {
     pub host_port: (FileLock, u16),
-    temp_image: FileLock,
-    temp_uefi_vars: Option<FileLock>,
-    temp_additional_drives: Vec<(String, FileLock)>, // (original_spec, temp_path)
+    temp_image: PathBuf,
+    temp_uefi_vars: Option<PathBuf>,
+    temp_additional_drives: Vec<(String, PathBuf)>, // (updated_spec, temp_path)
     tpm_state_dir: Option<PathBuf>,
     tpm_socket_path: Option<PathBuf>,
     tpm_flock: Option<FileLock>,
@@ -81,17 +77,10 @@ impl QemuBackend {
                 "if=pflash,format=raw,unit=0,readonly=on,file={}",
                 code_path.display()
             ));
-            if self.runner.as_ref().unwrap().temp_uefi_vars.is_some() {
+            if let Some(ref vars_path) = self.runner.as_ref().unwrap().temp_uefi_vars {
                 cmd.arg("-drive").arg(format!(
                     "if=pflash,format=raw,unit=1,file={}",
-                    self.runner
-                        .as_ref()
-                        .unwrap()
-                        .temp_uefi_vars
-                        .as_ref()
-                        .unwrap()
-                        .get_path()
-                        .display()
+                    vars_path.display()
                 ));
             }
         }
@@ -104,27 +93,18 @@ impl QemuBackend {
         // main disk
         // if=none only when additional_devices will attach it
         // windows arm64 requires nvme? At least when made with UTM? Idk
+        let temp_image_display = self.runner.as_ref().unwrap().temp_image.display();
         if qemu_config.additional_devices.is_some() {
             cmd.arg("-drive").arg(format!(
                 "id=SystemDisk,if=none,file={},format=qcow2",
-                self.runner
-                    .as_ref()
-                    .unwrap()
-                    .temp_image
-                    .get_path()
-                    .display()
+                temp_image_display
             ));
         } else {
             match self.base_image.arch {
                 Arch::ARM64 | Arch::RISCV64 => {
                     cmd.arg("-drive").arg(format!(
                         "id=SystemDisk,if=none,file={},format=qcow2",
-                        self.runner
-                            .as_ref()
-                            .unwrap()
-                            .temp_image
-                            .get_path()
-                            .display()
+                        temp_image_display
                     ));
                     if qemu_config.nvme {
                         cmd.arg("-device")
@@ -135,15 +115,8 @@ impl QemuBackend {
                     }
                 }
                 Arch::X64 => {
-                    cmd.arg("-drive").arg(format!(
-                        "file={},format=qcow2",
-                        self.runner
-                            .as_ref()
-                            .unwrap()
-                            .temp_image
-                            .get_path()
-                            .display()
-                    ));
+                    cmd.arg("-drive")
+                        .arg(format!("file={},format=qcow2", temp_image_display));
                 }
             };
         }
@@ -223,23 +196,19 @@ impl VmBackend for QemuBackend {
         let source_image = expand_path(&qemu_config.image);
         let temp_image =
             VCI_TEMP_PATH.join(format!("vci-{}-{}.qcow2", self.name, host_port_flock.1));
-        let new_image_backed = create_backing_file(&source_image, &temp_image)?;
+        create_backing_file(&source_image, &temp_image)?;
 
         let temp_vars = if let Some(ref split) = qemu_config.uefi {
             let temp_vars_path =
                 VCI_TEMP_PATH.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
-            let mut vars_flock = FileLock::try_new(temp_vars_path).map_err(|_| ())?;
             let contents = std::fs::read(expand_path(&split.vars)).map_err(|_| ())?;
-            let file = vars_flock.get_file_mut();
-            file.set_len(0).map_err(|_| ())?;
-            file.seek(std::io::SeekFrom::Start(0)).map_err(|_| ())?;
-            file.write_all(&contents).map_err(|_| ())?;
-            Some(vars_flock)
+            std::fs::write(&temp_vars_path, &contents).map_err(|_| ())?;
+            Some(temp_vars_path)
         } else {
             None
         };
 
-        let mut temp_additional_drives = Vec::<(String, FileLock)>::new();
+        let mut temp_additional_drives = Vec::<(String, PathBuf)>::new();
         if let Some(ref drives) = qemu_config.additional_drives {
             for (idx, drive_spec) in drives.iter().enumerate() {
                 if let Some(file_start) = drive_spec.find("file=") {
@@ -255,13 +224,13 @@ impl VmBackend for QemuBackend {
                         "vci-{}-drive{}-{}.qcow2",
                         &self.name, idx, host_port_flock.1
                     ));
-                    let drive_flock = create_backing_file(&source_path, &temp_path)?;
+                    create_backing_file(&source_path, &temp_path)?;
 
                     let updated_spec = drive_spec.replace(
                         &format!("file={}", file_path),
                         &format!("file={}", temp_path.display()),
                     );
-                    temp_additional_drives.push((updated_spec, drive_flock));
+                    temp_additional_drives.push((updated_spec, temp_path));
                 } else {
                     // TODO is this necessary?
                     // temp_additional_drives.push((drive_spec.clone(), ??));
@@ -284,7 +253,7 @@ impl VmBackend for QemuBackend {
 
         let runner = QemuRunner {
             host_port: host_port_flock,
-            temp_image: new_image_backed,
+            temp_image: temp_image,
             temp_uefi_vars: temp_vars,
             temp_additional_drives: temp_additional_drives,
             tpm_state_dir: tpm_state_dir,
@@ -319,7 +288,10 @@ impl VmBackend for QemuBackend {
                     .arg("--tpm2")
                     .arg("--daemon");
 
-                runner.tpm_process = Some(tpm_cmd.spawn().map_err(|_| ())?);
+                runner.tpm_process = Some(tpm_cmd.spawn().map_err(|e| {
+                    println!("{}", e);
+                    ()
+                })?);
 
                 std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -338,7 +310,10 @@ impl VmBackend for QemuBackend {
         let mut cmd = self.build_qemu_cmd(offline);
         let fancy_cmd = format!("{:?}", cmd).replace("\"", "");
         println!("{}", (&fancy_cmd as &str).dimmed());
-        self.runner.as_mut().unwrap().qemu_process = Some(cmd.spawn().map_err(|_| ())?);
+        self.runner.as_mut().unwrap().qemu_process = Some(cmd.spawn().map_err(|e| {
+            println!("{}", e);
+            ()
+        })?);
         return Ok(());
     }
 
@@ -395,24 +370,25 @@ impl Drop for QemuBackend {
             }
 
             let mut paths_to_delete: Vec<PathBuf> = Vec::new();
-            paths_to_delete.reserve_exact(5);
-            paths_to_delete.push(runner.host_port.0.get_path().clone());
-            paths_to_delete.push(runner.temp_image.get_path().clone());
+            paths_to_delete.push(runner.temp_image.clone());
             if let Some(ref vars) = runner.temp_uefi_vars {
-                paths_to_delete.push(vars.get_path().clone());
+                paths_to_delete.push(vars.clone());
             }
-            for (_, ref flock) in &runner.temp_additional_drives {
-                paths_to_delete.push(flock.get_path().clone());
+            for (_, ref path) in &runner.temp_additional_drives {
+                paths_to_delete.push(path.clone());
             }
-            if let Some(ref flock) = runner.tpm_flock {
-                paths_to_delete.push(flock.get_path().clone());
-            }
+            let port_lock_path = runner.host_port.0.get_path().clone();
+            let tpm_lock_path = runner.tpm_flock.as_ref().map(|f| f.get_path().clone());
             let tpm_state_dir = runner.tpm_state_dir.clone();
 
-            // release flocks
+            // release flocks before deleting their files
             drop(runner);
 
             for path in &paths_to_delete {
+                let _ = std::fs::remove_file(path);
+            }
+            let _ = std::fs::remove_file(&port_lock_path);
+            if let Some(ref path) = tpm_lock_path {
                 let _ = std::fs::remove_file(path);
             }
             if let Some(ref dir) = tpm_state_dir {
@@ -603,10 +579,8 @@ pub fn cleanup_stale_qemu_files() {
 fn create_backing_file(
     source_path: &std::path::Path,
     dest_path: &std::path::Path,
-) -> Result<FileLock, ()> {
+) -> Result<(), ()> {
     let qemu_img = qemu_img_binary();
-
-    let flock = FileLock::try_new(dest_path).map_err(|_| ())?;
 
     let output = std::process::Command::new(&qemu_img)
         .args([
@@ -626,5 +600,5 @@ fn create_backing_file(
         return Err(());
     }
 
-    return Ok(flock);
+    return Ok(());
 }

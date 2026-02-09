@@ -8,9 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use russh::client;
 use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
-use russh::client;
 
 use crate::{backend::SshTarget, backend::VmBackend, vm_image::GuestOs, yaml};
 

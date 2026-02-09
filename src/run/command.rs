@@ -1,4 +1,4 @@
-use std::{collections::HashMap, os};
+use std::{collections::HashMap};
 
 use russh::ChannelMsg;
 
@@ -7,6 +7,7 @@ use crate::{backend::SshTarget, run::connect, vm_image::GuestOs};
 pub struct CommandResult {
     pub exit_code: u32,
     pub stdout: String,
+    #[allow(dead_code)]
     pub stderr: String,
 }
 

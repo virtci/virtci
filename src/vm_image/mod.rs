@@ -79,6 +79,7 @@ impl BackendConfig {
             _ => return None,
         }
     }
+
     pub fn as_tart(&self) -> Option<&TartConfig> {
         match self {
             Self::Tart(config) => Some(&config),
@@ -113,7 +114,7 @@ pub struct SshConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageDescription {
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     pub name: String,
     pub os: GuestOs,
     pub arch: Arch,

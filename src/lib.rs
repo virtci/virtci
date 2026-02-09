@@ -44,6 +44,8 @@ fn do_cleanup() {
 pub fn run_vci() {
     setup_signal_handlers();
 
+    backend::qemu::cleanup_stale_qemu_files();
+
     let args: cli::Args = argh::from_env();
 
     match args.command {
@@ -99,8 +101,6 @@ fn run_setup(args: cli::SetupArgs) {
 
 fn run_jobs(jobs: Vec<run::Job>) {
     use colored::Colorize;
-
-    backend::qemu::cleanup_stale_qemu_files();
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
