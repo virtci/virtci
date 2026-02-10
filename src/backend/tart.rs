@@ -13,6 +13,7 @@ pub struct TartRunner {
     clone_name: String,
     slot_lock: FileLock,
     tart_process: Option<Child>,
+    /// IP Address SHOULD be stable for 24-hour DHCP lease period.
     vm_ip: String,
 }
 
@@ -83,6 +84,9 @@ impl VmBackend for TartBackend {
             .output()
             .map_err(|e| {
                 eprintln!("{}", format!("Failed to run tart set: {}", e).red());
+                let _ = std::process::Command::new("tart")
+                    .args(["delete", &clone_name])
+                    .output();
             })?;
 
         if !output.status.success() {
@@ -102,6 +106,9 @@ impl VmBackend for TartBackend {
                 "{}",
                 format!("Failed to boot tart VM for IP discovery: {}", e).red()
             );
+            let _ = std::process::Command::new("tart")
+                .args(["delete", &clone_name])
+                .output();
         })?;
 
         let ip = match resolve_tart_ip(&clone_name) {
@@ -313,7 +320,8 @@ pub fn cleanup_stale_tart_clones() {
             }
         }
 
-        let _ = std::fs::remove_file(lock.get_path());
+        let lock_path = lock.get_path().clone();
         drop(lock);
+        let _ = std::fs::remove_file(&lock_path);
     }
 }

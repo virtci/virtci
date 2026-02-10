@@ -1,45 +1,16 @@
 mod backend;
 mod cli;
 mod file_lock;
-// mod job;
-// mod platform;
 mod run;
-// mod ssh;
 mod transfer_lock;
 mod vm_image;
 mod yaml;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
     return std::env::temp_dir().join("vci");
 });
-
-/// Right now, VMs are run synchronously. In the event of any error we can
-/// handle (excluding total system failure),
-/// we still want to not leave the user with non-cleaned up files.
-static CLEANUP_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-pub fn set_cleanup_path(path: PathBuf) {
-    if let Ok(mut guard) = CLEANUP_PATH.lock() {
-        *guard = Some(path);
-    }
-}
-
-pub fn clear_cleanup_path() {
-    if let Ok(mut guard) = CLEANUP_PATH.lock() {
-        *guard = None;
-    }
-}
-
-fn do_cleanup() {
-    if let Ok(guard) = CLEANUP_PATH.lock() {
-        if let Some(ref path) = *guard {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
 
 pub fn run_vci() {
     setup_signal_handlers();
@@ -243,7 +214,6 @@ async fn signal_handler() {
             _ = sigquit.recv() => {},
         }
 
-        do_cleanup();
         std::process::exit(1);
     }
 
