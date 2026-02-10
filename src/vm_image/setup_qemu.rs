@@ -31,6 +31,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
         os: guest_os,
         arch,
         ssh,
+        managed: None,
         backend: BackendConfig::Qemu(QemuConfig {
             image: image_path,
             uefi,

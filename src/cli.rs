@@ -15,6 +15,8 @@ pub enum Command {
     Setup(SetupArgs),
     Cleanup(CleanupArgs),
     List(ListArgs),
+    Export(ExportArgs),
+    Import(ImportArgs),
 }
 
 /// Run a workflow file
@@ -90,6 +92,28 @@ pub struct ListArgs {
     /// show detailed metadata for each image
     #[argh(switch)]
     pub verbose: bool,
+}
+
+/// Export a VM image and its files to a .tar archive
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "export")]
+pub struct ExportArgs {
+    /// name of the VM image to export
+    #[argh(positional)]
+    pub name: String,
+
+    /// output file path (defaults to ./<name>.tar)
+    #[argh(option, short = 'o')]
+    pub output: Option<PathBuf>,
+}
+
+/// Import a VM image from a .tar archive
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "import")]
+pub struct ImportArgs {
+    /// path to the .tar archive to import
+    #[argh(positional)]
+    pub archive: PathBuf,
 }
 
 // #[derive(Debug, Clone)]

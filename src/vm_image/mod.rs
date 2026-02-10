@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod export;
+pub mod import;
 pub mod list;
 pub mod setup_qemu;
 pub mod setup_tart;
@@ -122,6 +124,9 @@ pub struct ImageDescription {
     pub arch: Arch,
     pub backend: BackendConfig,
     pub ssh: SshConfig,
+    /// When true, VCI owns the backing files (stored in VCI_HOME_PATH/<name>/).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed: Option<bool>,
 }
 
 pub fn read_line(prompt: &str) -> Result<String, String> {

@@ -41,6 +41,18 @@ pub fn run_vci() {
         cli::Command::List(list_args) => {
             vm_image::list::run_list(list_args.verbose);
         }
+        cli::Command::Export(export_args) => {
+            if let Err(e) = vm_image::export::run_export(&export_args.name, export_args.output) {
+                eprintln!("Export failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        cli::Command::Import(import_args) => {
+            if let Err(e) = vm_image::import::run_import(&import_args.archive) {
+                eprintln!("Import failed: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 }
 

@@ -26,6 +26,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
         os: guest_os,
         arch: Arch::ARM64,
         ssh,
+        managed: None,
         backend: BackendConfig::Tart(TartConfig { vm_name }),
     };
 

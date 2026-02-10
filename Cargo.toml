@@ -12,6 +12,7 @@ russh = { version = "0.56", default-features = false, features = ["aws-lc-rs"] }
 russh-sftp = "2.0"
 tokio = { version = "1", features = ["rt", "net", "time", "io-util", "macros", "process", "sync", "signal"] }
 colored = "3"
+tar = "0.4"
 
 [build-dependencies]
 cc = "1.2.27"
