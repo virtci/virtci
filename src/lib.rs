@@ -45,6 +45,7 @@ pub fn run_vci() {
     setup_signal_handlers();
 
     backend::qemu::cleanup_stale_qemu_files();
+    backend::tart::cleanup_stale_tart_clones();
 
     let args: cli::Args = argh::from_env();
 
@@ -87,7 +88,9 @@ fn run_setup(args: cli::SetupArgs) {
     #[cfg(target_os = "macos")]
     {
         if args.tart {
-            panic!("Tart setup is not yet implemented.");
+            if let Err(e) = vm_image::setup_tart::run_interactive_setup() {
+                panic!("Setup failed: {}", e);
+            }
         }
     }
 
@@ -133,6 +136,7 @@ fn run_jobs(jobs: Vec<run::Job>) {
     println!("{}", "All jobs completed successfully".green().bold());
 
     backend::qemu::cleanup_stale_qemu_files();
+    backend::tart::cleanup_stale_tart_clones();
 }
 
 fn run_cleanup(args: cli::CleanupArgs) {
@@ -361,9 +365,12 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
                         panic!("Failed to create QEMU backend for job '{}'", &name)
                     }),
             ),
-            vm_image::BackendConfig::Tart(_) => {
-                panic!("Tart backend is not yet implemented");
-            }
+            vm_image::BackendConfig::Tart(_) => Box::new(
+                backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb)
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to create Tart backend for job '{}'", &name)
+                    }),
+            ),
         };
 
         jobs.push(run::Job {

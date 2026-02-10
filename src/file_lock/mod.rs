@@ -116,10 +116,6 @@ impl FileLock {
         return &self.path;
     }
 
-    pub fn get_file_mut(&mut self) -> &mut File {
-        return &mut self.file;
-    }
-
     /// Try to acquire a flock on an existing file without creating it.
     /// Returns Ok(FileLock) if the lock was acquired. The caller holds the
     /// lock until the returned FileLock is dropped, preventing TOCTOU

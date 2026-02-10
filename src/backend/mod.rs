@@ -1,6 +1,7 @@
 use std::{path::PathBuf, str::FromStr};
 
 pub mod qemu;
+pub mod tart;
 
 use crate::vm_image::{Arch, GuestOs, SshConfig};
 

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub mod setup_qemu;
+pub mod setup_tart;
 
 pub(crate) static VCI_HOME_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
     if let Some(vci_home) = std::env::var_os("VCI_HOME") {
