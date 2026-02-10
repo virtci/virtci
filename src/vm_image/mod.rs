@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod list;
 pub mod setup_qemu;
 pub mod setup_tart;
 

@@ -38,6 +38,9 @@ pub fn run_vci() {
         cli::Command::Cleanup(cleanup_args) => {
             run_cleanup(cleanup_args);
         }
+        cli::Command::List(list_args) => {
+            vm_image::list::run_list(list_args.verbose);
+        }
     }
 }
 

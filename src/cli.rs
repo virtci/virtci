@@ -14,6 +14,7 @@ pub enum Command {
     Run(RunArgs),
     Setup(SetupArgs),
     Cleanup(CleanupArgs),
+    List(ListArgs),
 }
 
 /// Run a workflow file
@@ -80,6 +81,15 @@ pub struct CleanupArgs {
     /// list files that would be deleted without deleting
     #[argh(switch)]
     pub list: bool,
+}
+
+/// List all configured VM images
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "list")]
+pub struct ListArgs {
+    /// show detailed metadata for each image
+    #[argh(switch)]
+    pub verbose: bool,
 }
 
 // #[derive(Debug, Clone)]
