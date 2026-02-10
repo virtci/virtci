@@ -233,6 +233,36 @@ impl Job {
                         }
                         None => return Err("SSH not available after restart".to_string()),
                     }
+
+                    if *offline {
+                        if let Some(cmd) = self.backend.offline_enforce_cmd() {
+                            let empty_env = std::collections::HashMap::new();
+                            let enforce_future = command::run_command(
+                                &ssh,
+                                cmd,
+                                None,
+                                &empty_env,
+                                self.backend.os(),
+                            );
+
+                            match tokio::time::timeout(
+                                tokio::time::Duration::from_secs(30),
+                                enforce_future,
+                            )
+                            .await
+                            {
+                                Ok(Ok(_)) => {}
+                                Ok(Err(e)) => {
+                                    return Err(format!("offline enforcement failed: {}", e))
+                                }
+                                Err(_) => {
+                                    return Err(
+                                        "offline enforcement timed out after 30s".to_string()
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

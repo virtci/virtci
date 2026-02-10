@@ -286,7 +286,8 @@ impl VmBackend for QemuBackend {
                     .arg("--ctrl")
                     .arg(format!("type=unixio,path={}", socket_path.display()))
                     .arg("--tpm2")
-                    .arg("--daemon");
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
 
                 runner.tpm_process = Some(tpm_cmd.spawn().map_err(|e| {
                     println!("{}", e);

@@ -141,21 +141,17 @@ impl VmBackend for TartBackend {
         return Ok(());
     }
 
-    fn start_vm(&mut self, offline: bool) -> Result<(), ()> {
+    fn start_vm(&mut self, _offline: bool) -> Result<(), ()> {
         let runner = self.runner.as_mut().unwrap();
 
         let mut cmd = std::process::Command::new("tart");
         cmd.args(["run", &runner.clone_name, "--no-graphics"]);
 
-        if offline {
-            cmd.arg("--net-host");
-        }
+        // Tart's network isolation flags (--net-host, --net-softnet) all require
+        // root via Softnet. Offline mode is enforced post-boot inside the VM
+        // via offline_enforce_cmd() instead.
 
-        let fancy_cmd = if offline {
-            format!("tart run {} --no-graphics --net-host", &runner.clone_name)
-        } else {
-            format!("tart run {} --no-graphics", &runner.clone_name)
-        };
+        let fancy_cmd = format!("tart run {} --no-graphics", &runner.clone_name);
         println!("{}", fancy_cmd.dimmed());
 
         runner.tart_process = Some(cmd.spawn().map_err(|e| {
@@ -163,6 +159,13 @@ impl VmBackend for TartBackend {
         })?);
 
         return Ok(());
+    }
+
+    fn offline_enforce_cmd(&self) -> Option<&'static str> {
+        // Deletes the default route, blocking internet. Still has the subnet route,
+        // so SSH should keep working. Route table is in-memory so resets
+        // on VM restart, so toggling works. Shoutout tart, but gosh darn tart.
+        Some("sudo route -n delete default")
     }
 
     fn stop_vm(&mut self) {

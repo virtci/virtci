@@ -21,6 +21,12 @@ pub trait VmBackend {
     fn ssh_target(&self) -> SshTarget;
 
     fn os(&self) -> GuestOs;
+
+    /// Terrible required workaround for tart, without having to run tart as root.
+    /// Tart requires root for Softnet-based isolation.
+    fn offline_enforce_cmd(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 impl FromStr for Arch {
