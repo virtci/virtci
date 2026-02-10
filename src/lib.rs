@@ -1,50 +1,22 @@
 mod backend;
 mod cli;
 mod file_lock;
-// mod job;
-// mod platform;
 mod run;
-// mod ssh;
 mod transfer_lock;
 mod vm_image;
 mod yaml;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
     return std::env::temp_dir().join("vci");
 });
 
-/// Right now, VMs are run synchronously. In the event of any error we can
-/// handle (excluding total system failure),
-/// we still want to not leave the user with non-cleaned up files.
-static CLEANUP_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-pub fn set_cleanup_path(path: PathBuf) {
-    if let Ok(mut guard) = CLEANUP_PATH.lock() {
-        *guard = Some(path);
-    }
-}
-
-pub fn clear_cleanup_path() {
-    if let Ok(mut guard) = CLEANUP_PATH.lock() {
-        *guard = None;
-    }
-}
-
-fn do_cleanup() {
-    if let Ok(guard) = CLEANUP_PATH.lock() {
-        if let Some(ref path) = *guard {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
 pub fn run_vci() {
     setup_signal_handlers();
 
     backend::qemu::cleanup_stale_qemu_files();
+    backend::tart::cleanup_stale_tart_clones();
 
     let args: cli::Args = argh::from_env();
 
@@ -87,7 +59,9 @@ fn run_setup(args: cli::SetupArgs) {
     #[cfg(target_os = "macos")]
     {
         if args.tart {
-            panic!("Tart setup is not yet implemented.");
+            if let Err(e) = vm_image::setup_tart::run_interactive_setup() {
+                panic!("Setup failed: {}", e);
+            }
         }
     }
 
@@ -133,6 +107,7 @@ fn run_jobs(jobs: Vec<run::Job>) {
     println!("{}", "All jobs completed successfully".green().bold());
 
     backend::qemu::cleanup_stale_qemu_files();
+    backend::tart::cleanup_stale_tart_clones();
 }
 
 fn run_cleanup(args: cli::CleanupArgs) {
@@ -239,7 +214,6 @@ async fn signal_handler() {
             _ = sigquit.recv() => {},
         }
 
-        do_cleanup();
         std::process::exit(1);
     }
 
@@ -361,9 +335,12 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
                         panic!("Failed to create QEMU backend for job '{}'", &name)
                     }),
             ),
-            vm_image::BackendConfig::Tart(_) => {
-                panic!("Tart backend is not yet implemented");
-            }
+            vm_image::BackendConfig::Tart(_) => Box::new(
+                backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb)
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to create Tart backend for job '{}'", &name)
+                    }),
+            ),
         };
 
         jobs.push(run::Job {
