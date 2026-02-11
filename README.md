@@ -28,6 +28,12 @@ sudo apt update
 sudo apt install qemu-kvm libvirt-daemon-system libvirt-clients virt-manager swtpm
 ```
 
+Arch:
+
+```sh
+sudo pacman -S qemu-full virt-manager
+```
+
 **MacOS:**
 
 Install QEMU and Tart. You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs.
