@@ -1,4 +1,6 @@
-<img src="res/VirtCI-wordmark.png"/>
+<div align="center">
+  <img src="res/VirtCI-wordmark.png"/>
+</div>
 
 # VirtCI Virtual Machine CI Runner
 
