@@ -117,7 +117,7 @@ async fn copy_host_to_vm_tar(
 
     let handle = crate::run::connect(ssh).await?;
 
-    let mut channel = handle
+    let channel = handle
         .channel_open_session()
         .await
         .map_err(|e| format!("Failed to open channel: {}", e))?;
@@ -130,51 +130,48 @@ async fn copy_host_to_vm_tar(
         .await
         .map_err(|e| format!("Failed to exec tar extract: {}", e))?;
 
+    let (mut reader, writer) = channel.split();
+
+    let drain_task = tokio::spawn(async move {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_code: u32 = 0;
+        let mut got_exit_status = false;
+
+        while let Some(msg) = reader.wait().await {
+            match msg {
+                ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                ChannelMsg::ExtendedData { data, ext } if ext == 1 => {
+                    stderr.extend_from_slice(&data)
+                }
+                ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = exit_status;
+                    got_exit_status = true;
+                }
+                _ => {}
+            }
+        }
+
+        (stdout, stderr, exit_code, got_exit_status)
+    });
+
     eprintln!("[TAR] Sending {} bytes to remote...", tar_data.len());
 
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut exit_code: u32 = 0;
-    let mut got_exit_status = false;
-    let mut sent_bytes = 0;
-    const CHUNK_SIZE: usize = 32768; // 32KB
-    let mut eof_sent = false;
-    let mut done = false;
+    writer
+        .data(&tar_data[..])
+        .await
+        .map_err(|e| format!("Failed to send tar data: {}", e))?;
 
-    while !done {
-        if sent_bytes < tar_data.len() {
-            let end = std::cmp::min(sent_bytes + CHUNK_SIZE, tar_data.len());
-            channel
-                .data(&tar_data[sent_bytes..end])
-                .await
-                .map_err(|e| format!("Failed to send data chunk: {}", e))?;
-            sent_bytes = end;
-        } else if !eof_sent {
-            channel
-                .eof()
-                .await
-                .map_err(|e| format!("Failed to send EOF: {}", e))?;
-            eof_sent = true;
-            eprintln!("[TAR] All data sent, waiting for extraction to complete...");
-        }
+    writer
+        .eof()
+        .await
+        .map_err(|e| format!("Failed to send EOF: {}", e))?;
 
-        match tokio::time::timeout(tokio::time::Duration::from_millis(10), channel.wait()).await {
-            Ok(Some(ChannelMsg::Data { data })) => stdout.extend_from_slice(&data),
-            Ok(Some(ChannelMsg::ExtendedData { data, ext })) if ext == 1 => {
-                stderr.extend_from_slice(&data)
-            }
-            Ok(Some(ChannelMsg::ExitStatus { exit_status })) => {
-                exit_code = exit_status;
-                got_exit_status = true;
-            }
-            Ok(Some(ChannelMsg::Eof)) => {}
-            Ok(None) => {
-                done = true;
-            }
-            Err(_) => {}
-            _ => {}
-        }
-    }
+    eprintln!("[TAR] All data sent, waiting for extraction to complete...");
+
+    let (stdout, stderr, exit_code, got_exit_status) = drain_task
+        .await
+        .map_err(|e| format!("Channel message drain failed: {}", e))?;
 
     handle
         .disconnect(russh::Disconnect::ByApplication, "", "en")
