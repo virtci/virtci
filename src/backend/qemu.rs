@@ -17,6 +17,8 @@ pub struct QemuRunner {
     temp_additional_drives: Vec<(String, PathBuf)>, // (updated_spec, temp_path)
     tpm_state_dir: Option<PathBuf>,
     tpm_socket_path: Option<PathBuf>,
+    #[cfg(target_os = "windows")]
+    tpm_port: Option<(FileLock, u16)>,
     tpm_flock: Option<FileLock>,
     qemu_process: Option<Child>,
     tpm_process: Option<Child>,
@@ -153,9 +155,24 @@ impl QemuBackend {
         cmd.arg("-device").arg("virtio-net-pci,netdev=net0");
 
         // TPM stuff
+        #[cfg(not(target_os = "windows"))]
         if let Some(ref socket_path) = self.runner.as_ref().unwrap().tpm_socket_path {
             cmd.arg("-chardev")
                 .arg(format!("socket,id=chrtpm,path={}", socket_path.display()));
+            cmd.arg("-tpmdev").arg("emulator,id=tpm0,chardev=chrtpm");
+            let tpm_device = match self.base_image.arch {
+                Arch::ARM64 | Arch::RISCV64 => "tpm-tis-device,tpmdev=tpm0".to_string(),
+                Arch::X64 => "tpm-tis,tpmdev=tpm0".to_string(),
+            };
+            cmd.arg("-device").arg(tpm_device);
+        }
+
+        #[cfg(target_os = "windows")]
+        if let Some(ref tpm_port) = self.runner.as_ref().unwrap().tpm_port {
+            cmd.arg("-chardev").arg(format!(
+                "socket,id=chrtpm,host=127.0.0.1,port={}",
+                tpm_port.1
+            ));
             cmd.arg("-tpmdev").arg("emulator,id=tpm0,chardev=chrtpm");
             let tpm_device = match self.base_image.arch {
                 Arch::ARM64 | Arch::RISCV64 => "tpm-tis-device,tpmdev=tpm0".to_string(),
@@ -245,10 +262,20 @@ impl VmBackend for QemuBackend {
             let state_dir =
                 VCI_TEMP_PATH.join(&format!("vci-{}-{}-tpm", self.name, host_port_flock.1));
             std::fs::create_dir_all(&state_dir).map_err(|_| ())?;
-            let socket_path = state_dir.join("swtpm-sock");
-            (Some(state_dir), Some(socket_path), Some(tpm_flock_file))
+            #[cfg(not(target_os = "windows"))]
+            let socket_path = Some(state_dir.join("swtpm-sock"));
+            #[cfg(target_os = "windows")]
+            let socket_path: Option<PathBuf> = None;
+            (Some(state_dir), socket_path, Some(tpm_flock_file))
         } else {
             (None, None, None)
+        };
+
+        #[cfg(target_os = "windows")]
+        let tpm_port = if qemu_config.tpm {
+            Some(get_tpm_port_flock()?)
+        } else {
+            None
         };
 
         let runner = QemuRunner {
@@ -258,6 +285,8 @@ impl VmBackend for QemuBackend {
             temp_additional_drives: temp_additional_drives,
             tpm_state_dir: tpm_state_dir,
             tpm_socket_path: tpm_socket_path,
+            #[cfg(target_os = "windows")]
+            tpm_port: tpm_port,
             tpm_flock: tpm_flock,
             qemu_process: None,
             tpm_process: None,
@@ -270,6 +299,8 @@ impl VmBackend for QemuBackend {
     fn start_vm(&mut self, offline: bool) -> Result<(), ()> {
         {
             let runner = self.runner.as_mut().unwrap();
+
+            #[cfg(not(target_os = "windows"))]
             if let (Some(ref state_dir), Some(ref socket_path)) =
                 (&runner.tpm_state_dir, &runner.tpm_socket_path)
             {
@@ -303,6 +334,43 @@ impl VmBackend for QemuBackend {
                 }
 
                 if !socket_path.exists() {
+                    return Err(());
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            if let (Some(ref state_dir), Some(ref tpm_port)) =
+                (&runner.tpm_state_dir, &runner.tpm_port)
+            {
+                let port = tpm_port.1;
+                let mut tpm_cmd = std::process::Command::new("swtpm");
+                tpm_cmd
+                    .arg("socket")
+                    .arg("--tpmstate")
+                    .arg(format!("dir={}", state_dir.display()))
+                    .arg("--ctrl")
+                    .arg(format!("type=tcp,port={},bindaddr=127.0.0.1", port))
+                    .arg("--tpm2")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+
+                runner.tpm_process = Some(tpm_cmd.spawn().map_err(|e| {
+                    println!("{}", e);
+                    ()
+                })?);
+
+                std::thread::sleep(std::time::Duration::from_millis(500));
+
+                let mut retries = 0;
+                while retries < 10 {
+                    if std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    retries += 1;
+                }
+
+                if retries >= 10 {
                     return Err(());
                 }
             }
@@ -380,6 +448,8 @@ impl Drop for QemuBackend {
             }
             let port_lock_path = runner.host_port.0.get_path().clone();
             let tpm_lock_path = runner.tpm_flock.as_ref().map(|f| f.get_path().clone());
+            #[cfg(target_os = "windows")]
+            let tpm_port_lock_path = runner.tpm_port.as_ref().map(|p| p.0.get_path().clone());
             let tpm_state_dir = runner.tpm_state_dir.clone();
 
             // release flocks before deleting their files
@@ -390,6 +460,10 @@ impl Drop for QemuBackend {
             }
             let _ = std::fs::remove_file(&port_lock_path);
             if let Some(ref path) = tpm_lock_path {
+                let _ = std::fs::remove_file(path);
+            }
+            #[cfg(target_os = "windows")]
+            if let Some(ref path) = tpm_port_lock_path {
                 let _ = std::fs::remove_file(path);
             }
             if let Some(ref dir) = tpm_state_dir {
@@ -489,6 +563,24 @@ fn get_port_flock() -> Result<(FileLock, u16), ()> {
     return Err(());
 }
 
+#[cfg(target_os = "windows")]
+fn get_tpm_port_flock() -> Result<(FileLock, u16), ()> {
+    const TPM_PORT_RANGE_START: u16 = 60001;
+    const TPM_PORT_RANGE_END: u16 = 65000;
+
+    for port in TPM_PORT_RANGE_START..=TPM_PORT_RANGE_END {
+        let lock_path = VCI_TEMP_PATH.join(format!("vci-qemu-tpm-port-{}.lock", port));
+        let res = FileLock::try_new(lock_path);
+        match res {
+            Ok(lock) => {
+                return Ok((lock, port));
+            }
+            _ => (),
+        }
+    }
+    return Err(());
+}
+
 pub fn cleanup_stale_qemu_files() {
     let temp_dir = &*VCI_TEMP_PATH;
 
@@ -571,6 +663,29 @@ pub fn cleanup_stale_qemu_files() {
         if dir_path.is_dir() {
             let _ = std::fs::remove_dir_all(&dir_path);
         }
+
+        let _ = std::fs::remove_file(lock.get_path());
+        drop(lock);
+    }
+
+    // windows specific TCP based TPM
+    let entries: Vec<_> = match std::fs::read_dir(temp_dir) {
+        Ok(e) => e.filter_map(|e| e.ok()).collect(),
+        Err(_) => return,
+    };
+
+    for entry in &entries {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        if !name_str.starts_with("vci-qemu-tpm-port-") || !name_str.ends_with(".lock") {
+            continue;
+        }
+
+        let lock = match FileLock::try_lock_exist(entry.path()) {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
 
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
