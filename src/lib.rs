@@ -12,7 +12,7 @@ pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyL
     return std::env::temp_dir().join("vci");
 });
 
-pub fn run_vci() {
+pub fn run_virtci() {
     setup_signal_handlers();
 
     backend::qemu::cleanup_stale_qemu_files();

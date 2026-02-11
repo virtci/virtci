@@ -1,5 +1,5 @@
-use vci::run_vci;
+use virtci::run_virtci;
 
 fn main() {
-    run_vci();
+    run_virtci();
 }

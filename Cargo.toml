@@ -1,5 +1,5 @@
 [package]
-name = "vci"
+name = "virtci"
 version = "0.1.0"
 edition = "2021"
 
@@ -18,5 +18,5 @@ tar = "0.4"
 cc = "1.2.27"
 
 [[bin]]
-name = "vci"
+name = "virtci"
 path = "src/main.rs"
