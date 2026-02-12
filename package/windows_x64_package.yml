@@ -19,7 +19,7 @@ win-11-x64:
       run: Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
     - name: Install NASM and Build
-      run: choco install nasm -y; refreshenv; cargo build --release
+      run: choco install nasm -y; $env:Path = "C:\Program Files\NASM;$env:Path"; cargo build --release
 
     - name: Package
       run: tar czf virtci-windows-x64.tar.gz -C target/release virtci.exe
