@@ -11,6 +11,7 @@ pub struct Args {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand)]
 pub enum Command {
+    Version(VersionCommand),
     Run(RunArgs),
     Setup(SetupArgs),
     Cleanup(CleanupArgs),
@@ -18,6 +19,11 @@ pub enum Command {
     Export(ExportArgs),
     Import(ImportArgs),
 }
+
+/// Get the VirtCI version
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "version")]
+pub struct VersionCommand {}
 
 /// Run a workflow file
 #[derive(FromArgs, Debug)]

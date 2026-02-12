@@ -21,6 +21,9 @@ pub fn run_virtci() {
     let args: cli::Args = argh::from_env();
 
     match args.command {
+        cli::Command::Version(_) => {
+            println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
+        }
         cli::Command::Run(run_args) => {
             std::fs::create_dir_all(&*VCI_TEMP_PATH).unwrap_or_else(|e| {
                 panic!(
