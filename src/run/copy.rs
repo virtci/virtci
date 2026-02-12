@@ -247,13 +247,25 @@ async fn copy_vm_to_host_tar(
             base_cmd
         }
     } else {
-        // For files: tar from parent directory with specific filename
-        let path = std::path::Path::new(remote_path);
-        let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
-        let filename = path
-            .file_name()
-            .and_then(|f| f.to_str())
-            .ok_or_else(|| format!("Invalid filename in path: {}", remote_path))?;
+        let (parent, filename) = if is_windows {
+            let normalized = remote_path.replace('/', "\\");
+            match normalized.rfind('\\') {
+                Some(pos) => (
+                    normalized[..pos].to_string(),
+                    normalized[pos + 1..].to_string(),
+                ),
+                None => (".".to_string(), normalized),
+            }
+        } else {
+            let path = std::path::Path::new(remote_path);
+            let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
+            let filename = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or(remote_path);
+            (parent.to_string(), filename.to_string())
+        };
+        let parent = if parent.is_empty() { ".".to_string() } else { parent };
 
         let base_cmd = format!(
             "tar czf - -C \"{}\"{} \"{}\"",
