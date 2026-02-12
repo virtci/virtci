@@ -15,6 +15,9 @@ win-11-x64:
     - name: Install Rust
       run: curl -o rustup-init.exe https://win.rustup.rs/x86_64; .\rustup-init.exe -y
 
+    - name: Install NASM
+      run: choco install nasm
+
     - name: Build
       run: cargo build --release
 
