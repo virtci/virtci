@@ -79,22 +79,22 @@ jobs:
           name: virtci-windows-x64
           path: virtci-windows-x64.tar.gz  
 
-  build-windows-arm64-bootstrap:
-    runs-on: 
-      - self-hosted
-      - macOS
-      - ARM64
-    steps:
-      - uses: actions/checkout@v4
+  # build-windows-arm64-bootstrap:
+  #   runs-on: 
+  #     - self-hosted
+  #     - macOS
+  #     - ARM64
+  #   steps:
+  #     - uses: actions/checkout@v4
 
-      - name: Run VirtCI build
-        run: virtci run package/windows_arm64_package.yml
+  #     - name: Run VirtCI build
+  #       run: virtci run package/windows_arm64_package.yml
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: virtci-windows-arm64
-          path: virtci-windows-arm64.tar.gz
+  #     - name: Upload artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: virtci-windows-arm64
+  #         path: virtci-windows-arm64.tar.gz
 
   # release:
   #   needs: [build-macos, build-linux-x64, build-macos-bootstrap]
