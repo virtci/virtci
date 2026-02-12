@@ -13,7 +13,7 @@ macos-arm64:
             - docs
 
     - name: Install Rust
-      run: curl -o rustup-init.exe https://win.rustup.rs/aarch64 && rustup-init.exe -y
+      run: curl -o rustup-init.exe https://win.rustup.rs/aarch64; rustup-init.exe -y
 
     - name: Build
       run: cargo build --release

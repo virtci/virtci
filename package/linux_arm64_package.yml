@@ -19,7 +19,7 @@ ubuntu-arm64:
       run: cargo build --release
 
     - name: Package
-      run: tar czf virtci-linux-arm64.tar.gz virtci
+      run: tar czf virtci-linux-arm64.tar.gz -C target/release virtci
 
     - name: Copy Files
       copy:
