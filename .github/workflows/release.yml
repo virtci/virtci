@@ -9,7 +9,111 @@ on:
 permissions:
   contents: write
 
-jobs:
+jobs:          
+  build-linux-x64-bootstrap:
+    runs-on: 
+      - self-hosted
+      - Linux
+      - X64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run VirtCI build
+        run: virtci run package/linux_x64_package.yml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtci-linux-x64
+          path: virtci-linux-x64.tar.gz  
+
+  build-linux-arm64-bootstrap:
+    runs-on: 
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run VirtCI build
+        run: virtci run package/linux_arm64_package.yml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtci-linux-arm64
+          path: virtci-linux-arm64.tar.gz
+
+  build-macos-bootstrap:
+    runs-on: 
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run VirtCI build
+        run: virtci run package/mac_package.yml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtci-macos
+          path: virtci-macos.tar.gz
+
+
+  build-windows-x64-bootstrap:
+    runs-on: 
+      - self-hosted
+      - Linux
+      - X64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run VirtCI build
+        run: virtci run package/windows_x64_package.yml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtci-windows-x64
+          path: virtci-windows-x64.tar.gz  
+
+  build-windows-arm64-bootstrap:
+    runs-on: 
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run VirtCI build
+        run: virtci run package/windows_arm64_package.yml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtci-windows-arm64
+          path: virtci-windows-arm64.tar.gz
+
+  # release:
+  #   needs: [build-macos, build-linux-x64, build-macos-bootstrap]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         path: artifacts
+  #         merge-multiple: true
+
+  #     - name: Create GitHub Release
+  #       uses: softprops/action-gh-release@v2
+  #       with:
+  #         generate_release_notes: true
+  #         files: |
+  #           artifacts/virtci-apple-darwin.tar.gz
+  #           artifacts/virtci-linux-x86_64.tar.gz
+  #           artifacts/virtci-macos.tar.gz
+
   # build-macos:
   #   runs-on: macos-latest
   #   steps:
@@ -43,60 +147,27 @@ jobs:
   #         name: virtci-apple-darwin
   #         path: virtci-apple-darwin.tar.gz
 
-  build-macos-bootstrap:
-    runs-on: 
-      - self-hosted
-      - macOS
-      - ARM64
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run VirtCI build
-        run: virtci run package/mac_package.yml
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: virtci-macos
-          path: virtci-macos.tar.gz
-
-  build-linux-x64:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        run: rustup target add x86_64-unknown-linux-gnu
-
-      - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-gnu
-
-      - name: Package
-        run: |
-          cp target/x86_64-unknown-linux-gnu/release/virtci virtci
-          chmod +x virtci
-          tar czf virtci-linux-x86_64.tar.gz virtci
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: virtci-linux-x86_64
-          path: virtci-linux-x86_64.tar.gz
-
-  # release:
-  #   needs: [build-macos, build-linux-x64, build-macos-bootstrap]
+  # build-linux-x64:
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         path: artifacts
-  #         merge-multiple: true
+  #     - uses: actions/checkout@v4
 
-  #     - name: Create GitHub Release
-  #       uses: softprops/action-gh-release@v2
+  #     - name: Install Rust
+  #       run: rustup target add x86_64-unknown-linux-gnu
+
+  #     - name: Build
+  #       run: cargo build --release --target x86_64-unknown-linux-gnu
+
+  #     - name: Package
+  #       run: |
+  #         cp target/x86_64-unknown-linux-gnu/release/virtci virtci
+  #         chmod +x virtci
+  #         tar czf virtci-linux-x86_64.tar.gz virtci
+
+  #     - name: Upload artifact
+  #       uses: actions/upload-artifact@v4
   #       with:
-  #         generate_release_notes: true
-  #         files: |
-  #           artifacts/virtci-apple-darwin.tar.gz
-  #           artifacts/virtci-linux-x86_64.tar.gz
-  #           artifacts/virtci-macos.tar.gz
+  #         name: virtci-linux-x86_64
+  #         path: virtci-linux-x86_64.tar.gz  
+
+

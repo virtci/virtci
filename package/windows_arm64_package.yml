@@ -1,0 +1,27 @@
+macos-arm64:
+    image: win-11-arm64
+    cpus: 4
+    memory: 12G
+    steps:
+    - name: Copy Files
+      copy:
+        from: ./
+        to: vm:~/
+        exclude:
+            - .git
+            - .github
+            - docs
+
+    - name: Install Rust
+      run: curl -o rustup-init.exe https://win.rustup.rs/aarch64 && rustup-init.exe -y
+
+    - name: Build
+      run: cargo build --release
+
+    - name: Package
+      run: tar czf virtci-windows-arm64.tar.gz -C target/release virtci.exe
+
+    - name: Copy Files
+      copy:
+        from: vm:~/virtci-windows-arm64.tar.gz
+        to: ./
