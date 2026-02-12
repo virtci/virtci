@@ -291,30 +291,38 @@ async fn copy_vm_to_host_tar(
         (local_path.to_string(), None)
     } else {
         let local = std::path::Path::new(local_path);
-        let parent = local
-            .parent()
-            .and_then(|p| p.to_str())
-            .ok_or_else(|| format!("Invalid local path: {}", local_path))?;
 
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create local directory {}: {}", parent, e))?;
-
-        let remote_filename = std::path::Path::new(remote_path)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("file");
-        let local_filename = local.file_name().and_then(|f| f.to_str()).unwrap_or("file");
-
-        let rename = if remote_filename != local_filename {
-            Some((
-                format!("{}/{}", parent, remote_filename),
-                local_path.to_string(),
-            ))
+        if local.file_name().is_none() {
+            let dir = local_path.trim_end_matches('/');
+            let dir = if dir.is_empty() { "." } else { dir };
+            (dir.to_string(), None)
         } else {
-            None
-        };
+            let parent = local
+                .parent()
+                .and_then(|p| p.to_str())
+                .ok_or_else(|| format!("Invalid local path: {}", local_path))?;
+            let parent = if parent.is_empty() { "." } else { parent };
 
-        (parent.to_string(), rename)
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create local directory {}: {}", parent, e))?;
+
+            let remote_filename = std::path::Path::new(remote_path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("file");
+            let local_filename = local.file_name().and_then(|f| f.to_str()).unwrap_or("file");
+
+            let rename = if remote_filename != local_filename {
+                Some((
+                    format!("{}/{}", parent, remote_filename),
+                    local_path.to_string(),
+                ))
+            } else {
+                None
+            };
+
+            (parent.to_string(), rename)
+        }
     };
 
     eprintln!("[TAR] Extracting to: {}", extract_dir);
