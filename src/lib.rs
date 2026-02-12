@@ -251,7 +251,6 @@ async fn signal_handler() {
             _ = ctrl_shutdown.recv() => {},
         }
 
-        do_cleanup();
         std::process::exit(1);
     }
 }
