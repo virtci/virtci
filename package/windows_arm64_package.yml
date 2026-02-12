@@ -12,11 +12,17 @@ macos-arm64:
             - .github
             - docs
 
+    - name: Install Chocolatey
+      run: Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
     - name: Install Rust
       run: curl -o rustup-init.exe https://win.rustup.rs/aarch64; .\rustup-init.exe -y
 
+    - name: Install LLVM
+      run: choco install llvm -y
+
     - name: Build
-      run: cargo build --release
+      run: $env:Path = "C:\Program Files\LLVM\bin;$env:Path"; cargo build --release
 
     - name: Package
       run: tar czf virtci-windows-arm64.tar.gz -C target/release virtci.exe
