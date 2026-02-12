@@ -16,7 +16,7 @@ ubuntu-arm64:
       run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
     - name: Build
-      run: cargo build --release
+      run: . "$HOME/.cargo/env" && cargo build --release
 
     - name: Package
       run: tar czf virtci-linux-arm64.tar.gz -C target/release virtci

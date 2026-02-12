@@ -19,7 +19,7 @@ win-11-x64:
       run: Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
     - name: Install NASM
-      run: choco install nasm
+      run: choco install nasm -y
 
     - name: Build
       run: cargo build --release
