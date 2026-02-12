@@ -1,7 +1,7 @@
 macos-arm64:
     image: mac-arm64
-    cpus: 2
-    memory: 8G
+    cpus: 4
+    memory: 12G
     steps:
     - name: Copy Files
       copy:
