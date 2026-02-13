@@ -3,13 +3,7 @@ use std::{path::PathBuf, str::FromStr};
 pub mod qemu;
 pub mod tart;
 
-use crate::vm_image::{Arch, GuestOs, SshConfig};
-
-pub struct SshTarget {
-    pub ip: String,
-    pub port: u16,
-    pub cred: SshConfig,
-}
+use crate::vm_image::{Arch, GuestOs, SshTarget};
 
 pub trait VmBackend {
     fn setup_clone(&mut self) -> Result<(), ()>;

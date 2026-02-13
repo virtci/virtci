@@ -12,7 +12,7 @@ use russh::client;
 use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
 
-use crate::{backend::SshTarget, backend::VmBackend, vm_image::GuestOs, yaml};
+use crate::{backend::VmBackend, vm_image::GuestOs, vm_image::SshTarget, yaml};
 
 pub const SSH_WAIT_TIMEOUT: u64 = 300;
 pub const SSH_POLL_INTERVAL: u64 = 2;

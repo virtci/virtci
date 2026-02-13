@@ -3,7 +3,7 @@ use std::{path::PathBuf, process::Child};
 use colored::Colorize;
 
 use crate::{
-    backend::{self, VmBackend},
+    backend::VmBackend,
     backend::{expand_path, expand_path_in_string},
     file_lock::FileLock,
     vm_image::{Arch, GuestOs, ImageDescription},
@@ -293,6 +293,19 @@ impl VmBackend for QemuBackend {
         };
 
         self.runner = Some(runner);
+
+        let ssh_target = self.ssh_target();
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.name.clone(), ssh_target);
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = self
+                .runner
+                .as_mut()
+                .unwrap()
+                .host_port
+                .0
+                .write_content(json.as_bytes());
+        }
+
         return Ok(());
     }
 
@@ -410,8 +423,8 @@ impl VmBackend for QemuBackend {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    fn ssh_target(&self) -> backend::SshTarget {
-        return backend::SshTarget {
+    fn ssh_target(&self) -> crate::vm_image::SshTarget {
+        return crate::vm_image::SshTarget {
             ip: "127.0.0.1".to_string(),
             port: self.runner.as_ref().unwrap().host_port.1,
             cred: self.base_image.ssh.clone(),

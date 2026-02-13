@@ -117,6 +117,13 @@ pub struct SshConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshTarget {
+    pub ip: String,
+    pub port: u16,
+    pub cred: SshConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageDescription {
     #[serde(skip)]
     pub name: String,

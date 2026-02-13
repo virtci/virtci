@@ -22,6 +22,10 @@ pub struct LockMetadata {
     pid: u32,
     process_start_time: u64,
     locked_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<crate::vm_image::SshTarget>,
 }
 
 impl LockMetadata {
@@ -35,7 +39,16 @@ impl LockMetadata {
             pid: std::process::id(),
             process_start_time: get_process_start_time(std::process::id()).unwrap_or(0),
             locked_at: now,
+            job_name: None,
+            ssh: None,
         }
+    }
+
+    pub fn with_run_info(job_name: String, ssh: crate::vm_image::SshTarget) -> Self {
+        let mut meta = Self::new();
+        meta.job_name = Some(job_name);
+        meta.ssh = Some(ssh);
+        meta
     }
 }
 
@@ -114,6 +127,14 @@ impl FileLock {
 
     pub fn get_path(&self) -> &PathBuf {
         return &self.path;
+    }
+
+    pub fn write_content(&mut self, content: &[u8]) -> Result<(), ()> {
+        self.file.set_len(0).map_err(|_| ())?;
+        self.file.seek(SeekFrom::Start(0)).map_err(|_| ())?;
+        self.file.write_all(content).map_err(|_| ())?;
+        self.file.flush().map_err(|_| ())?;
+        Ok(())
     }
 
     /// Try to acquire a flock on an existing file without creating it.

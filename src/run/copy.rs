@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use russh::ChannelMsg;
 
-use crate::{backend::SshTarget, vm_image::GuestOs};
+use crate::{vm_image::GuestOs, vm_image::SshTarget};
 
 enum CopyDirection {
     HostToVm,
@@ -265,7 +265,11 @@ async fn copy_vm_to_host_tar(
                 .unwrap_or(remote_path);
             (parent.to_string(), filename.to_string())
         };
-        let parent = if parent.is_empty() { ".".to_string() } else { parent };
+        let parent = if parent.is_empty() {
+            ".".to_string()
+        } else {
+            parent
+        };
 
         let base_cmd = format!(
             "tar czf - -C \"{}\"{} \"{}\"",

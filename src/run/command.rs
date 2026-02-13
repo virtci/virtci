@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use russh::ChannelMsg;
 
-use crate::{backend::SshTarget, run::connect, vm_image::GuestOs};
+use crate::{run::connect, vm_image::GuestOs, vm_image::SshTarget};
 
 pub struct CommandResult {
     pub exit_code: u32,

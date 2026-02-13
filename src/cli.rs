@@ -18,6 +18,8 @@ pub enum Command {
     List(ListArgs),
     Export(ExportArgs),
     Import(ImportArgs),
+    Active(ActiveArgs),
+    Shell(ShellArgs),
 }
 
 /// Get the VirtCI version
@@ -120,6 +122,20 @@ pub struct ImportArgs {
     /// path to the .tar archive to import
     #[argh(positional)]
     pub archive: PathBuf,
+}
+
+/// List all currently running VirtCI jobs
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "active")]
+pub struct ActiveArgs {}
+
+/// SSH into a running VM by job name
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "shell")]
+pub struct ShellArgs {
+    /// name of the running job to connect to
+    #[argh(positional)]
+    pub name: String,
 }
 
 // #[derive(Debug, Clone)]

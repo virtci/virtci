@@ -2,6 +2,7 @@ mod backend;
 mod cli;
 mod file_lock;
 mod run;
+mod run_state;
 mod transfer_lock;
 mod vm_image;
 mod yaml;
@@ -56,6 +57,12 @@ pub fn run_virtci() {
                 std::process::exit(1);
             }
         }
+        cli::Command::Active(_) => {
+            run_state::run_active();
+        }
+        cli::Command::Shell(shell_args) => {
+            run_state::run_shell(shell_args);
+        }
     }
 }
 
@@ -99,6 +106,8 @@ fn run_jobs(jobs: Vec<run::Job>) {
         .build()
         .expect("Failed to create tokio runtime");
 
+    let mut failed = false;
+
     for mut job in jobs {
         let job_name = job.name.clone();
         println!("{}", format!("=== Job {} ===", job_name).cyan().bold());
@@ -117,15 +126,20 @@ fn run_jobs(jobs: Vec<run::Job>) {
                         .red()
                         .bold()
                 );
-                std::process::exit(1);
+                failed = true;
+                break;
             }
         }
     }
 
-    println!("{}", "All jobs completed successfully".green().bold());
-
     backend::qemu::cleanup_stale_qemu_files();
     backend::tart::cleanup_stale_tart_clones();
+
+    if failed {
+        std::process::exit(1);
+    }
+
+    println!("{}", "All jobs completed successfully".green().bold());
 }
 
 fn run_cleanup(args: cli::CleanupArgs) {

@@ -3,7 +3,7 @@ use std::process::Child;
 use colored::Colorize;
 
 use crate::{
-    backend::{self, VmBackend},
+    backend::VmBackend,
     file_lock::FileLock,
     vm_image::{GuestOs, ImageDescription},
     VCI_TEMP_PATH,
@@ -138,6 +138,17 @@ impl VmBackend for TartBackend {
             vm_ip: ip,
         });
 
+        let ssh_target = self.ssh_target();
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.name.clone(), ssh_target);
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = self
+                .runner
+                .as_mut()
+                .unwrap()
+                .slot_lock
+                .write_content(json.as_bytes());
+        }
+
         return Ok(());
     }
 
@@ -183,9 +194,9 @@ impl VmBackend for TartBackend {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    fn ssh_target(&self) -> backend::SshTarget {
+    fn ssh_target(&self) -> crate::vm_image::SshTarget {
         let runner = self.runner.as_ref().unwrap();
-        return backend::SshTarget {
+        return crate::vm_image::SshTarget {
             ip: runner.vm_ip.clone(),
             port: 22,
             cred: self.base_image.ssh.clone(),
