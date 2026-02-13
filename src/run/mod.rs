@@ -69,6 +69,15 @@ impl Job {
 
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
+        println!(
+            "{}",
+            format!(
+                "Connect to this VM while running: virtci shell {}",
+                self.backend.run_name()
+            )
+            .magenta()
+        );
+
         for i in 0..self.steps.len() {
             let step_name = self.steps[i]
                 .name

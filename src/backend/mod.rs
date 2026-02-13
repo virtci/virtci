@@ -21,6 +21,8 @@ pub trait VmBackend {
     fn offline_enforce_cmd(&self) -> Option<&'static str> {
         None
     }
+
+    fn run_name(&self) -> String;
 }
 
 impl FromStr for Arch {

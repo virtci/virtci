@@ -122,7 +122,8 @@ async fn copy_host_to_vm_tar(
         .await
         .map_err(|e| format!("Failed to open channel: {}", e))?;
 
-    let extract_cmd = format!("tar xzf - -C \"{}\"", remote_path);
+    let remote_path_clean = remote_path.trim_end_matches('\\');
+    let extract_cmd = format!("tar xzf - -C \"{}\"", remote_path_clean);
     eprintln!("[TAR] Remote extract command: {}", extract_cmd);
 
     channel

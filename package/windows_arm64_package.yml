@@ -1,4 +1,4 @@
-macos-arm64:
+win-11-arm64:
     image: win-11-arm64
     cpus: 4
     memory: 12G
@@ -11,6 +11,7 @@ macos-arm64:
             - .git
             - .github
             - docs
+            - target
 
     - name: Install Chocolatey
       run: Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))

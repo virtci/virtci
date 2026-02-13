@@ -295,7 +295,7 @@ impl VmBackend for QemuBackend {
         self.runner = Some(runner);
 
         let ssh_target = self.ssh_target();
-        let meta = crate::file_lock::LockMetadata::with_run_info(self.name.clone(), ssh_target);
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target);
         if let Ok(json) = serde_json::to_string_pretty(&meta) {
             let _ = self
                 .runner
@@ -433,6 +433,14 @@ impl VmBackend for QemuBackend {
 
     fn os(&self) -> GuestOs {
         return self.base_image.os;
+    }
+
+    fn run_name(&self) -> String {
+        format!(
+            "vci-{}-{}",
+            self.name,
+            self.runner.as_ref().unwrap().host_port.1
+        )
     }
 }
 

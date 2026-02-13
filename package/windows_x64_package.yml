@@ -11,6 +11,7 @@ win-11-x64:
             - .git
             - .github
             - docs
+            - target
 
     - name: Install Rust
       run: curl -o rustup-init.exe https://win.rustup.rs/x86_64; .\rustup-init.exe -y
