@@ -158,10 +158,13 @@ async fn copy_host_to_vm_tar(
 
     eprintln!("[TAR] Sending {} bytes to remote...", tar_data.len());
 
-    writer
-        .data(&tar_data[..])
-        .await
-        .map_err(|e| format!("Failed to send tar data: {}", e))?;
+    const CHUNK_SIZE: usize = 32 * 1024; // 32KB chunks
+    for chunk in tar_data.chunks(CHUNK_SIZE) {
+        writer
+            .data(chunk)
+            .await
+            .map_err(|e| format!("Failed to send tar data: {}", e))?;
+    }
 
     writer
         .eof()
