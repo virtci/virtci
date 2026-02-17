@@ -177,10 +177,13 @@ async fn copy_host_to_vm_tar(
         .await
         .map_err(|e| format!("Channel message drain failed: {}", e))?;
 
+    writer.close().await.ok();
     handle
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
+
+    tokio::task::yield_now().await;
 
     if !got_exit_status {
         return Err("SSH channel closed without providing an exit status".to_string());
