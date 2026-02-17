@@ -69,22 +69,31 @@ impl Job {
 
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-        // Windows time zone stuff for UTC
+        // Normalize Windows clock to UTC. QEMU's RTC presents UTC, but Windows
+        // interprets the RTC as local time by default, corrupting its internal clock.
+        // We must set the timezone AND correct the system clock from the host's UTC.
         if self.backend.os() == GuestOs::Windows {
-            let tz_cmd = "Set-TimeZone -Id 'UTC'";
+            let unix_ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let tz_cmd = format!(
+                "Set-TimeZone -Id 'UTC'; Set-Date ([DateTimeOffset]::FromUnixTimeSeconds({})).UtcDateTime",
+                unix_ts
+            );
             let empty_env = std::collections::HashMap::new();
             let tz_future =
-                command::run_command(&ssh_target, tz_cmd, None, &empty_env, self.backend.os());
+                command::run_command(&ssh_target, &tz_cmd, None, &empty_env, self.backend.os());
             match tokio::time::timeout(tokio::time::Duration::from_secs(30), tz_future).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => {
                     eprintln!(
                         "{}",
-                        format!("Warning: failed to set timezone to UTC: {}", e).yellow()
+                        format!("Warning: failed to set timezone/clock to UTC: {}", e).yellow()
                     );
                 }
                 Err(_) => {
-                    eprintln!("{}", "Warning: timezone set timed out after 30s".yellow());
+                    eprintln!("{}", "Warning: timezone/clock set timed out after 30s".yellow());
                 }
             }
         }
