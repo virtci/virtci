@@ -124,6 +124,7 @@ impl QemuBackend {
         }
 
         cmd.arg("-display").arg("none");
+        cmd.arg("-rtc").arg("base=utc");
 
         // hardware accel if possible
         #[cfg(target_os = "linux")]
