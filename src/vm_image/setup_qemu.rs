@@ -30,7 +30,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
         prompt_advanced_options(guest_os, arch)?;
 
     let config = ImageDescription {
-        name: name,
+        name,
         os: guest_os,
         arch,
         ssh,

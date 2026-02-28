@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "xaver.clang-format",
+    "editorconfig.editorconfig",
+    "esbenp.prettier-vscode"
+  ]
+}

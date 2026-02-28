@@ -8,8 +8,8 @@
 #include <sys/file.h>
 
 bool try_lock_file_exclusive_native(int fd) {
-  int result = flock(fd, LOCK_EX | LOCK_NB);
-  return result == 0;
+    int result = flock(fd, LOCK_EX | LOCK_NB);
+    return result == 0;
 }
 
 void unlock_file_native(int fd) { (void)flock(fd, LOCK_UN); }
@@ -19,16 +19,15 @@ void unlock_file_native(int fd) { (void)flock(fd, LOCK_UN); }
 #include <windows.h>
 
 bool try_lock_file_exclusive_native(intptr_t handle) {
-  OVERLAPPED overlapped = {0};
-  BOOL result = LockFileEx((HANDLE)handle,
-                           LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
-                           0, 1, 0, &overlapped);
-  return result != 0;
+    OVERLAPPED overlapped = {0};
+    BOOL result = LockFileEx((HANDLE)handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0,
+                             1, 0, &overlapped);
+    return result != 0;
 }
 
 void unlock_file_native(intptr_t handle) {
-  OVERLAPPED overlapped = {0};
-  UnlockFileEx((HANDLE)handle, 0, 1, 0, &overlapped);
+    OVERLAPPED overlapped = {0};
+    UnlockFileEx((HANDLE)handle, 0, 1, 0, &overlapped);
 }
 
 #else

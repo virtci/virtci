@@ -9,9 +9,9 @@ on:
 permissions:
   contents: write
 
-jobs:          
+jobs:
   build-linux-x64-bootstrap:
-    runs-on: 
+    runs-on:
       - self-hosted
       - Linux
       - X64
@@ -25,10 +25,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: virtci-linux-x64
-          path: virtci-linux-x64.tar.gz  
+          path: virtci-linux-x64.tar.gz
 
   build-linux-arm64-bootstrap:
-    runs-on: 
+    runs-on:
       - self-hosted
       - macOS
       - ARM64
@@ -45,7 +45,7 @@ jobs:
           path: virtci-linux-arm64.tar.gz
 
   build-macos-bootstrap:
-    runs-on: 
+    runs-on:
       - self-hosted
       - macOS
       - ARM64
@@ -63,7 +63,7 @@ jobs:
 
 
   build-windows-x64-bootstrap:
-    runs-on: 
+    runs-on:
       - self-hosted
       - Linux
       - X64
@@ -77,10 +77,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: virtci-windows-x64
-          path: virtci-windows-x64.tar.gz  
+          path: virtci-windows-x64.tar.gz
 
   build-windows-arm64-bootstrap:
-    runs-on: 
+    runs-on:
       - self-hosted
       - macOS
       - ARM64
@@ -168,6 +168,6 @@ jobs:
   #       uses: actions/upload-artifact@v4
   #       with:
   #         name: virtci-linux-x86_64
-  #         path: virtci-linux-x86_64.tar.gz  
+  #         path: virtci-linux-x86_64.tar.gz
 
 

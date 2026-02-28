@@ -46,10 +46,10 @@ impl QemuBackend {
         memory_mb: u64,
     ) -> Result<Self, ()> {
         let mut backend = QemuBackend {
-            name: name,
-            base_image: base_image,
-            cpus: cpus,
-            memory_mb: memory_mb,
+            name,
+            base_image,
+            cpus,
+            memory_mb,
             inside_vm_port: 22,
             runner: None,
         };
@@ -284,14 +284,14 @@ impl VmBackend for QemuBackend {
 
         let runner = QemuRunner {
             host_port: host_port_flock,
-            temp_image: temp_image,
+            temp_image,
             temp_uefi_vars: temp_vars,
-            temp_additional_drives: temp_additional_drives,
-            tpm_state_dir: tpm_state_dir,
-            tpm_socket_path: tpm_socket_path,
+            temp_additional_drives,
+            tpm_state_dir,
+            tpm_socket_path,
             #[cfg(target_os = "windows")]
-            tpm_port: tpm_port,
-            tpm_flock: tpm_flock,
+            tpm_port,
+            tpm_flock,
             qemu_process: None,
             tpm_process: None,
         };

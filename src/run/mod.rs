@@ -96,7 +96,10 @@ impl Job {
                     );
                 }
                 Err(_) => {
-                    eprintln!("{}", "Warning: timezone/clock set timed out after 30s".yellow());
+                    eprintln!(
+                        "{}",
+                        "Warning: timezone/clock set timed out after 30s".yellow()
+                    );
                 }
             }
         }

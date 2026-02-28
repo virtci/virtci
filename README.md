@@ -107,7 +107,7 @@ ubuntu-x64:
 
         # Networking is enabled currently, so this will install CMake into the VM
         - name: Install CMake
-          run: sudo apt install cmake 
+          run: sudo apt install cmake
 
         # Any steps after this one will be run without networking
         # Networking can be reenabled by doing `offline: false`.
@@ -163,7 +163,7 @@ test-ubuntu-x64:
         APP_P12_FILE_BASE64: ${{ secrets.APP_P12_FILE_BASE64 }}
         APP_P12_PASSWORD: ${{ secrets.APP_P12_PASSWORD }}
         WORK_DIR: ${{ github.workspace }}/runs/${{ github.run_id }}
-        
+
     steps:
         - name: Setup workspace
           run: |

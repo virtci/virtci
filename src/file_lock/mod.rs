@@ -113,7 +113,7 @@ impl FileLock {
             file.flush().map_err(|_| FileLockError::Other)?;
 
             return Ok(FileLock {
-                file: file,
+                file,
                 path: path.as_ref().to_path_buf(),
             });
         } else {
