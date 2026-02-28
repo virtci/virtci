@@ -19,7 +19,7 @@ use std::{
 use std::os::unix::fs::PermissionsExt;
 
 static LOCK_FILE_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
-    return std::env::temp_dir().join("vci-transfer.lock");
+    std::env::temp_dir().join("vci-transfer.lock")
 });
 
 extern "C" {
@@ -30,7 +30,7 @@ extern "C" {
 
 fn get_process_start_time(pid: u32) -> Option<u64> {
     let mut start_time: u64 = 0;
-    let exists = unsafe { get_process_start_time_native(pid, &mut start_time) };
+    let exists = unsafe { get_process_start_time_native(pid, &raw mut start_time) };
     if exists {
         Some(start_time)
     } else {
@@ -73,11 +73,11 @@ impl std::fmt::Display for LockMetadata {
         let proc_start_unix = unsafe { start_time_to_unix_secs(self.process_start_time) };
         let proc_start_str = format_local_time(proc_start_unix);
 
-        return write!(
+        write!(
             f,
             "PID: {}, LockedAt: {}, ProcStart: {}",
             self.pid, locked_at_str, proc_start_str
-        );
+        )
     }
 }
 
@@ -138,7 +138,7 @@ impl TransferLock {
                 .map_err(|_| TransferLockError::Other)?;
             file.flush().map_err(|_| TransferLockError::Other)?;
 
-            return Ok(TransferLock { file });
+            Ok(TransferLock { file })
         } else {
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
@@ -147,7 +147,7 @@ impl TransferLock {
                     return Err(TransferLockError::OtherProcessBlock(blocking_metadata));
                 }
             }
-            return Err(TransferLockError::Other);
+            Err(TransferLockError::Other)
         }
     }
 

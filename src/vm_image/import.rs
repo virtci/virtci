@@ -19,16 +19,16 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
 
     let entries = archive
         .entries()
-        .map_err(|e| format!("Failed to read archive: {}", e))?;
+        .map_err(|e| format!("Failed to read archive: {e}"))?;
 
     let mut vci_json: Option<String> = None;
     let mut vci_name: Option<String> = None;
 
     for entry in entries {
-        let mut entry = entry.map_err(|e| format!("Failed to read archive entry: {}", e))?;
+        let mut entry = entry.map_err(|e| format!("Failed to read archive entry: {e}"))?;
         let path = entry
             .path()
-            .map_err(|e| format!("Failed to read entry path: {}", e))?
+            .map_err(|e| format!("Failed to read entry path: {e}"))?
             .to_path_buf();
 
         let path_str = path.to_string_lossy();
@@ -43,7 +43,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
             let mut contents = String::new();
             entry
                 .read_to_string(&mut contents)
-                .map_err(|e| format!("Failed to read .vci from archive: {}", e))?;
+                .map_err(|e| format!("Failed to read .vci from archive: {e}"))?;
 
             vci_name = Some(name);
             vci_json = Some(contents);
@@ -55,7 +55,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
     let json = vci_json.unwrap();
 
     let mut desc: ImageDescription = serde_json::from_str(&json)
-        .map_err(|e| format!("Failed to parse .vci from archive: {}", e))?;
+        .map_err(|e| format!("Failed to parse .vci from archive: {e}"))?;
     desc.name = name.clone();
 
     let dest_vci = VCI_HOME_PATH.join(format!("{}.vci", &name));
@@ -76,16 +76,16 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
     let mut archive = tar::Archive::new(file);
     let entries = archive
         .entries()
-        .map_err(|e| format!("Failed to read archive: {}", e))?;
+        .map_err(|e| format!("Failed to read archive: {e}"))?;
 
-    let prefix = format!("{}/", name);
+    let prefix = format!("{name}/");
     let mut extracted_files: Vec<String> = Vec::new();
 
     for entry in entries {
-        let mut entry = entry.map_err(|e| format!("Failed to read archive entry: {}", e))?;
+        let mut entry = entry.map_err(|e| format!("Failed to read archive entry: {e}"))?;
         let path = entry
             .path()
-            .map_err(|e| format!("Failed to read entry path: {}", e))?
+            .map_err(|e| format!("Failed to read entry path: {e}"))?
             .to_path_buf();
 
         let path_str = path.to_string_lossy().to_string();
@@ -100,7 +100,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
         }
 
         let dest = managed_dir.join(filename);
-        println!("  Extracting: {}", filename);
+        println!("  Extracting: {filename}");
 
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
@@ -110,7 +110,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
         let mut out_file = std::fs::File::create(&dest)
             .map_err(|e| format!("Failed to create {}: {}", dest.display(), e))?;
         std::io::copy(&mut entry, &mut out_file)
-            .map_err(|e| format!("Failed to extract {}: {}", filename, e))?;
+            .map_err(|e| format!("Failed to extract {filename}: {e}"))?;
 
         extracted_files.push(filename.to_string());
     }
@@ -135,7 +135,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
             .arg(&tart.vm_name)
             .arg(&tvm_path)
             .output()
-            .map_err(|e| format!("Failed to run tart import: {}", e))?;
+            .map_err(|e| format!("Failed to run tart import: {e}"))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -147,17 +147,17 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
 
     desc.managed = Some(true);
     let vci_out = serde_json::to_string_pretty(&desc)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
     std::fs::create_dir_all(&*VCI_HOME_PATH)
         .map_err(|e| format!("Failed to create {}: {}", VCI_HOME_PATH.display(), e))?;
     std::fs::write(&dest_vci, vci_out)
         .map_err(|e| format!("Failed to write {}: {}", dest_vci.display(), e))?;
 
-    println!("Import complete: {}", name);
+    println!("Import complete: {name}");
     println!("  Config: {}", dest_vci.display());
     println!("  Files:  {}", managed_dir.display());
-    return Ok(());
+    Ok(())
 }
 
 fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) -> Result<(), String> {
@@ -181,7 +181,7 @@ fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) -> 
         }
     }
 
-    return Ok(());
+    Ok(())
 }
 
 fn rewrite_drive_file_to_managed(drive_str: &str, managed_dir: &Path) -> String {
@@ -194,5 +194,5 @@ fn rewrite_drive_file_to_managed(drive_str: &str, managed_dir: &Path) -> String 
             parts.push(part.to_string());
         }
     }
-    return parts.join(",");
+    parts.join(",")
 }

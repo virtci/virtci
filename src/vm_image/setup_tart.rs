@@ -43,7 +43,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
         println!("Setup cancelled.");
     }
 
-    return Ok(());
+    Ok(())
 }
 
 fn verify_tart_installed() -> Result<(), String> {
@@ -68,10 +68,10 @@ fn validate_image_name(name: &str) -> Result<(), String> {
     }
 
     if let Some(c) = name.chars().find(|c| INVALID_NAME_CHARS.contains(c)) {
-        return Err(format!("Name contains invalid character: '{}'", c));
+        return Err(format!("Name contains invalid character: '{c}'"));
     }
 
-    let vci_path = VCI_HOME_PATH.join(format!("{}.vci", name));
+    let vci_path = VCI_HOME_PATH.join(format!("{name}.vci"));
     if vci_path.exists() {
         return Err(format!(
             "VCI image '{}' already exists at {}",
@@ -80,7 +80,7 @@ fn validate_image_name(name: &str) -> Result<(), String> {
         ));
     }
 
-    return Ok(());
+    Ok(())
 }
 
 /// Step 1
@@ -97,7 +97,7 @@ fn prompt_image_name() -> Result<String, String> {
                 return Ok(name);
             }
             Err(e) => {
-                println!("  Error: {}\n", e);
+                println!("  Error: {e}\n");
                 continue;
             }
         }
@@ -113,7 +113,7 @@ fn prompt_tart_vm_name() -> Result<String, String> {
     if !available_vms.is_empty() {
         println!("  Available VMs:");
         for vm in &available_vms {
-            println!("    - {}", vm);
+            println!("    - {vm}");
         }
     }
 
@@ -127,8 +127,7 @@ fn prompt_tart_vm_name() -> Result<String, String> {
 
         if !available_vms.is_empty() && !available_vms.contains(&vm_name) {
             println!(
-                "  Warning: '{}' was not found in `tart list`. Proceeding anyway.",
-                vm_name
+                "  Warning: '{vm_name}' was not found in `tart list`. Proceeding anyway."
             );
         }
 
@@ -224,11 +223,11 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
         };
 
         println!();
-        return Ok(SshConfig {
+        Ok(SshConfig {
             user,
             pass: Some(pass),
             key: None,
-        });
+        })
     } else {
         let key = loop {
             let input = read_line("Private key path: ")?;
@@ -253,22 +252,22 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
                 .to_string_lossy()
                 .to_string();
 
-            println!("  Using: {}\n", absolute);
+            println!("  Using: {absolute}\n");
             break absolute;
         };
 
-        return Ok(SshConfig {
+        Ok(SshConfig {
             user,
             pass: None,
             key: Some(key),
-        });
+        })
     }
 }
 
 fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
     let default_str = if default { "Y/n" } else { "y/N" };
     loop {
-        let input = read_line(&format!("{} [{}]: ", prompt, default_str))?;
+        let input = read_line(&format!("{prompt} [{default_str}]: "))?;
         match input.to_lowercase().as_str() {
             "" => return Ok(default),
             "y" | "yes" => return Ok(true),
@@ -301,7 +300,7 @@ fn print_summary(config: &ImageDescription) {
     if config.ssh.pass.is_some() {
         println!("    Auth: password");
     } else if let Some(ref key) = config.ssh.key {
-        println!("    Auth: key ({})", key);
+        println!("    Auth: key ({key})");
     }
     println!();
 }
@@ -309,15 +308,15 @@ fn print_summary(config: &ImageDescription) {
 fn save_config(config: &ImageDescription) -> Result<(), String> {
     if !VCI_HOME_PATH.exists() {
         std::fs::create_dir_all(&*VCI_HOME_PATH)
-            .map_err(|e| format!("Failed to create VCI home directory: {}", e))?;
+            .map_err(|e| format!("Failed to create VCI home directory: {e}"))?;
     }
 
     let file_path = VCI_HOME_PATH.join(format!("{}.vci", config.name));
 
     let json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
-    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {}", e))?;
+    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {e}"))?;
 
-    return Ok(());
+    Ok(())
 }

@@ -61,11 +61,11 @@ impl std::fmt::Display for LockMetadata {
         let proc_start_unix = unsafe { start_time_to_unix_secs(self.process_start_time) };
         let proc_start_str = format_local_time(proc_start_unix);
 
-        return write!(
+        write!(
             f,
             "PID: {}, LockedAt: {}, ProcStart: {}",
             self.pid, locked_at_str, proc_start_str
-        );
+        )
     }
 }
 
@@ -112,10 +112,10 @@ impl FileLock {
                 .map_err(|_| FileLockError::Other)?;
             file.flush().map_err(|_| FileLockError::Other)?;
 
-            return Ok(FileLock {
+            Ok(FileLock {
                 file,
                 path: path.as_ref().to_path_buf(),
-            });
+            })
         } else {
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
@@ -124,12 +124,12 @@ impl FileLock {
                     return Err(FileLockError::OtherProcessBlock(blocking_metadata));
                 }
             }
-            return Err(FileLockError::Other);
+            Err(FileLockError::Other)
         }
     }
 
     pub fn get_path(&self) -> &PathBuf {
-        return &self.path;
+        &self.path
     }
 
     pub fn write_content(&mut self, content: &[u8]) -> Result<(), ()> {
@@ -192,7 +192,7 @@ impl Drop for FileLock {
 
 fn get_process_start_time(pid: u32) -> Option<u64> {
     let mut start_time: u64 = 0;
-    let exists = unsafe { get_process_start_time_native(pid, &mut start_time) };
+    let exists = unsafe { get_process_start_time_native(pid, &raw mut start_time) };
     if exists {
         Some(start_time)
     } else {

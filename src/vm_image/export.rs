@@ -33,7 +33,7 @@ impl<R: Read> Read for ProgressReader<R> {
 
         let percent = if self.total > 0 {
             // scale up by 10
-            ((self.read_so_far as f32 / self.total as f32) * 100.0) as f32
+            (self.read_so_far as f32 / self.total as f32) * 100.0
         } else {
             100.0
         };
@@ -54,7 +54,7 @@ impl<R: Read> Read for ProgressReader<R> {
             }
         }
 
-        return Ok(n);
+        Ok(n)
     }
 }
 
@@ -63,15 +63,15 @@ fn format_size(bytes: u64) -> String {
     const MB: u64 = 1024 * 1024;
 
     if bytes >= GB {
-        return format!("{:.1} GB", bytes as f64 / GB as f64);
+        format!("{:.1} GB", bytes as f64 / GB as f64)
     } else {
-        return format!("{:.1} MB", bytes as f64 / MB as f64);
+        format!("{:.1} MB", bytes as f64 / MB as f64)
     }
 }
 
 pub fn run_export(name: &str, output: Option<PathBuf>) -> Result<(), String> {
     let desc = load_image(name)?;
-    let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{}.tar", name)));
+    let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.tar")));
 
     println!("Exporting '{}' to {}", name, output_path.display());
 
@@ -92,26 +92,26 @@ pub fn run_export(name: &str, output: Option<PathBuf>) -> Result<(), String> {
     }
 
     let vci_json = serde_json::to_string_pretty(&exported_desc)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize config: {e}"))?;
     let vci_bytes = vci_json.as_bytes();
     let mut header = tar::Header::new_gnu();
     header.set_size(vci_bytes.len() as u64);
     header.set_mode(0o644);
     header.set_cksum();
     archive
-        .append_data(&mut header, format!("{}.vci", name), vci_bytes)
-        .map_err(|e| format!("Failed to write .vci to archive: {}", e))?;
+        .append_data(&mut header, format!("{name}.vci"), vci_bytes)
+        .map_err(|e| format!("Failed to write .vci to archive: {e}"))?;
 
     archive
         .finish()
-        .map_err(|e| format!("Failed to finalize archive: {}", e))?;
+        .map_err(|e| format!("Failed to finalize archive: {e}"))?;
 
     println!("Export complete: {}", output_path.display());
-    return Ok(());
+    Ok(())
 }
 
 fn load_image(name: &str) -> Result<ImageDescription, String> {
-    let vci_path = VCI_HOME_PATH.join(format!("{}.vci", name));
+    let vci_path = VCI_HOME_PATH.join(format!("{name}.vci"));
     let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
         format!(
             "Failed to load image description '{}' (looked at {})",
@@ -120,9 +120,9 @@ fn load_image(name: &str) -> Result<ImageDescription, String> {
         )
     })?;
     let mut desc: ImageDescription = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse image description '{}': {}", name, e))?;
+        .map_err(|e| format!("Failed to parse image description '{name}': {e}"))?;
     desc.name = name.to_string();
-    return Ok(desc);
+    Ok(desc)
 }
 
 fn append_file<W: std::io::Write>(
@@ -149,7 +149,7 @@ fn append_file<W: std::io::Write>(
         .append_data(&mut header, archive_name, &mut reader)
         .map_err(|e| format!("Failed to add {} to archive: {}", src_path.display(), e))?;
 
-    return Ok(());
+    Ok(())
 }
 
 fn filename_of(path: &str) -> String {
@@ -168,19 +168,19 @@ fn parse_drive_file_path(drive_str: &str) -> Option<String> {
             }
         }
     }
-    return None;
+    None
 }
 
 fn rewrite_drive_file_path(drive_str: &str, new_filename: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for part in drive_str.split(',') {
         if part.starts_with("file=") {
-            parts.push(format!("file={}", new_filename));
+            parts.push(format!("file={new_filename}"));
         } else {
             parts.push(part.to_string());
         }
     }
-    return parts.join(",");
+    parts.join(",")
 }
 
 fn export_qemu<W: std::io::Write>(
@@ -191,7 +191,7 @@ fn export_qemu<W: std::io::Write>(
 ) -> Result<(), String> {
     let image_path = Path::new(&qemu.image);
     let image_filename = filename_of(&qemu.image);
-    append_file(archive, image_path, &format!("{}/{}", name, image_filename))?;
+    append_file(archive, image_path, &format!("{name}/{image_filename}"))?;
 
     let mut exported_uefi = qemu.uefi.clone();
     if let Some(ref uefi) = qemu.uefi {
@@ -199,14 +199,14 @@ fn export_qemu<W: std::io::Write>(
         append_file(
             archive,
             Path::new(&uefi.code),
-            &format!("{}/{}", name, code_filename),
+            &format!("{name}/{code_filename}"),
         )?;
 
         let vars_filename = filename_of(&uefi.vars);
         append_file(
             archive,
             Path::new(&uefi.vars),
-            &format!("{}/{}", name, vars_filename),
+            &format!("{name}/{vars_filename}"),
         )?;
 
         exported_uefi = Some(crate::vm_image::UefiSplit {
@@ -224,7 +224,7 @@ fn export_qemu<W: std::io::Write>(
                 append_file(
                     archive,
                     Path::new(&file_path),
-                    &format!("{}/{}", name, file_filename),
+                    &format!("{name}/{file_filename}"),
                 )?;
                 rewritten.push(rewrite_drive_file_path(drive_str, &file_filename));
             } else {
@@ -244,7 +244,7 @@ fn export_qemu<W: std::io::Write>(
         nvme: qemu.nvme,
     });
 
-    return Ok(());
+    Ok(())
 }
 
 fn export_tart<W: std::io::Write>(
@@ -268,7 +268,7 @@ fn export_tart<W: std::io::Write>(
         .arg(&tart.vm_name)
         .arg(&tvm_temp_path)
         .output()
-        .map_err(|e| format!("Failed to run tart export: {}", e))?;
+        .map_err(|e| format!("Failed to run tart export: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -280,7 +280,7 @@ fn export_tart<W: std::io::Write>(
     append_file(
         archive,
         &tvm_temp_path,
-        &format!("{}/{}", name, tvm_filename),
+        &format!("{name}/{tvm_filename}"),
     )?;
 
     let _ = std::fs::remove_file(&tvm_temp_path);
@@ -289,5 +289,5 @@ fn export_tart<W: std::io::Write>(
         vm_name: tart.vm_name.clone(),
     });
 
-    return Ok(());
+    Ok(())
 }

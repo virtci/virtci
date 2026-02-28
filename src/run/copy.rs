@@ -28,7 +28,7 @@ pub async fn copy_files_tar(
             Ok(lock) => break lock,
             Err(e) => {
                 if let crate::transfer_lock::TransferLockError::OtherProcessBlock(p) = e {
-                    eprintln!("Another process is copying files with tar.\n\t{}", p);
+                    eprintln!("Another process is copying files with tar.\n\t{p}");
                 }
 
                 if let Some(timeout) = timeout {
@@ -66,7 +66,7 @@ async fn copy_host_to_vm_tar(
     use std::process::{Command, Stdio};
 
     let local_metadata = std::fs::metadata(local_path)
-        .map_err(|e| format!("Failed to read local path {}: {}", local_path, e))?;
+        .map_err(|e| format!("Failed to read local path {local_path}: {e}"))?;
 
     let mut tar_args = vec!["czf".to_string(), "-".to_string()];
 
@@ -85,14 +85,14 @@ async fn copy_host_to_vm_tar(
         let filename = path
             .file_name()
             .and_then(|f| f.to_str())
-            .ok_or_else(|| format!("Invalid filename in path: {}", local_path))?;
+            .ok_or_else(|| format!("Invalid filename in path: {local_path}"))?;
 
         tar_args.push("-C".to_string());
         tar_args.push(parent.to_string());
         tar_args.push(filename.to_string());
     }
 
-    eprintln!("[TAR] Creating archive from: {}", local_path);
+    eprintln!("[TAR] Creating archive from: {local_path}");
     eprintln!("[TAR] Command: tar {}", tar_args.join(" "));
 
     let tar_output = Command::new("tar")
@@ -100,12 +100,12 @@ async fn copy_host_to_vm_tar(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| format!("Failed to create tar archive: {}", e))?;
+        .map_err(|e| format!("Failed to create tar archive: {e}"))?;
 
     if !tar_output.status.success() {
         let stderr = String::from_utf8_lossy(&tar_output.stderr);
-        eprintln!("[TAR] Creation failed: {}", stderr);
-        return Err(format!("tar command failed: {}", stderr));
+        eprintln!("[TAR] Creation failed: {stderr}");
+        return Err(format!("tar command failed: {stderr}"));
     }
 
     let tar_data = tar_output.stdout;
@@ -123,16 +123,16 @@ async fn copy_host_to_vm_tar(
     let channel = handle
         .channel_open_session()
         .await
-        .map_err(|e| format!("Failed to open channel: {}", e))?;
+        .map_err(|e| format!("Failed to open channel: {e}"))?;
 
     let remote_path_clean = remote_path.trim_end_matches('\\');
-    let extract_cmd = format!("tar xzf - -C \"{}\"", remote_path_clean);
-    eprintln!("[TAR] Remote extract command: {}", extract_cmd);
+    let extract_cmd = format!("tar xzf - -C \"{remote_path_clean}\"");
+    eprintln!("[TAR] Remote extract command: {extract_cmd}");
 
     channel
         .exec(true, extract_cmd)
         .await
-        .map_err(|e| format!("Failed to exec tar extract: {}", e))?;
+        .map_err(|e| format!("Failed to exec tar extract: {e}"))?;
 
     let (mut reader, writer) = channel.split();
 
@@ -146,7 +146,7 @@ async fn copy_host_to_vm_tar(
             match msg {
                 ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
                 ChannelMsg::ExtendedData { data, ext } if ext == 1 => {
-                    stderr.extend_from_slice(&data)
+                    stderr.extend_from_slice(&data);
                 }
                 ChannelMsg::ExitStatus { exit_status } => {
                     exit_code = exit_status;
@@ -166,19 +166,19 @@ async fn copy_host_to_vm_tar(
         writer
             .data(chunk)
             .await
-            .map_err(|e| format!("Failed to send tar data: {}", e))?;
+            .map_err(|e| format!("Failed to send tar data: {e}"))?;
     }
 
     writer
         .eof()
         .await
-        .map_err(|e| format!("Failed to send EOF: {}", e))?;
+        .map_err(|e| format!("Failed to send EOF: {e}"))?;
 
     eprintln!("[TAR] All data sent, waiting for extraction to complete...");
 
     let (stdout, stderr, exit_code, got_exit_status) = drain_task
         .await
-        .map_err(|e| format!("Channel message drain failed: {}", e))?;
+        .map_err(|e| format!("Channel message drain failed: {e}"))?;
 
     writer.close().await.ok();
     handle
@@ -196,22 +196,21 @@ async fn copy_host_to_vm_tar(
     let stderr_str = String::from_utf8_lossy(&stderr);
 
     if !stdout_str.is_empty() {
-        eprintln!("[TAR] Remote stdout: {}", stdout_str);
+        eprintln!("[TAR] Remote stdout: {stdout_str}");
     }
     if !stderr_str.is_empty() {
-        eprintln!("[TAR] Remote stderr: {}", stderr_str);
+        eprintln!("[TAR] Remote stderr: {stderr_str}");
     }
 
     if exit_code != 0 {
-        eprintln!("[TAR] Extraction failed with exit code: {}", exit_code);
+        eprintln!("[TAR] Extraction failed with exit code: {exit_code}");
         return Err(format!(
-            "Tar extraction failed (exit code {}): {}",
-            exit_code, stderr_str
+            "Tar extraction failed (exit code {exit_code}): {stderr_str}"
         ));
     }
 
     eprintln!("[TAR] Transfer completed successfully");
-    return Ok(());
+    Ok(())
 }
 
 async fn copy_vm_to_host_tar(
@@ -229,9 +228,9 @@ async fn copy_vm_to_host_tar(
 
     // Check if remote_path is a file or directory
     let test_cmd = if is_windows {
-        format!("if (Test-Path -Path \"{}\" -PathType Container) {{ Write-Output \"DIR\" }} else {{ Write-Output \"FILE\" }}", remote_path)
+        format!("if (Test-Path -Path \"{remote_path}\" -PathType Container) {{ Write-Output \"DIR\" }} else {{ Write-Output \"FILE\" }}")
     } else {
-        format!("test -d \"{}\" && echo DIR || echo FILE", remote_path)
+        format!("test -d \"{remote_path}\" && echo DIR || echo FILE")
     };
     let test_result = crate::run::command::run_command(
         ssh,
@@ -245,14 +244,14 @@ async fn copy_vm_to_host_tar(
 
     let mut exclude_args = String::new();
     for pattern in ignore {
-        exclude_args.push_str(&format!(" --exclude=\"{}\"", pattern));
+        exclude_args.push_str(&format!(" --exclude=\"{pattern}\""));
     }
 
     let tar_cmd = if is_dir {
         // For directories: tar from within the directory
-        let base_cmd = format!("tar czf - -C \"{}\"{} .", remote_path, exclude_args);
+        let base_cmd = format!("tar czf - -C \"{remote_path}\"{exclude_args} .");
         if is_windows {
-            format!("cmd /c {}", base_cmd)
+            format!("cmd /c {base_cmd}")
         } else {
             base_cmd
         }
@@ -282,18 +281,17 @@ async fn copy_vm_to_host_tar(
         };
 
         let base_cmd = format!(
-            "tar czf - -C \"{}\"{} \"{}\"",
-            parent, exclude_args, filename
+            "tar czf - -C \"{parent}\"{exclude_args} \"{filename}\""
         );
         if is_windows {
-            format!("cmd /c {}", base_cmd)
+            format!("cmd /c {base_cmd}")
         } else {
             base_cmd
         }
     };
 
-    eprintln!("[TAR] Creating archive from remote: {}", remote_path);
-    eprintln!("[TAR] Remote command: {}", tar_cmd);
+    eprintln!("[TAR] Creating archive from remote: {remote_path}");
+    eprintln!("[TAR] Remote command: {tar_cmd}");
 
     let result = crate::run::command::run_command_binary(
         ssh,
@@ -326,11 +324,11 @@ async fn copy_vm_to_host_tar(
             let parent = local
                 .parent()
                 .and_then(|p| p.to_str())
-                .ok_or_else(|| format!("Invalid local path: {}", local_path))?;
+                .ok_or_else(|| format!("Invalid local path: {local_path}"))?;
             let parent = if parent.is_empty() { "." } else { parent };
 
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create local directory {}: {}", parent, e))?;
+                .map_err(|e| format!("Failed to create local directory {parent}: {e}"))?;
 
             let remote_filename = std::path::Path::new(remote_path)
                 .file_name()
@@ -338,31 +336,30 @@ async fn copy_vm_to_host_tar(
                 .unwrap_or("file");
             let local_filename = local.file_name().and_then(|f| f.to_str()).unwrap_or("file");
 
-            let rename = if remote_filename != local_filename {
+            let rename = if remote_filename == local_filename {
+                None
+            } else {
                 Some((
-                    format!("{}/{}", parent, remote_filename),
+                    format!("{parent}/{remote_filename}"),
                     local_path.to_string(),
                 ))
-            } else {
-                None
             };
 
             (parent.to_string(), rename)
         }
     };
 
-    eprintln!("[TAR] Extracting to: {}", extract_dir);
+    eprintln!("[TAR] Extracting to: {extract_dir}");
 
     std::fs::create_dir_all(&extract_dir).map_err(|e| {
         format!(
-            "Failed to create extraction directory {}: {}",
-            extract_dir, e
+            "Failed to create extraction directory {extract_dir}: {e}"
         )
     })?;
 
     // archive should starts with gzip magic bytes
     if result.stdout.len() < 2 || result.stdout[0] != 0x1f || result.stdout[1] != 0x8b {
-        let preview: Vec<u8> = result.stdout.iter().take(64).cloned().collect();
+        let preview: Vec<u8> = result.stdout.iter().take(64).copied().collect();
         let preview_str = String::from_utf8_lossy(&preview);
         return Err(format!(
             "Remote tar output is not a valid gzip archive. First bytes: {:02x?}, as text: '{}'",
@@ -372,12 +369,12 @@ async fn copy_vm_to_host_tar(
     }
 
     let mut tar_process = Command::new("tar")
-        .args(&["xzf", "-", "-C", &extract_dir])
+        .args(["xzf", "-", "-C", &extract_dir])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to spawn tar extract: {}", e))?;
+        .map_err(|e| format!("Failed to spawn tar extract: {e}"))?;
 
     const CHUNK_SIZE: usize = 32 * 1024; // 32KB good size same as copy host to vm
     let data = &result.stdout;
@@ -414,7 +411,7 @@ async fn copy_vm_to_host_tar(
 
     let output = tar_process
         .wait_with_output()
-        .map_err(|e| format!("Failed to wait for tar: {}", e))?;
+        .map_err(|e| format!("Failed to wait for tar: {e}"))?;
 
     if !output.status.success() {
         return Err(format!(
@@ -424,30 +421,30 @@ async fn copy_vm_to_host_tar(
     }
 
     if let Some((from, to)) = need_rename {
-        eprintln!("[TAR] Renaming {} to {}", from, to);
+        eprintln!("[TAR] Renaming {from} to {to}");
         std::fs::rename(&from, &to)
-            .map_err(|e| format!("Failed to rename {} to {}: {}", from, to, e))?;
+            .map_err(|e| format!("Failed to rename {from} to {to}: {e}"))?;
     }
 
     eprintln!("[TAR] VM-to-host transfer completed successfully");
-    return Ok(());
+    Ok(())
 }
 
 fn expand_remote_tilde(path: &str, username: &str, os: GuestOs) -> String {
     let home = match os {
-        GuestOs::Windows => format!("C:\\Users\\{}", username),
+        GuestOs::Windows => format!("C:\\Users\\{username}"),
         GuestOs::MacOS => {
             if username == "root" {
                 "/root".to_string()
             } else {
-                format!("/Users/{}", username)
+                format!("/Users/{username}")
             }
         }
         _ => {
             if username == "root" {
                 "/root".to_string()
             } else {
-                format!("/home/{}", username)
+                format!("/home/{username}")
             }
         }
     };
@@ -456,25 +453,21 @@ fn expand_remote_tilde(path: &str, username: &str, os: GuestOs) -> String {
         return home;
     } else if let Some(rest) = path.strip_prefix("~/") {
         let sep = if os == GuestOs::Windows { "\\" } else { "/" };
-        return format!("{}{}{}", home, sep, rest);
+        return format!("{home}{sep}{rest}");
     }
-    return path.to_string();
+    path.to_string()
 }
 
 fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a str, &'a str) {
     let to_starts = to.starts_with("vm:");
     let from_starts = from.starts_with("vm:");
-    if to_starts && from_starts {
-        panic!("Cannot use SFTP to copy files from the VM to itself!");
-    }
-    if !to_starts && !from_starts {
-        panic!("Cannot use SFTP to copy files from the host to itself!");
-    }
+    assert!(!(to_starts && from_starts), "Cannot use SFTP to copy files from the VM to itself!");
+    assert!(!(!to_starts && !from_starts), "Cannot use SFTP to copy files from the host to itself!");
 
     if to_starts {
-        return (CopyDirection::HostToVm, from, &to[3..]);
+        (CopyDirection::HostToVm, from, &to[3..])
     } else {
-        return (CopyDirection::VmToHost, to, &from[3..]);
+        (CopyDirection::VmToHost, to, &from[3..])
     }
 }
 
@@ -516,7 +509,7 @@ pub async fn convert_windows_line_endings(ssh: &SshTarget, to: &str) {
         "  Converting files to Windows encoding (UTF-8 without BOM + CRLF)...".dimmed()
     );
 
-    let target_dir = if to.starts_with("vm:") { &to[3..] } else { &to };
+    let target_dir = if to.starts_with("vm:") { &to[3..] } else { to };
 
     let convert_script = crlf_conversion_script();
 

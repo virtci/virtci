@@ -61,12 +61,12 @@ impl Job {
         let start_offline = matches!(self.steps[0].kind, StepKind::Offline(true));
         self.backend
             .start_vm(start_offline)
-            .map_err(|_| return format!("Failed to start VM: {}", &self.name))?;
+            .map_err(|()| format!("Failed to start VM: {}", &self.name))?;
 
         match wait_for_ssh(&ssh_target.ip, ssh_target.port, SSH_WAIT_TIMEOUT) {
-            Some(secs) => println!("{}", format!("SSH ready after {}s", secs).dimmed()),
+            Some(secs) => println!("{}", format!("SSH ready after {secs}s").dimmed()),
             None => {
-                return Err(format!("SSH not available after {}s", SSH_WAIT_TIMEOUT));
+                return Err(format!("SSH not available after {SSH_WAIT_TIMEOUT}s"));
             }
         }
 
@@ -81,8 +81,7 @@ impl Job {
                 .unwrap()
                 .as_secs();
             let tz_cmd = format!(
-                "Set-TimeZone -Id 'UTC'; Set-Date ([DateTimeOffset]::FromUnixTimeSeconds({})).UtcDateTime",
-                unix_ts
+                "Set-TimeZone -Id 'UTC'; Set-Date ([DateTimeOffset]::FromUnixTimeSeconds({unix_ts})).UtcDateTime"
             );
             let empty_env = std::collections::HashMap::new();
             let tz_future =
@@ -92,7 +91,7 @@ impl Job {
                 Ok(Err(e)) => {
                     eprintln!(
                         "{}",
-                        format!("Warning: failed to set timezone/clock to UTC: {}", e).yellow()
+                        format!("Warning: failed to set timezone/clock to UTC: {e}").yellow()
                     );
                 }
                 Err(_) => {
@@ -136,18 +135,18 @@ impl Job {
             }
 
             match result {
-                Ok(_) => (),
+                Ok(()) => (),
                 Err(ref e) => {
                     if continue_on_error {
-                        println!("{}", format!("  Failed (continuing): {}", e).yellow());
+                        println!("{}", format!("  Failed (continuing): {e}").yellow());
                     } else {
-                        return Err(format!("Step '{}' failed: {}", step_name, e));
+                        return Err(format!("Step '{step_name}' failed: {e}"));
                     }
                 }
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 
     async fn run_step(&mut self, step_idx: usize) -> Result<(), String> {
@@ -169,7 +168,7 @@ impl Job {
                     if env.contains_key(key) {
                         eprintln!(
                             "{}",
-                            format!("Warning: Step env variable '{}' overrides host_env", key)
+                            format!("Warning: Step env variable '{key}' overrides host_env")
                                 .yellow()
                         );
                     }
@@ -179,7 +178,7 @@ impl Job {
                 let ssh = self.backend.ssh_target();
                 let command_future = command::run_command(
                     &ssh,
-                    &command,
+                    command,
                     step.workdir.as_deref(),
                     &env,
                     self.backend.os(),
@@ -226,7 +225,7 @@ impl Job {
             StepKind::Offline(offline) => {
                 println!(
                     "{}",
-                    format!("  Syncing filesystem before restart...",).dimmed()
+                    "  Syncing filesystem before restart...".to_string().dimmed()
                 );
 
                 // filesystem sync
@@ -250,10 +249,10 @@ impl Job {
                         Ok(Ok(_)) => {}
                         Ok(Err(e)) => println!(
                             "{}",
-                            format!("  Warning: sync command failed: {}", e).yellow()
+                            format!("  Warning: sync command failed: {e}").yellow()
                         ),
                         Err(_) => {
-                            println!("{}", "  Warning: sync command timed out after 30s".yellow())
+                            println!("{}", "  Warning: sync command timed out after 30s".yellow());
                         }
                     }
                 }
@@ -263,18 +262,18 @@ impl Job {
                 {
                     println!(
                         "{}",
-                        format!("  Restarting VM (offline={})...", offline).dimmed()
+                        format!("  Restarting VM (offline={offline})...").dimmed()
                     );
 
                     self.backend.stop_vm();
                     self.backend
                         .start_vm(*offline)
-                        .map_err(|_| "Failed to restart VM")?;
+                        .map_err(|()| "Failed to restart VM")?;
 
                     let ssh = self.backend.ssh_target();
                     match wait_for_ssh(&ssh.ip, ssh.port, SSH_WAIT_TIMEOUT) {
                         Some(secs) => {
-                            println!("{}", format!("  SSH ready after {}s", secs).dimmed())
+                            println!("{}", format!("  SSH ready after {secs}s").dimmed());
                         }
                         None => return Err("SSH not available after restart".to_string()),
                     }
@@ -298,7 +297,7 @@ impl Job {
                             {
                                 Ok(Ok(_)) => {}
                                 Ok(Err(e)) => {
-                                    return Err(format!("offline enforcement failed: {}", e))
+                                    return Err(format!("offline enforcement failed: {e}"))
                                 }
                                 Err(_) => {
                                     return Err(
@@ -312,7 +311,7 @@ impl Job {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -330,7 +329,7 @@ pub fn wait_for_ssh(ip: &str, port: u16, timeout_secs: u64) -> Option<u64> {
             return None;
         }
 
-        let addr = format!("{}:{}", ip, port);
+        let addr = format!("{ip}:{port}");
         match TcpStream::connect_timeout(&addr.parse().unwrap(), connect_timeout) {
             Ok(stream) => {
                 // QEMU can make the SSH "available" even while the VM is still booting.
@@ -382,7 +381,7 @@ pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, S
     let addr = format!("{}:{}", ssh.ip, ssh.port);
     let mut handle = client::connect(config, &addr, ClientHandler)
         .await
-        .map_err(|e| format!("SSH connection failed: {}", e))?;
+        .map_err(|e| format!("SSH connection failed: {e}"))?;
 
     let cred = &ssh.cred;
     let auth_result = {
@@ -390,18 +389,18 @@ pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, S
             handle
                 .authenticate_password(&cred.user, pass)
                 .await
-                .map_err(|e| format!("Password auth failed: {}", e))?
+                .map_err(|e| format!("Password auth failed: {e}"))?
         } else {
             let key_path = cred.key.as_ref().unwrap();
             let key_data = std::fs::read_to_string(key_path)
-                .map_err(|e| format!("Failed to read key file: {}", e))?;
+                .map_err(|e| format!("Failed to read key file: {e}"))?;
             let key_pair = russh::keys::decode_secret_key(&key_data, None)
-                .map_err(|e| format!("Failed to decode key: {}", e))?;
+                .map_err(|e| format!("Failed to decode key: {e}"))?;
             let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
             handle
                 .authenticate_publickey(&cred.user, key)
                 .await
-                .map_err(|e| format!("Key auth failed: {}", e))?
+                .map_err(|e| format!("Key auth failed: {e}"))?
         }
     };
 
@@ -409,5 +408,5 @@ pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, S
         return Err("Authentication rejected".to_string());
     }
 
-    return Ok(handle);
+    Ok(handle)
 }

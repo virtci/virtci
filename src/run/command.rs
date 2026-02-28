@@ -32,14 +32,14 @@ pub async fn run_command(
     let mut channel = handle
         .channel_open_session()
         .await
-        .map_err(|e| format!("Failed to open channel: {}", e))?;
+        .map_err(|e| format!("Failed to open channel: {e}"))?;
 
     let full_command = build_command(command, workdir, env, os);
 
     channel
         .exec(true, full_command)
         .await
-        .map_err(|e| format!("Failed to exec: {}", e))?;
+        .map_err(|e| format!("Failed to exec: {e}"))?;
 
     let mut stdout_str = String::new();
     let mut stderr_str = String::new();
@@ -50,13 +50,13 @@ pub async fn run_command(
         match channel.wait().await {
             Some(ChannelMsg::Data { data }) => {
                 let s = String::from_utf8_lossy(&data);
-                print!("{}", s);
+                print!("{s}");
                 std::io::Write::flush(&mut std::io::stdout()).ok();
                 stdout_str.push_str(&s);
             }
             Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
                 let s = String::from_utf8_lossy(&data);
-                eprint!("{}", s);
+                eprint!("{s}");
                 std::io::Write::flush(&mut std::io::stderr()).ok();
                 stderr_str.push_str(&s);
             }
@@ -82,11 +82,11 @@ pub async fn run_command(
         return Err("SSH channel closed without providing an exit status".to_string());
     }
 
-    return Ok(CommandResult {
+    Ok(CommandResult {
         exit_code,
         stdout: stdout_str,
         stderr: stderr_str,
-    });
+    })
 }
 
 fn build_command(
@@ -106,32 +106,31 @@ fn build_command(
         }
 
         if is_windows {
-            let escaped = value.replace("'", "''");
-            parts.push(format!("$env:{}='{}'", key, escaped));
+            let escaped = value.replace('\'', "''");
+            parts.push(format!("$env:{key}='{escaped}'"));
         } else {
-            let escaped = value.replace("'", "'\\''");
-            parts.push(format!("export {}='{}'", key, escaped));
+            let escaped = value.replace('\'', "'\\''");
+            parts.push(format!("export {key}='{escaped}'"));
         }
     }
 
     // do in the VM workdir
     if let Some(dir) = workdir {
-        if dir.starts_with("~/") {
-            let path_after_tilde = &dir[2..];
+        if let Some(path_after_tilde) = dir.strip_prefix("~/") {
             let escaped = path_after_tilde
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("$", "\\$");
-            parts.push(format!("cd \"$HOME/{}\"", escaped));
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('$', "\\$");
+            parts.push(format!("cd \"$HOME/{escaped}\""));
         } else if dir == "~" {
             parts.push("cd \"$HOME\"".to_string());
         } else {
-            parts.push(format!("cd '{}'", dir.replace("'", "'\\''")));
+            parts.push(format!("cd '{}'", dir.replace('\'', "'\\''")));
         }
     }
 
     parts.push(command.to_string());
-    return parts.join(separator);
+    parts.join(separator)
 }
 
 fn is_valid_env_key(key: &str) -> bool {
@@ -151,7 +150,7 @@ fn is_valid_env_key(key: &str) -> bool {
         }
     }
 
-    return true;
+    true
 }
 
 pub async fn run_command_binary(
@@ -166,14 +165,14 @@ pub async fn run_command_binary(
     let mut channel = handle
         .channel_open_session()
         .await
-        .map_err(|e| format!("Failed to open channel: {}", e))?;
+        .map_err(|e| format!("Failed to open channel: {e}"))?;
 
     let full_command = build_command(command, workdir, env, os);
 
     channel
         .exec(true, full_command)
         .await
-        .map_err(|e| format!("Failed to exec: {}", e))?;
+        .map_err(|e| format!("Failed to exec: {e}"))?;
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -184,7 +183,7 @@ pub async fn run_command_binary(
         match channel.wait().await {
             Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
             Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
-                stderr.extend_from_slice(&data)
+                stderr.extend_from_slice(&data);
             }
             Some(ChannelMsg::ExitStatus { exit_status }) => {
                 exit_code = exit_status;
@@ -208,9 +207,9 @@ pub async fn run_command_binary(
         return Err("SSH channel closed without providing an exit status".to_string());
     }
 
-    return Ok(BinaryCommandResult {
+    Ok(BinaryCommandResult {
         exit_code,
         stdout,
         stderr,
-    });
+    })
 }

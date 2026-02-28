@@ -61,7 +61,7 @@ pub enum StepKind {
 }
 
 pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yml::Error> {
-    return serde_yml::from_str(contents);
+    serde_yml::from_str(contents)
 }
 
 pub fn parse_timeout_seconds(s: &str) -> u64 {
@@ -81,9 +81,8 @@ pub fn parse_timeout_seconds(s: &str) -> u64 {
         (s, 1u64)
     };
 
-    return num
+    num
         .parse::<u64>()
         .ok()
-        .map(|n| n * unit)
-        .unwrap_or(MAX_TIMEOUT);
+        .map_or(MAX_TIMEOUT, |n| n * unit)
 }

@@ -47,7 +47,7 @@ impl Default for Arch {
             "x86_64" => Arch::X64,
             "aarch64" => Arch::ARM64,
             "riscv64" => Arch::RISCV64,
-            other => panic!("Unsupported host architecture: {}", other),
+            other => panic!("Unsupported host architecture: {other}"),
         }
     }
 }

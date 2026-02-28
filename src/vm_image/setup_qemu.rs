@@ -56,7 +56,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
         println!("Setup cancelled.");
     }
 
-    return Ok(());
+    Ok(())
 }
 
 /// Characters that are invalid in filenames across platforms
@@ -69,10 +69,10 @@ fn validate_image_name(name: &str) -> Result<(), String> {
     }
 
     if let Some(c) = name.chars().find(|c| INVALID_NAME_CHARS.contains(c)) {
-        return Err(format!("Name contains invalid character: '{}'", c));
+        return Err(format!("Name contains invalid character: '{c}'"));
     }
 
-    let vci_path = VCI_HOME_PATH.join(format!("{}.vci", name));
+    let vci_path = VCI_HOME_PATH.join(format!("{name}.vci"));
     if vci_path.exists() {
         return Err(format!(
             "VCI image '{}' already exists at {}",
@@ -81,7 +81,7 @@ fn validate_image_name(name: &str) -> Result<(), String> {
         ));
     }
 
-    return Ok(());
+    Ok(())
 }
 
 /// Step 1
@@ -98,7 +98,7 @@ fn prompt_image_name() -> Result<String, String> {
                 return Ok(name);
             }
             Err(e) => {
-                println!("  Error: {}\n", e);
+                println!("  Error: {e}\n");
                 continue;
             }
         }
@@ -200,7 +200,7 @@ fn prompt_image_path() -> Result<String, String> {
         match validate_qcow2(&expanded) {
             Ok(()) => {}
             Err(e) => {
-                println!("  Error: {}\n", e);
+                println!("  Error: {e}\n");
                 continue;
             }
         }
@@ -211,7 +211,7 @@ fn prompt_image_path() -> Result<String, String> {
             .to_string_lossy()
             .to_string();
 
-        println!("  Using: {}\n", absolute);
+        println!("  Using: {absolute}\n");
         return Ok(absolute);
     }
 }
@@ -220,11 +220,11 @@ fn prompt_image_path() -> Result<String, String> {
 fn validate_qcow2(path: &std::path::Path) -> Result<(), String> {
     use std::io::Read;
 
-    let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {}", e))?;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
 
     let mut header = [0u8; 8];
     file.read_exact(&mut header)
-        .map_err(|e| format!("Cannot read file header: {}", e))?;
+        .map_err(|e| format!("Cannot read file header: {e}"))?;
 
     // Bytes 0 - 3 "QFI\xfb"
     const QCOW2_MAGIC: [u8; 4] = [0x51, 0x46, 0x49, 0xFB];
@@ -236,12 +236,11 @@ fn validate_qcow2(path: &std::path::Path) -> Result<(), String> {
     let version = u32::from_be_bytes([header[4], header[5], header[6], header[7]]);
     if version != 2 && version != 3 {
         return Err(format!(
-            "Unsupported qcow2 version: {} (expected 2 or 3)",
-            version
+            "Unsupported qcow2 version: {version} (expected 2 or 3)"
         ));
     }
 
-    return Ok(());
+    Ok(())
 }
 
 /// Step 5
@@ -284,11 +283,11 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
         };
 
         println!();
-        return Ok(SshConfig {
+        Ok(SshConfig {
             user,
             pass: Some(pass),
             key: None,
-        });
+        })
     } else {
         let key = loop {
             let input = read_line("Private key path: ")?;
@@ -313,15 +312,15 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
                 .to_string_lossy()
                 .to_string();
 
-            println!("  Using: {}\n", absolute);
+            println!("  Using: {absolute}\n");
             break absolute;
         };
 
-        return Ok(SshConfig {
+        Ok(SshConfig {
             user,
             pass: None,
             key: Some(key),
-        });
+        })
     }
 }
 
@@ -390,7 +389,7 @@ fn prompt_uefi_file(label: &str, default: Option<&str>) -> Result<String, String
         let input = if let Some(def) = default {
             read_line_with_default(label, def)?
         } else {
-            read_line(&format!("{}: ", label))?
+            read_line(&format!("{label}: "))?
         };
 
         if input.is_empty() {
@@ -483,7 +482,7 @@ fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
         }
     }
 
-    return None;
+    None
 }
 
 /// Step 7
@@ -505,12 +504,9 @@ fn prompt_advanced_options(
     let default_tpm = matches!(os, GuestOs::Windows);
     let default_nvme = false;
     let is_macos_x64 = matches!((os, arch), (GuestOs::MacOS, Arch::X64));
-    let default_cpu_model: Option<&str> = match is_macos_x64 {
-        true => Some("Nehalem,vendor=GenuineIntel"),
-        false => None,
-    };
+    let default_cpu_model: Option<&str> = if is_macos_x64 { Some("Nehalem,vendor=GenuineIntel") } else { None };
 
-    println!("  Defaults for {:?} {:?}:", os, arch);
+    println!("  Defaults for {os:?} {arch:?}:");
     println!(
         "    TPM: {}",
         if default_tpm { "enabled" } else { "disabled" }
@@ -522,7 +518,7 @@ fn prompt_advanced_options(
     println!("      (Use NVMe if VM was created with UTM - UTM uses NVMe by default)");
     println!("      (If VM fails to boot, try recreating config with NVMe enabled)");
     if let Some(cpu) = default_cpu_model {
-        println!("    CPU model: {}", cpu);
+        println!("    CPU model: {cpu}");
     }
     if is_macos_x64 {
         println!("    macOS x64 requires OpenCore bootloader and Apple SMC device");
@@ -578,7 +574,7 @@ fn prompt_advanced_options(
     } else {
         tpm = default_tpm;
         nvme = default_nvme;
-        cpu_model = default_cpu_model.map(|s| s.to_string());
+        cpu_model = default_cpu_model.map(std::string::ToString::to_string);
 
         if is_macos_x64 {
             // needs OpenCore anyways
@@ -600,7 +596,7 @@ fn prompt_advanced_options(
 fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
     let default_str = if default { "Y/n" } else { "y/N" };
     loop {
-        let input = read_line(&format!("{} [{}]: ", prompt, default_str))?;
+        let input = read_line(&format!("{prompt} [{default_str}]: "))?;
         match input.to_lowercase().as_str() {
             "" => return Ok(default),
             "y" | "yes" => return Ok(true),
@@ -662,7 +658,7 @@ fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>
         "virtio-blk-pci,drive=SystemDisk".to_string(),
     ];
 
-    println!("    Using: {}", opencore_path);
+    println!("    Using: {opencore_path}");
 
     Ok((Some(additional_drives), Some(additional_devices)))
 }
@@ -696,18 +692,18 @@ fn print_summary(config: &ImageDescription) {
                 }
             );
             if let Some(ref cpu) = qemu.cpu_model {
-                println!("    CPU model: {}", cpu);
+                println!("    CPU model: {cpu}");
             }
             if let Some(ref drives) = qemu.additional_drives {
                 println!("    Additional drives: {}", drives.len());
                 for drive in drives {
-                    println!("      - {}", drive);
+                    println!("      - {drive}");
                 }
             }
             if let Some(ref devices) = qemu.additional_devices {
                 println!("    Additional devices: {}", devices.len());
                 for device in devices {
-                    println!("      - {}", device);
+                    println!("      - {device}");
                 }
             }
         }
@@ -724,7 +720,7 @@ fn print_summary(config: &ImageDescription) {
     if config.ssh.pass.is_some() {
         println!("    Auth: password");
     } else if let Some(ref key) = config.ssh.key {
-        println!("    Auth: key ({})", key);
+        println!("    Auth: key ({key})");
     }
     println!();
 }
@@ -732,15 +728,15 @@ fn print_summary(config: &ImageDescription) {
 fn save_config(config: &ImageDescription) -> Result<(), String> {
     if !VCI_HOME_PATH.exists() {
         std::fs::create_dir_all(&*VCI_HOME_PATH)
-            .map_err(|e| format!("Failed to create VCI home directory: {}", e))?;
+            .map_err(|e| format!("Failed to create VCI home directory: {e}"))?;
     }
 
     let file_path = VCI_HOME_PATH.join(format!("{}.vci", config.name));
 
     let json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
-    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {}", e))?;
+    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {e}"))?;
 
-    return Ok(());
+    Ok(())
 }

@@ -13,7 +13,7 @@ mod yaml;
 use std::path::PathBuf;
 
 pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
-    return std::env::temp_dir().join("vci");
+    std::env::temp_dir().join("vci")
 });
 
 pub fn run_virtci() {
@@ -50,13 +50,13 @@ pub fn run_virtci() {
         }
         cli::Command::Export(export_args) => {
             if let Err(e) = vm_image::export::run_export(&export_args.name, export_args.output) {
-                eprintln!("Export failed: {}", e);
+                eprintln!("Export failed: {e}");
                 std::process::exit(1);
             }
         }
         cli::Command::Import(import_args) => {
             if let Err(e) = vm_image::import::run_import(&import_args.archive) {
-                eprintln!("Import failed: {}", e);
+                eprintln!("Import failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -70,17 +70,13 @@ pub fn run_virtci() {
 }
 
 fn run_setup(args: cli::SetupArgs) {
-    if args.qemu && args.tart {
-        panic!("Error: specify either --qemu or --tart, not both.");
-    }
+    assert!(!(args.qemu && args.tart), "Error: specify either --qemu or --tart, not both.");
 
-    if !args.qemu && !args.tart {
-        panic!("Error: specify a backend with --qemu or --tart.");
-    }
+    assert!(!(!args.qemu && !args.tart), "Error: specify a backend with --qemu or --tart.");
 
     if args.qemu {
         if let Err(e) = vm_image::setup_qemu::run_interactive_setup() {
-            panic!("Setup failed: {}", e);
+            panic!("Setup failed: {e}");
         }
     }
 
@@ -88,7 +84,7 @@ fn run_setup(args: cli::SetupArgs) {
     {
         if args.tart {
             if let Err(e) = vm_image::setup_tart::run_interactive_setup() {
-                panic!("Setup failed: {}", e);
+                panic!("Setup failed: {e}");
             }
         }
     }
@@ -113,19 +109,19 @@ fn run_jobs(jobs: Vec<run::Job>) {
 
     for mut job in jobs {
         let job_name = job.name.clone();
-        println!("{}", format!("=== Job {} ===", job_name).cyan().bold());
+        println!("{}", format!("=== Job {job_name} ===").cyan().bold());
 
         let result = rt.block_on(job.run());
 
         match result {
-            Ok(_) => println!(
+            Ok(()) => println!(
                 "{}\n",
-                format!("=== Job {} completed ===", job_name).green().bold()
+                format!("=== Job {job_name} completed ===").green().bold()
             ),
             Err(e) => {
                 eprintln!(
                     "{}",
-                    format!("=== Job {} failed: {} ===", job_name, e)
+                    format!("=== Job {job_name} failed: {e} ===")
                         .red()
                         .bold()
                 );
@@ -170,7 +166,7 @@ fn run_cleanup(args: cli::CleanupArgs) {
     if args.force {
         for file in &files {
             match std::fs::remove_file(file) {
-                Ok(_) => println!("{} {}", "Deleted:".green(), file.display()),
+                Ok(()) => println!("{} {}", "Deleted:".green(), file.display()),
                 Err(e) => eprintln!("{} {}: {}", "Failed to delete:".red(), file.display(), e),
             }
         }
@@ -191,7 +187,7 @@ fn run_cleanup(args: cli::CleanupArgs) {
             let input = input.trim().to_lowercase();
             if input == "y" || input == "yes" {
                 match std::fs::remove_file(file) {
-                    Ok(_) => println!("{}", "  Deleted".green()),
+                    Ok(()) => println!("{}", "  Deleted".green()),
                     Err(e) => eprintln!("{} {}", "  Failed:".red(), e),
                 }
             } else {
@@ -273,7 +269,7 @@ async fn signal_handler() {
 }
 
 fn load_image_description(image_name: &str) -> vm_image::ImageDescription {
-    let vci_path = vm_image::VCI_HOME_PATH.join(format!("{}.vci", image_name));
+    let vci_path = vm_image::VCI_HOME_PATH.join(format!("{image_name}.vci"));
     let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|_| {
         panic!(
             "Failed to load image description '{}' (looked at {})",
@@ -282,9 +278,9 @@ fn load_image_description(image_name: &str) -> vm_image::ImageDescription {
         )
     });
     let mut desc: vm_image::ImageDescription = serde_json::from_str(&contents)
-        .unwrap_or_else(|e| panic!("Failed to parse image description '{}': {}", image_name, e));
+        .unwrap_or_else(|e| panic!("Failed to parse image description '{image_name}': {e}"));
     desc.name = image_name.to_string();
-    return desc;
+    desc
 }
 
 fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
@@ -292,7 +288,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
         .unwrap_or_else(|_| panic!("Failed to load workflow file: {}", args.workflow.display()));
 
     let workflow: yaml::Workflow = yaml::parse_workflow(&file_contents)
-        .unwrap_or_else(|e| panic!("Failed to parse workflow YAML: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to parse workflow YAML: {e}"));
 
     // let image_overrides = cli::parse_overrides(&args.image);
     // let cpus_overrides = cli::parse_overrides(&args.cpus);
@@ -327,7 +323,7 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
         // };
         let memory_mb = match yaml_job.memory.as_deref() {
             Some(s) => {
-                cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {}", s))
+                cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {s}"))
             }
             None => cli::DEFAULT_MEM_MB,
         };
@@ -365,13 +361,13 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
         let backend: Box<dyn backend::VmBackend> = match &image_desc.backend {
             vm_image::BackendConfig::Qemu(_) => Box::new(
                 backend::qemu::QemuBackend::new(name.clone(), image_desc, cpus, memory_mb)
-                    .unwrap_or_else(|_| {
+                    .unwrap_or_else(|()| {
                         panic!("Failed to create QEMU backend for job '{}'", &name)
                     }),
             ),
             vm_image::BackendConfig::Tart(_) => Box::new(
                 backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb)
-                    .unwrap_or_else(|_| {
+                    .unwrap_or_else(|()| {
                         panic!("Failed to create Tart backend for job '{}'", &name)
                     }),
             ),
@@ -385,5 +381,5 @@ fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
         });
     }
 
-    return jobs;
+    jobs
 }

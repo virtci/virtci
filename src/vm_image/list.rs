@@ -18,7 +18,7 @@ pub fn run_list(verbose: bool) {
             if i > 0 {
                 println!();
             }
-            print_verbose(&img);
+            print_verbose(img);
         }
     } else {
         for img in &images {
@@ -96,16 +96,16 @@ fn print_verbose(img: &ImageDescription) {
                 }
             );
             if let Some(ref cpu) = qemu.cpu_model {
-                println!("    CPU model: {}", cpu);
+                println!("    CPU model: {cpu}");
             }
             if let Some(ref drives) = qemu.additional_drives {
                 for drive in drives {
-                    println!("    Drive: {}", drive);
+                    println!("    Drive: {drive}");
                 }
             }
             if let Some(ref devices) = qemu.additional_devices {
                 for device in devices {
-                    println!("    Device: {}", device);
+                    println!("    Device: {device}");
                 }
             }
         }

@@ -106,7 +106,7 @@ pub fn run_shell(args: cli::ShellArgs) {
 
             if ssh.cred.key.is_none() {
                 if let Some(ref pass) = ssh.cred.pass {
-                    eprintln!("Password: {}", pass);
+                    eprintln!("Password: {pass}");
                 }
             }
 
@@ -114,7 +114,7 @@ pub fn run_shell(args: cli::ShellArgs) {
             match status {
                 Ok(s) => std::process::exit(s.code().unwrap_or(1)),
                 Err(e) => {
-                    eprintln!("Failed to execute ssh: {}", e);
+                    eprintln!("Failed to execute ssh: {e}");
                     std::process::exit(1);
                 }
             }

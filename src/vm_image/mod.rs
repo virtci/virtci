@@ -44,7 +44,7 @@ pub(crate) static VCI_HOME_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyL
         }
     }
 
-    return PathBuf::from(".vci");
+    PathBuf::from(".vci")
 });
 
 // https://www.linux-kvm.org/downloads/lersek/ovmf-whitepaper-c770f8c.txt
@@ -82,15 +82,15 @@ pub enum BackendConfig {
 impl BackendConfig {
     pub fn as_qemu(&self) -> Option<&QemuConfig> {
         match self {
-            Self::Qemu(config) => return Some(&config),
-            _ => return None,
+            Self::Qemu(config) => Some(config),
+            _ => None,
         }
     }
 
     pub fn as_tart(&self) -> Option<&TartConfig> {
         match self {
-            Self::Tart(config) => Some(&config),
-            _ => return None,
+            Self::Tart(config) => Some(config),
+            _ => None,
         }
     }
 }
@@ -140,7 +140,7 @@ pub struct ImageDescription {
 }
 
 pub fn read_line(prompt: &str) -> Result<String, String> {
-    print!("{}", prompt);
+    print!("{prompt}");
     io::stdout().flush().map_err(|e| e.to_string())?;
 
     let mut input = String::new();
@@ -148,17 +148,17 @@ pub fn read_line(prompt: &str) -> Result<String, String> {
         .read_line(&mut input)
         .map_err(|e| e.to_string())?;
 
-    return Ok(input.trim().to_string());
+    Ok(input.trim().to_string())
 }
 
 pub fn read_line_with_default(prompt: &str, default: &str) -> Result<String, String> {
-    let full_prompt = format!("{} [{}]: ", prompt, default);
+    let full_prompt = format!("{prompt} [{default}]: ");
     let input = read_line(&full_prompt)?;
 
     if input.is_empty() {
-        return Ok(default.to_string());
+        Ok(default.to_string())
     } else {
-        return Ok(input);
+        Ok(input)
     }
 }
 
@@ -168,5 +168,5 @@ pub fn expand_path(path: &str) -> PathBuf {
             return PathBuf::from(home).join(&path[2..]);
         }
     }
-    return PathBuf::from(path);
+    PathBuf::from(path)
 }

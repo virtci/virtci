@@ -202,14 +202,14 @@ pub fn parse_mem_mb(s: &str) -> Option<u64> {
         (s, 1u64)
     };
 
-    return num.parse::<u64>().ok().map(|n| n * unit);
+    num.parse::<u64>().ok().map(|n| n * unit)
 }
 
 pub fn default_cpus() -> u32 {
     let cpus = std::thread::available_parallelism()
         .map(|p| p.get() as u32)
         .unwrap_or(2);
-    return (cpus / 2).max(1);
+    (cpus / 2).max(1)
 }
 
 pub const DEFAULT_MEM_MB: u64 = 8192;
