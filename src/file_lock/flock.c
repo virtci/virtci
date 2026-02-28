@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 #include <stdbool.h>
 
 #if defined(__APPLE__) || defined(__linux__)

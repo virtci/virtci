@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 use crate::file_lock::{FileLock, FileLockError, LockMetadata};
 use crate::{cli, VCI_TEMP_PATH};
 

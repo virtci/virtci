@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 use crate::vm_image::{BackendConfig, ImageDescription, VCI_HOME_PATH};
 
 pub fn run_list(verbose: bool) {

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, Arch, BackendConfig, GuestOs, ImageDescription,
     SshConfig, TartConfig, VCI_HOME_PATH,

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 use std::{path::PathBuf, process::Child};
 
 use colored::Colorize;

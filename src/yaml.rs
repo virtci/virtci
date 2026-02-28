@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 use crate::run::MAX_TIMEOUT;
 use serde::Deserialize;
 use std::collections::HashMap;

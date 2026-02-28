@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 fn main() {
     println!("cargo:rerun-if-changed=src/file_lock/process_time.c");
     println!("cargo:rerun-if-changed=src/file_lock/flock.c");

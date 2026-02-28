@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 /*
 It seems that when doing very large file transfers using tar-over-ssh,
 if two or more VCI processes are doing these big transfers, they'll deadlock each other.
