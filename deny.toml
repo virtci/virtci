@@ -1,0 +1,38 @@
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+
+[licenses]
+unlicensed = "deny"
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSD-1-Clause",
+  "BSL-1.0",
+  "ISC",
+  "CC0-1.0",
+  "Unlicense",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "GPL-2.0-only",
+]
+copyleft = "warn"
+
+[[licenses.exceptions]]
+allow = ["LGPL-2.1-or-later"]
+crate = "mp4parse"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

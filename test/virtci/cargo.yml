@@ -1,0 +1,46 @@
+ubuntu-server-x64:
+  image: ubuntu-server-x64
+  cpus: 4
+  memory: 12G
+  steps:
+  - name: Copy Files
+    copy:
+      from: ./
+      to: vm:~/
+    exclude:
+      - .git
+      - .github
+      - docs
+      - target
+
+  - name: Install Rust
+    run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+  - name: Install Clang-Format
+    run: |
+      sudo apt update
+      sudo apt install clang-format
+
+  - name: Install cargo-deny
+    run: . "$HOME/.cargo/env" && cargo install cargo-deny
+
+  - name: Fetch Dependencies
+    run: . "$HOME/.cargo/env" && cargo fetch
+
+  - name: Security & License Check
+    run: . "$HOME/.cargo/env" && cargo deny check
+
+  - name: Go Offline
+    offline: true
+
+  - name: Check Formatting (Rust)
+    run: . "$HOME/.cargo/env" && cargo fmt --check
+
+  - name: Check Formatting (C)
+    run: clang-format --dry-run --Werror src/file_lock/*.c
+
+  - name: Clippy
+    run: . "$HOME/.cargo/env" && cargo clippy -- -D warnings
+
+  - name: Build
+    run: . "$HOME/.cargo/env" && cargo build
