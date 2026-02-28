@@ -11,7 +11,16 @@ serde_yml = "0.0.12"
 serde_json = "1.0.149"
 russh = { version = "0.56", default-features = false, features = ["aws-lc-rs"] }
 russh-sftp = "2.0"
-tokio = { version = "1", features = ["rt", "net", "time", "io-util", "macros", "process", "sync", "signal"] }
+tokio = { version = "1", features = [
+  "rt",
+  "net",
+  "time",
+  "io-util",
+  "macros",
+  "process",
+  "sync",
+  "signal",
+] }
 colored = "3"
 tar = "0.4"
 
@@ -21,3 +30,11 @@ cc = "1.2.27"
 [[bin]]
 name = "virtci"
 path = "src/main.rs"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+doc_markdown = "allow"
+too_many_lines = "allow"
+similar_names = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
