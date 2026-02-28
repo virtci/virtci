@@ -1,8 +1,8 @@
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
+vulnerability = "all"
+unmaintained = "workspace"
+yanked = "workspace"
+notice = "workspace"
 
 [licenses]
 unlicensed = "deny"
