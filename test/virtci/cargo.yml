@@ -19,7 +19,7 @@ ubuntu-server-x64:
   - name: Install Clang-Format
     run: |
       sudo apt update
-      sudo apt install clang-format
+      sudo apt install clang-format -y
 
   - name: Install cargo-deny
     run: . "$HOME/.cargo/env" && cargo install cargo-deny
