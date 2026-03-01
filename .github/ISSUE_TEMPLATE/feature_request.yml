@@ -1,0 +1,51 @@
+name: Feature Request
+description: Suggest a new feature for VirtCI
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We want to hear your ideas for really good new features!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What problem does this solve?
+      description: Describe the need for this feature
+      placeholder: |
+        Describe the problem or use case this feature addresses.
+        How important is this feature and how often would it be used?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe your proposed implementation or behavior
+      placeholder: |
+        How do you think this should work?
+        How complex is it?
+        How would it be tested?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any alternative solutions or features you've considered
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Any other details, links, or context about this feature request
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched open and closed requests for similar suggestions
+          required: true

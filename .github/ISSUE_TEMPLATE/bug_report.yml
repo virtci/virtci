@@ -1,0 +1,113 @@
+name: Bug Report
+description: Report a bug with VirtCI
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please fill out the sections below to assist diagnosing the issue.
+        For VM running issues, include all possible relevant details about your VM for more accurate troubleshooting.
+
+        **Common Issues for VM Running:**
+        - Windows 11 VM without TPM.
+        - Windows VM made with UTM that without NVMe.
+        - Required tools not correctly in the path for the SSH shell.
+        - Not enough memory so VM hangs.
+        - OpenSSH server not setup on the VM.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: |
+        Describe the problem you encountered and what you expected to happen instead.
+      placeholder: |
+        What is the bug?
+        **Expected behavior:**
+        VM booted
+        **Actual behavior:**
+        VM did not boot
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: How can it be reproduced?
+      placeholder: |
+        1. Run `virtci run ubuntu-x64.yml` workflow
+        2. See error
+
+        Attach workflow YAML file here if relevant
+    validations:
+      required: true
+
+  - type: textarea
+    id: vm-details
+    attributes:
+      label: VM Image Details
+      description: Information about the VM image you were using
+      placeholder: |
+        - OS: Ubuntu 24.04
+        - Architecture: x64 / arm64 / riscv64
+        - CPU count: 4
+        - Memory: 8G
+        - Backend: QEMU / Tart
+        - Image source: (custom ISO / pre-built image / quickemu / UTM)
+    validations:
+      required: true
+
+  - type: textarea
+    id: host-details
+    attributes:
+      label: Host System Details
+      description: Information about your host machine
+      placeholder: |
+        - OS: macOS 15.7.3 / Windows 11 / Linux (distro)
+        - Host CPU: Ryzen 9 7950x / M3 Pro / i7 14700k / Xeon w7-2495X
+        - Host memory: 16G
+    validations:
+      required: true
+
+  - type: input
+    id: virtci-version
+    attributes:
+      label: VirtCI Version
+      description: Run `virtci version` to get this info
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Please copy and paste any relevant logs or error messages
+      render: yaml
+
+  # https://blog.qatestlab.com/2015/03/10/software-bugs-severity-levels/
+  # https://www.ibm.com/docs/en/targetprocess/atp/saas?topic=tracking-severity-bugs
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How severe is this issue.
+      options:
+        - Blocker (Prevent use completely)
+        - Critical (Severely impacts functionality)
+        - Major (Disrupts key features but is operational)
+        - Minor (Does not interfere with core functionality)
+        - Trivial (Cosmetic or stylistic with minimal to no functional impact)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: troubleshooting
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched open and closed issues for duplicates
+          required: true
+        - label: I have tried the latest version of VirtCI
+          required: true
