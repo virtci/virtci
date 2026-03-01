@@ -2,8 +2,6 @@
   <img src="res/VirtCI-wordmark.png"/>
 </div>
 
-# VirtCI Virtual Machine CI Runner
-
 *VirtCI* is a CI/CD tool for running real OS images across multiple CPU architectures on self-hosted hardware.
 
 - Configure CPU core count and Memory availability to emulate production environments.

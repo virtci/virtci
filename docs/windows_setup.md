@@ -140,16 +140,16 @@ qemu-system-x86_64 \
 -display gtk,grab-on-hover=on \
 -vga virtio
 
-qemu-system-x86_64 
--machine q35 
--cpu max 
--name win-x64 
--m 8192M 
+qemu-system-x86_64
+-machine q35
+-cpu max
+-name win-x64
+-m 8192M
 -smp 4
--drive if=pflash,format=raw,readonly=on,file=/usr/share/qemu/OVMF.fd -drive file=/home/user/vm/windows-server.qcow2,format=qcow2 
--accel kvm 
--accel tcg 
--netdev user,id=net0,hostfwd=tcp::PORT-:22 
+-drive if=pflash,format=raw,readonly=on,file=/usr/share/qemu/OVMF.fd -drive file=/home/user/vm/windows-server.qcow2,format=qcow2
+-accel kvm
+-accel tcg
+-netdev user,id=net0,hostfwd=tcp::PORT-:22
 -device virtio-net-pci,netdev=net0
 ```
 
