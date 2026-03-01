@@ -59,7 +59,11 @@ impl<R: Read> Read for ProgressReader<R> {
     }
 }
 
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn format_size(bytes: u64) -> String {
     const MB: f64 = 1024.0 * 1024.0;
     const GB: f64 = MB * 1024.0;

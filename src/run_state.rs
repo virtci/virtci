@@ -21,9 +21,11 @@ pub fn list_active_runs() -> Vec<LockMetadata> {
             None => continue,
         };
 
-        if !name.starts_with("vci-") || !std::path::Path::new(&name)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("lock")) {
+        if !name.starts_with("vci-")
+            || !std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("lock"))
+        {
             continue;
         }
 

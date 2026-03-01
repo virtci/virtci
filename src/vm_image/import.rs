@@ -120,9 +120,11 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
     if let BackendConfig::Tart(ref tart) = desc.backend {
         let tvm_file = extracted_files
             .iter()
-            .find(|f| std::path::Path::new(f)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("tvm")))
+            .find(|f| {
+                std::path::Path::new(f)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("tvm"))
+            })
             .ok_or("No .tvm file found in archive for tart backend")?;
         let tvm_path = managed_dir.join(tvm_file);
 
