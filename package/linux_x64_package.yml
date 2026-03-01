@@ -16,6 +16,16 @@ ubuntu-server-x64:
     - name: Install Rust
       run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
+    - name: Install Node and NPM
+      run: |
+        sudo apt update
+        sudo apt install  -y -qq nodejs npm
+
+    - name: Install NPM Dependencies
+      run: |
+        cd web
+        npm install
+
     - name: Build
       run: . "$HOME/.cargo/env" && cargo build --release
 

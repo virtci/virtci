@@ -1,2 +1,4 @@
 /target
 test.yml
+web/node_modules
+web/dist

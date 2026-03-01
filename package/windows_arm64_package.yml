@@ -19,8 +19,13 @@ win-11-arm64:
     - name: Install Rust
       run: curl -o rustup-init.exe https://win.rustup.rs/aarch64; .\rustup-init.exe -y
 
-    - name: Install LLVM
-      run: choco install llvm -y
+    - name: Install Dependencies
+      run: choco install llvm nodejs -y
+
+    - name: Install NPM Dependencies
+      run: |
+        cd web
+        npm install
 
     - name: Build
       run: $env:Path = "C:\Program Files\LLVM\bin;$env:Path"; cargo build --release

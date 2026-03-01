@@ -23,6 +23,7 @@ pub enum Command {
     Import(ImportArgs),
     Active(ActiveArgs),
     Shell(ShellArgs),
+    Serve(ServeArgs),
 }
 
 /// Get the VirtCI version
@@ -139,6 +140,15 @@ pub struct ShellArgs {
     /// name of the running job to connect to
     #[argh(positional)]
     pub name: String,
+}
+
+/// Start the web UI server
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "serve")]
+pub struct ServeArgs {
+    /// port to listen on (default: VIRTCI_BACKEND_PORT env var, or 8080)
+    #[argh(option)]
+    pub port: Option<u16>,
 }
 
 // #[derive(Debug, Clone)]

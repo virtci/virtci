@@ -8,6 +8,7 @@ mod run;
 mod run_state;
 mod transfer_lock;
 mod vm_image;
+mod web;
 mod yaml;
 
 use std::path::PathBuf;
@@ -64,6 +65,9 @@ pub fn run_virtci() {
         }
         cli::Command::Shell(shell_args) => {
             run_state::run_shell(&shell_args);
+        }
+        cli::Command::Serve(serve_args) => {
+            web::serve(serve_args.port);
         }
     }
 }
