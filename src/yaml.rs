@@ -60,8 +60,8 @@ pub enum StepKind {
     Offline(bool),
 }
 
-pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yml::Error> {
-    serde_yml::from_str(contents)
+pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yaml_ng::Error> {
+    serde_yaml_ng::from_str(contents)
 }
 
 pub fn parse_timeout_seconds(s: &str) -> u64 {
