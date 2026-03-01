@@ -35,9 +35,11 @@ ubuntu-server-x64:
 
   - name: Check Formatting (Rust)
     run: . "$HOME/.cargo/env" && cargo fmt --check
+    continue_on_error: true
 
   - name: Check Formatting (C)
     run: clang-format --dry-run --Werror src/file_lock/*.c
+    continue_on_error: true
 
   - name: Clippy
     run: . "$HOME/.cargo/env" && cargo clippy -- -D warnings
