@@ -1,37 +1,35 @@
-# NOT NEEDED YET
+name: Issue Severity Labeler
 
-# name: Issue Severity Labeler
+on:
+  issues:
+    types: [opened]
 
-# on:
-#   issues:
-#     types: [opened]
-
-# jobs:
-#   label:
-#     runs-on: ubuntu-latest
-#     permissions:
-#       issues: write
-#     steps:
-#       - name: Label severity
-#         uses: actions/github-script@v7
-#         with:
-#           script: |
-#             const body = context.payload.issue.body || '';
-#             const severityMap = {
-#               'Blocker': 'severity: blocker',
-#               'Critical': 'severity: critical',
-#               'Major': 'severity: major',
-#               'Minor': 'severity: minor',
-#               'Trivial': 'severity: trivial',
-#             };
-#             for (const [keyword, label] of Object.entries(severityMap)) {
-#               if (body.includes(keyword)) {
-#                 await github.rest.issues.addLabels({
-#                   owner: context.repo.owner,
-#                   repo: context.repo.repo,
-#                   issue_number: context.issue.number,
-#                   labels: [label],
-#                 });
-#                 break;
-#               }
-#             }
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Label severity
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body || '';
+            const severityMap = {
+              'Blocker (Prevent use completely)': 'severity: blocker',
+              'Critical (Severely impacts functionality)': 'severity: critical',
+              'Major (Disrupts key features but is operational)': 'severity: major',
+              'Minor (Does not interfere with core functionality)': 'severity: minor',
+              'Trivial (Cosmetic or stylistic with minimal to no functional impact)': 'severity: trivial',
+            };
+            for (const [keyword, label] of Object.entries(severityMap)) {
+              if (body.includes(keyword)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  labels: [label],
+                });
+                break;
+              }
+            }
