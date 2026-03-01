@@ -361,6 +361,7 @@ pub struct ClientHandler;
 impl client::Handler for ClientHandler {
     type Error = russh::Error;
 
+    #[allow(clippy::manual_async_fn)]
     fn check_server_key(
         &mut self,
         _key: &ssh_key::PublicKey,

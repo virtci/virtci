@@ -10,9 +10,8 @@ pub fn list_active_runs() -> Vec<LockMetadata> {
     let temp_dir = &*VCI_TEMP_PATH;
     let mut active = Vec::new();
 
-    let entries = match std::fs::read_dir(temp_dir) {
-        Ok(e) => e,
-        Err(_) => return active,
+    let Ok(entries) = std::fs::read_dir(temp_dir) else {
+        return active;
     };
 
     for entry in entries.flatten() {
@@ -22,7 +21,9 @@ pub fn list_active_runs() -> Vec<LockMetadata> {
             None => continue,
         };
 
-        if !name.starts_with("vci-") || !name.ends_with(".lock") {
+        if !name.starts_with("vci-") || !std::path::Path::new(&name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lock")) {
             continue;
         }
 
@@ -79,7 +80,7 @@ pub fn run_active() {
     }
 }
 
-pub fn run_shell(args: cli::ShellArgs) {
+pub fn run_shell(args: &cli::ShellArgs) {
     let run = find_active_run(&args.name);
     match run {
         None => {

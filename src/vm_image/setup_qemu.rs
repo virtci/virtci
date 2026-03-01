@@ -99,7 +99,6 @@ fn prompt_image_name() -> Result<String, String> {
             }
             Err(e) => {
                 println!("  Error: {e}\n");
-                continue;
             }
         }
     }
@@ -218,6 +217,9 @@ fn prompt_image_path() -> Result<String, String> {
 
 /// https://www.qemu.org/docs/master/interop/qcow2.html
 fn validate_qcow2(path: &std::path::Path) -> Result<(), String> {
+    // Bytes 0 - 3 "QFI\xfb"
+    const QCOW2_MAGIC: [u8; 4] = [0x51, 0x46, 0x49, 0xFB];
+
     use std::io::Read;
 
     let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
@@ -226,8 +228,6 @@ fn validate_qcow2(path: &std::path::Path) -> Result<(), String> {
     file.read_exact(&mut header)
         .map_err(|e| format!("Cannot read file header: {e}"))?;
 
-    // Bytes 0 - 3 "QFI\xfb"
-    const QCOW2_MAGIC: [u8; 4] = [0x51, 0x46, 0x49, 0xFB];
     if header[0..4] != QCOW2_MAGIC {
         return Err("Not a valid qcow2 file (invalid magic bytes)".to_string());
     }
@@ -256,7 +256,6 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
             "2" => break 2,
             _ => {
                 println!("  Error: Invalid selection. Enter 1 or 2.\n");
-                continue;
             }
         }
     };
@@ -348,7 +347,6 @@ fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, Stri
             "2" => break 2,
             _ => {
                 println!("  Error: Invalid selection. Enter 1 or 2.\n");
-                continue;
             }
         }
     };
@@ -362,20 +360,8 @@ fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, Stri
 
     let defaults = find_uefi_firmware(arch);
 
-    let default_code: Option<&str> = {
-        if defaults.is_none() {
-            None
-        } else {
-            Some(&defaults.as_ref().unwrap().0)
-        }
-    };
-    let default_vars: Option<&str> = {
-        if defaults.is_none() {
-            None
-        } else {
-            Some(&defaults.as_ref().unwrap().1)
-        }
-    };
+    let default_code: Option<&str> = defaults.as_ref().map(|(code, _)| code.as_str());
+    let default_vars: Option<&str> = defaults.as_ref().map(|(_, vars)| vars.as_str());
 
     let code = prompt_uefi_file("UEFI code file", default_code)?;
     let vars = prompt_uefi_file("UEFI vars file", default_vars)?;
@@ -486,6 +472,7 @@ fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
 }
 
 /// Step 7
+#[allow(clippy::type_complexity)]
 fn prompt_advanced_options(
     os: GuestOs,
     arch: Arch,
@@ -607,12 +594,12 @@ fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
             "n" | "no" => return Ok(false),
             _ => {
                 println!("  Error: Enter y or n.\n");
-                continue;
             }
         }
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>), String> {
     println!();
     println!("  OpenCore Bootloader");
@@ -715,7 +702,7 @@ fn print_summary(config: &ImageDescription) {
         //     println!("  Tart Backend:");
         //     println!("    VM name: {}", tart.vm_name);
         // }
-        _ => {}
+        BackendConfig::Tart(_) => {}
     }
 
     println!();

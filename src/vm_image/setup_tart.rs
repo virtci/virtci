@@ -98,7 +98,6 @@ fn prompt_image_name() -> Result<String, String> {
             }
             Err(e) => {
                 println!("  Error: {e}\n");
-                continue;
             }
         }
     }
@@ -194,7 +193,6 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
             "2" => break 2,
             _ => {
                 println!("  Error: Invalid selection. Enter 1 or 2.\n");
-                continue;
             }
         }
     };
@@ -272,7 +270,6 @@ fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
             "n" | "no" => return Ok(false),
             _ => {
                 println!("  Error: Enter y or n.\n");
-                continue;
             }
         }
     }

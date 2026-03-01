@@ -54,7 +54,7 @@ pub async fn run_command(
                 std::io::Write::flush(&mut std::io::stdout()).ok();
                 stdout_str.push_str(&s);
             }
-            Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+            Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
                 let s = String::from_utf8_lossy(&data);
                 eprint!("{s}");
                 std::io::Write::flush(&mut std::io::stderr()).ok();
@@ -64,7 +64,6 @@ pub async fn run_command(
                 exit_code = exit_status;
                 got_exit_status = true;
             }
-            Some(ChannelMsg::Eof) => {}
             None => {
                 break;
             }
@@ -182,14 +181,13 @@ pub async fn run_command_binary(
     loop {
         match channel.wait().await {
             Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
-            Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+            Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
                 stderr.extend_from_slice(&data);
             }
             Some(ChannelMsg::ExitStatus { exit_status }) => {
                 exit_code = exit_status;
                 got_exit_status = true;
             }
-            Some(ChannelMsg::Eof) => {}
             None => {
                 break;
             }

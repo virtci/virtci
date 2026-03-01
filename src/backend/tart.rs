@@ -114,9 +114,7 @@ impl VmBackend for TartBackend {
                 .output();
         })?;
 
-        let ip = if let Ok(ip) = resolve_tart_ip(&clone_name) {
-            ip
-        } else {
+        let Ok(ip) = resolve_tart_ip(&clone_name) else {
             let _ = std::process::Command::new("tart")
                 .args(["stop", &clone_name])
                 .output();
@@ -304,9 +302,8 @@ pub fn cleanup_stale_tart_clones() {
             None => continue,
         };
 
-        let lock = match FileLock::try_lock_exist(entry.path()) {
-            Ok(l) => l,
-            Err(_) => continue,
+        let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
+            continue;
         };
 
         let suffix = format!("-{slot_str}");
@@ -315,14 +312,8 @@ pub fn cleanup_stale_tart_clones() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines().skip(1) {
                     let mut cols = line.split_whitespace();
-                    let source = match cols.next() {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    let vm_name = match cols.next() {
-                        Some(n) => n,
-                        None => continue,
-                    };
+                    let Some(source) = cols.next() else { continue };
+                    let Some(vm_name) = cols.next() else { continue };
 
                     if source == "local"
                         && vm_name.starts_with("vci-")

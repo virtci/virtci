@@ -80,6 +80,7 @@ pub enum FileLockError {
 }
 
 impl FileLock {
+    #[allow(clippy::result_large_err)]
     pub fn try_new<P: AsRef<Path>>(path: P) -> Result<Self, FileLockError> {
         let metadata = LockMetadata::new();
         let json = serde_json::to_string_pretty(&metadata).map_err(|_| FileLockError::Other)?;
@@ -144,6 +145,7 @@ impl FileLock {
     /// Returns Ok(FileLock) if the lock was acquired. The caller holds the
     /// lock until the returned FileLock is dropped, preventing TOCTOU
     /// races when cleaning up files from previous runs.
+    #[allow(clippy::result_large_err)]
     pub fn try_lock_exist<P: AsRef<Path>>(path: P) -> Result<Self, FileLockError> {
         let file = OpenOptions::new()
             .read(true)

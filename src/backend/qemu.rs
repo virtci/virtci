@@ -337,7 +337,6 @@ impl VmBackend for QemuBackend {
 
                 runner.tpm_process = Some(tpm_cmd.spawn().map_err(|e| {
                     println!("{e}");
-                    ();
                 })?);
 
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -396,7 +395,6 @@ impl VmBackend for QemuBackend {
         println!("{}", (&fancy_cmd as &str).dimmed());
         self.runner.as_mut().unwrap().qemu_process = Some(cmd.spawn().map_err(|e| {
             println!("{e}");
-            ();
         })?);
         Ok(())
     }
@@ -529,16 +527,14 @@ fn qemu_img_binary() -> String {
 fn qemu_machine(arch: Arch) -> &'static str {
     match arch {
         Arch::X64 => "q35",
-        Arch::ARM64 => "virt",
-        Arch::RISCV64 => "virt",
+        Arch::RISCV64 | Arch::ARM64 => "virt",
     }
 }
 
 pub fn qemu_cpu(arch: Arch) -> &'static str {
     match arch {
-        Arch::X64 => "max",
+        Arch::X64 | Arch::RISCV64 => "max",
         Arch::ARM64 => "host",
-        Arch::RISCV64 => "max",
     }
 }
 
@@ -621,9 +617,8 @@ pub fn cleanup_stale_qemu_files() {
             None => continue,
         };
 
-        let lock = match FileLock::try_lock_exist(entry.path()) {
-            Ok(l) => l,
-            Err(_) => continue,
+        let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
+            continue;
         };
 
         let qcow2_suffix = format!("-{port_str}.qcow2");
@@ -673,9 +668,8 @@ pub fn cleanup_stale_qemu_files() {
             continue;
         }
 
-        let lock = match FileLock::try_lock_exist(entry.path()) {
-            Ok(l) => l,
-            Err(_) => continue,
+        let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
+            continue;
         };
 
         let dir_name = name_str.strip_suffix(".lock").unwrap();
@@ -702,9 +696,8 @@ pub fn cleanup_stale_qemu_files() {
             continue;
         }
 
-        let lock = match FileLock::try_lock_exist(entry.path()) {
-            Ok(l) => l,
-            Err(_) => continue,
+        let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
+            continue;
         };
 
         let _ = std::fs::remove_file(lock.get_path());

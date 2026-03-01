@@ -35,7 +35,7 @@ pub fn run_virtci() {
                     e
                 )
             });
-            let jobs = extract_yaml_workflows(run_args);
+            let jobs = extract_yaml_workflows(&run_args);
             run_jobs(jobs);
         }
         cli::Command::Setup(setup_args) => {
@@ -63,7 +63,7 @@ pub fn run_virtci() {
             run_state::run_active();
         }
         cli::Command::Shell(shell_args) => {
-            run_state::run_shell(shell_args);
+            run_state::run_shell(&shell_args);
         }
     }
 }
@@ -207,7 +207,9 @@ fn find_vci_temp_files(temp_dir: &std::path::Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("vci-") && name.ends_with(".qcow2") {
+                if name.starts_with("vci-") && std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("qcow2")) {
                     files.push(path);
                 }
             }
@@ -286,7 +288,7 @@ fn load_image_description(image_name: &str) -> vm_image::ImageDescription {
     desc
 }
 
-fn extract_yaml_workflows(args: cli::RunArgs) -> Vec<run::Job> {
+fn extract_yaml_workflows(args: &cli::RunArgs) -> Vec<run::Job> {
     let file_contents = std::fs::read_to_string(&args.workflow)
         .unwrap_or_else(|_| panic!("Failed to load workflow file: {}", args.workflow.display()));
 

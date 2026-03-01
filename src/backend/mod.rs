@@ -56,7 +56,7 @@ pub fn expand_path(path: &str) -> PathBuf {
     if path.starts_with("~/") {
         // Unix: $HOME, Windows: $USERPROFILE
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home).join(&path[2..]);
+            return PathBuf::from(home).join(path.strip_prefix("~/").unwrap());
         }
     }
     PathBuf::from(path)

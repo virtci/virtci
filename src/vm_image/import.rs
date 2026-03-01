@@ -56,7 +56,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
 
     let mut desc: ImageDescription = serde_json::from_str(&json)
         .map_err(|e| format!("Failed to parse .vci from archive: {e}"))?;
-    desc.name = name.clone();
+    desc.name.clone_from(&name);
 
     let dest_vci = VCI_HOME_PATH.join(format!("{}.vci", &name));
     if dest_vci.exists() {
@@ -115,12 +115,14 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
         extracted_files.push(filename.to_string());
     }
 
-    rewrite_paths_to_managed(&mut desc, &managed_dir)?;
+    rewrite_paths_to_managed(&mut desc, &managed_dir);
 
     if let BackendConfig::Tart(ref tart) = desc.backend {
         let tvm_file = extracted_files
             .iter()
-            .find(|f| f.ends_with(".tvm"))
+            .find(|f| std::path::Path::new(f)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tvm")))
             .ok_or("No .tvm file found in archive for tart backend")?;
         let tvm_path = managed_dir.join(tvm_file);
 
@@ -160,7 +162,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) -> Result<(), String> {
+fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) {
     match &mut desc.backend {
         BackendConfig::Qemu(ref mut qemu) => {
             qemu.image = managed_dir.join(&qemu.image).to_string_lossy().to_string();
@@ -180,8 +182,6 @@ fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) -> 
             // vm_name is a logical name, not a path
         }
     }
-
-    Ok(())
 }
 
 fn rewrite_drive_file_to_managed(drive_str: &str, managed_dir: &Path) -> String {

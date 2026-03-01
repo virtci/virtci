@@ -10,6 +10,7 @@ pub mod export;
 pub mod import;
 pub mod list;
 pub mod setup_qemu;
+#[cfg(target_os = "macos")]
 pub mod setup_tart;
 
 pub(crate) static VCI_HOME_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
@@ -83,14 +84,14 @@ impl BackendConfig {
     pub fn as_qemu(&self) -> Option<&QemuConfig> {
         match self {
             Self::Qemu(config) => Some(config),
-            _ => None,
+            Self::Tart(_) => None,
         }
     }
 
     pub fn as_tart(&self) -> Option<&TartConfig> {
         match self {
             Self::Tart(config) => Some(config),
-            _ => None,
+            Self::Qemu(_) => None,
         }
     }
 }
@@ -165,7 +166,7 @@ pub fn read_line_with_default(prompt: &str, default: &str) -> Result<String, Str
 pub fn expand_path(path: &str) -> PathBuf {
     if path.starts_with("~/") {
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home).join(&path[2..]);
+            return PathBuf::from(home).join(path.strip_prefix("~/").unwrap());
         }
     }
     PathBuf::from(path)

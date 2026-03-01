@@ -26,12 +26,13 @@ impl<R: Read> ProgressReader<R> {
     }
 }
 
+#[allow(clippy::cast_precision_loss, clippy::float_cmp)]
 impl<R: Read> Read for ProgressReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let n = self.inner.read(buf)?;
         self.read_so_far += n as u64;
 
-        let percent = if self.total > 0 {
+        let percent: f32 = if self.total > 0 {
             // scale up by 10
             (self.read_so_far as f32 / self.total as f32) * 100.0
         } else {
@@ -58,14 +59,15 @@ impl<R: Read> Read for ProgressReader<R> {
     }
 }
 
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn format_size(bytes: u64) -> String {
-    const GB: u64 = 1024 * 1024 * 1024;
-    const MB: u64 = 1024 * 1024;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = MB * 1024.0;
 
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
+    if bytes >= GB as u64 {
+        format!("{:.1} GB", bytes as f64 / GB)
     } else {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
+        format!("{:.1} MB", bytes as f64 / MB)
     }
 }
 

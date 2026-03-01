@@ -71,7 +71,7 @@ pub struct RunArgs {
 }
 
 /// Interactive setup for a new VM image description
-#[derive(FromArgs, Debug)]
+#[derive(FromArgs, Debug, Copy, Clone)]
 #[argh(subcommand, name = "setup")]
 pub struct SetupArgs {
     /// set up a QEMU-backed VM image
@@ -84,7 +84,7 @@ pub struct SetupArgs {
 }
 
 /// Clean up leftover temporary VM images
-#[derive(FromArgs, Debug)]
+#[derive(FromArgs, Debug, Copy, Clone)]
 #[argh(subcommand, name = "cleanup")]
 pub struct CleanupArgs {
     /// delete all without confirmation
@@ -206,6 +206,7 @@ pub fn parse_mem_mb(s: &str) -> Option<u64> {
 }
 
 pub fn default_cpus() -> u32 {
+    #[allow(clippy::cast_possible_truncation)]
     let cpus = std::thread::available_parallelism()
         .map(|p| p.get() as u32)
         .unwrap_or(2);

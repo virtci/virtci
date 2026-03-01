@@ -1,7 +1,7 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::time::Duration;
+use std::{fmt::Write, time::Duration};
 
 use russh::ChannelMsg;
 
@@ -44,10 +44,7 @@ pub async fn copy_files_tar(
 
     let (direction, local_path, remote_path) = parse_copy_paths(from, to);
 
-    let remote_path = match direction {
-        CopyDirection::HostToVm => expand_remote_tilde(remote_path, &ssh.cred.user, os),
-        CopyDirection::VmToHost => expand_remote_tilde(remote_path, &ssh.cred.user, os),
-    };
+    let remote_path = expand_remote_tilde(remote_path, &ssh.cred.user, os);
 
     match direction {
         CopyDirection::HostToVm => copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore).await,
@@ -63,6 +60,8 @@ async fn copy_host_to_vm_tar(
     remote_path: &str,
     ignore: &[String],
 ) -> Result<(), String> {
+    const CHUNK_SIZE: usize = 32 * 1024; // 32KB chunks
+
     use std::process::{Command, Stdio};
 
     let local_metadata = std::fs::metadata(local_path)
@@ -145,7 +144,7 @@ async fn copy_host_to_vm_tar(
         while let Some(msg) = reader.wait().await {
             match msg {
                 ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-                ChannelMsg::ExtendedData { data, ext } if ext == 1 => {
+                ChannelMsg::ExtendedData { data, ext: 1 } => {
                     stderr.extend_from_slice(&data);
                 }
                 ChannelMsg::ExitStatus { exit_status } => {
@@ -161,7 +160,6 @@ async fn copy_host_to_vm_tar(
 
     eprintln!("[TAR] Sending {} bytes to remote...", tar_data.len());
 
-    const CHUNK_SIZE: usize = 32 * 1024; // 32KB chunks
     for chunk in tar_data.chunks(CHUNK_SIZE) {
         writer
             .data(chunk)
@@ -220,6 +218,8 @@ async fn copy_vm_to_host_tar(
     ignore: &[String],
     os: GuestOs,
 ) -> Result<(), String> {
+    const CHUNK_SIZE: usize = 32 * 1024; // 32KB good size same as copy host to vm
+
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -244,7 +244,7 @@ async fn copy_vm_to_host_tar(
 
     let mut exclude_args = String::new();
     for pattern in ignore {
-        exclude_args.push_str(&format!(" --exclude=\"{pattern}\""));
+        let _ = write!(&mut exclude_args, " --exclude=\"{pattern}\"");
     }
 
     let tar_cmd = if is_dir {
@@ -371,7 +371,6 @@ async fn copy_vm_to_host_tar(
         .spawn()
         .map_err(|e| format!("Failed to spawn tar extract: {e}"))?;
 
-    const CHUNK_SIZE: usize = 32 * 1024; // 32KB good size same as copy host to vm
     let data = &result.stdout;
     let mut bytes_written = 0usize;
 
@@ -509,7 +508,11 @@ pub async fn convert_windows_line_endings(ssh: &SshTarget, to: &str) {
         "  Converting files to Windows encoding (UTF-8 without BOM + CRLF)...".dimmed()
     );
 
-    let target_dir = if to.starts_with("vm:") { &to[3..] } else { to };
+    let target_dir = if to.starts_with("vm:") {
+        to.strip_prefix("vm:").unwrap()
+    } else {
+        to
+    };
 
     let convert_script = crlf_conversion_script();
 

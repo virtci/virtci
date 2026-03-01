@@ -28,9 +28,8 @@ pub fn run_list(verbose: bool) {
 }
 
 fn load_all_images() -> Vec<ImageDescription> {
-    let entries = match std::fs::read_dir(&*VCI_HOME_PATH) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+    let Ok(entries) = std::fs::read_dir(&*VCI_HOME_PATH) else {
+        return Vec::new();
     };
 
     let mut images = Vec::new();
