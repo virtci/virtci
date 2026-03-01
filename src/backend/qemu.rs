@@ -130,7 +130,7 @@ impl QemuBackend {
         // hardware accel if possible
         #[cfg(target_os = "linux")]
         {
-            if is_kvm_available() {
+            if check_kvm_access().is_ok() {
                 cmd.arg("-accel").arg("kvm");
             }
         }
@@ -539,11 +539,6 @@ pub fn qemu_cpu(arch: Arch) -> &'static str {
 }
 
 #[cfg(target_os = "linux")]
-pub fn is_kvm_available() -> bool {
-    return std::path::Path::new("/dev/kvm").exists();
-}
-
-#[cfg(target_os = "linux")]
 pub fn check_kvm_access() -> Result<(), String> {
     let kvm_path = std::path::Path::new("/dev/kvm");
 
@@ -552,15 +547,16 @@ pub fn check_kvm_access() -> Result<(), String> {
     }
 
     match std::fs::File::open(kvm_path) {
-        Ok(_) => return Ok(()),
+        Ok(_) => Ok(()),
         Err(e) => {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
-                return Err(
+                Err(
                     "Permission denied for /dev/kvm (add user to kvm group and re-login)"
                         .to_string(),
-                );
-            };
-            return Err(format!("Cannot access /dev/kvm: {}", e));
+                )
+            } else {
+                Err(format!("Cannot access /dev/kvm: {e}"))
+            }
         }
     }
 }

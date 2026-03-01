@@ -96,9 +96,7 @@ fn run_setup(args: cli::SetupArgs) {
 
     #[cfg(not(target_os = "macos"))]
     {
-        if args.tart {
-            panic!("Tart setup is only available on macOS.");
-        }
+        assert!(!args.tart, "Tart setup is only available on macOS.");
     }
 }
 
