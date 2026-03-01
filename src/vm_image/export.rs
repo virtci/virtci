@@ -277,11 +277,7 @@ fn export_tart<W: std::io::Write>(
         return Err(format!("tart export failed: {}", stderr.trim()));
     }
 
-    append_file(
-        archive,
-        &tvm_temp_path,
-        &format!("{name}/{tvm_filename}"),
-    )?;
+    append_file(archive, &tvm_temp_path, &format!("{name}/{tvm_filename}"))?;
 
     let _ = std::fs::remove_file(&tvm_temp_path);
 

@@ -114,7 +114,9 @@ impl VmBackend for TartBackend {
                 .output();
         })?;
 
-        let ip = if let Ok(ip) = resolve_tart_ip(&clone_name) { ip } else {
+        let ip = if let Ok(ip) = resolve_tart_ip(&clone_name) {
+            ip
+        } else {
             let _ = std::process::Command::new("tart")
                 .args(["stop", &clone_name])
                 .output();
@@ -275,7 +277,9 @@ fn get_slot_flock() -> Result<(FileLock, u32), ()> {
 
     for slot in SLOT_RANGE_START..=SLOT_RANGE_END {
         let lock_path = VCI_TEMP_PATH.join(format!("vci-tart-slot-{slot}.lock"));
-        if let Ok(lock) = FileLock::try_new(lock_path) { return Ok((lock, slot)) }
+        if let Ok(lock) = FileLock::try_new(lock_path) {
+            return Ok((lock, slot));
+        }
     }
     Err(())
 }

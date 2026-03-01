@@ -12,9 +12,8 @@ mod yaml;
 
 use std::path::PathBuf;
 
-pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
-    std::env::temp_dir().join("vci")
-});
+pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> =
+    std::sync::LazyLock::new(|| std::env::temp_dir().join("vci"));
 
 pub fn run_virtci() {
     setup_signal_handlers();
@@ -70,9 +69,15 @@ pub fn run_virtci() {
 }
 
 fn run_setup(args: cli::SetupArgs) {
-    assert!(!(args.qemu && args.tart), "Error: specify either --qemu or --tart, not both.");
+    assert!(
+        !(args.qemu && args.tart),
+        "Error: specify either --qemu or --tart, not both."
+    );
 
-    assert!(!(!args.qemu && !args.tart), "Error: specify a backend with --qemu or --tart.");
+    assert!(
+        !(!args.qemu && !args.tart),
+        "Error: specify a backend with --qemu or --tart."
+    );
 
     if args.qemu {
         if let Err(e) = vm_image::setup_qemu::run_interactive_setup() {
@@ -121,9 +126,7 @@ fn run_jobs(jobs: Vec<run::Job>) {
             Err(e) => {
                 eprintln!(
                     "{}",
-                    format!("=== Job {job_name} failed: {e} ===")
-                        .red()
-                        .bold()
+                    format!("=== Job {job_name} failed: {e} ===").red().bold()
                 );
                 failed = true;
                 break;

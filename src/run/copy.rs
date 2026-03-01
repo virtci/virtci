@@ -280,9 +280,7 @@ async fn copy_vm_to_host_tar(
             parent
         };
 
-        let base_cmd = format!(
-            "tar czf - -C \"{parent}\"{exclude_args} \"{filename}\""
-        );
+        let base_cmd = format!("tar czf - -C \"{parent}\"{exclude_args} \"{filename}\"");
         if is_windows {
             format!("cmd /c {base_cmd}")
         } else {
@@ -351,11 +349,8 @@ async fn copy_vm_to_host_tar(
 
     eprintln!("[TAR] Extracting to: {extract_dir}");
 
-    std::fs::create_dir_all(&extract_dir).map_err(|e| {
-        format!(
-            "Failed to create extraction directory {extract_dir}: {e}"
-        )
-    })?;
+    std::fs::create_dir_all(&extract_dir)
+        .map_err(|e| format!("Failed to create extraction directory {extract_dir}: {e}"))?;
 
     // archive should starts with gzip magic bytes
     if result.stdout.len() < 2 || result.stdout[0] != 0x1f || result.stdout[1] != 0x8b {
@@ -422,8 +417,7 @@ async fn copy_vm_to_host_tar(
 
     if let Some((from, to)) = need_rename {
         eprintln!("[TAR] Renaming {from} to {to}");
-        std::fs::rename(&from, &to)
-            .map_err(|e| format!("Failed to rename {from} to {to}: {e}"))?;
+        std::fs::rename(&from, &to).map_err(|e| format!("Failed to rename {from} to {to}: {e}"))?;
     }
 
     eprintln!("[TAR] VM-to-host transfer completed successfully");
@@ -461,8 +455,14 @@ fn expand_remote_tilde(path: &str, username: &str, os: GuestOs) -> String {
 fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a str, &'a str) {
     let to_starts = to.starts_with("vm:");
     let from_starts = from.starts_with("vm:");
-    assert!(!(to_starts && from_starts), "Cannot use SFTP to copy files from the VM to itself!");
-    assert!(!(!to_starts && !from_starts), "Cannot use SFTP to copy files from the host to itself!");
+    assert!(
+        !(to_starts && from_starts),
+        "Cannot use SFTP to copy files from the VM to itself!"
+    );
+    assert!(
+        !(!to_starts && !from_starts),
+        "Cannot use SFTP to copy files from the host to itself!"
+    );
 
     if to_starts {
         (CopyDirection::HostToVm, from, &to[3..])

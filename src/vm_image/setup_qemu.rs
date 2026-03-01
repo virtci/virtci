@@ -504,7 +504,11 @@ fn prompt_advanced_options(
     let default_tpm = matches!(os, GuestOs::Windows);
     let default_nvme = false;
     let is_macos_x64 = matches!((os, arch), (GuestOs::MacOS, Arch::X64));
-    let default_cpu_model: Option<&str> = if is_macos_x64 { Some("Nehalem,vendor=GenuineIntel") } else { None };
+    let default_cpu_model: Option<&str> = if is_macos_x64 {
+        Some("Nehalem,vendor=GenuineIntel")
+    } else {
+        None
+    };
 
     println!("  Defaults for {os:?} {arch:?}:");
     println!(

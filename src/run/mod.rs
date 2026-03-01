@@ -225,7 +225,9 @@ impl Job {
             StepKind::Offline(offline) => {
                 println!(
                     "{}",
-                    "  Syncing filesystem before restart...".to_string().dimmed()
+                    "  Syncing filesystem before restart..."
+                        .to_string()
+                        .dimmed()
                 );
 
                 // filesystem sync

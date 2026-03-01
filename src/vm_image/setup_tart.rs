@@ -126,9 +126,7 @@ fn prompt_tart_vm_name() -> Result<String, String> {
         }
 
         if !available_vms.is_empty() && !available_vms.contains(&vm_name) {
-            println!(
-                "  Warning: '{vm_name}' was not found in `tart list`. Proceeding anyway."
-            );
+            println!("  Warning: '{vm_name}' was not found in `tart list`. Proceeding anyway.");
         }
 
         println!();

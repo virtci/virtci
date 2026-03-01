@@ -18,9 +18,8 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-static LOCK_FILE_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
-    std::env::temp_dir().join("vci-transfer.lock")
-});
+static LOCK_FILE_PATH: std::sync::LazyLock<PathBuf> =
+    std::sync::LazyLock::new(|| std::env::temp_dir().join("vci-transfer.lock"));
 
 extern "C" {
     fn get_process_start_time_native(pid: u32, out_start_time: *mut u64) -> bool;
