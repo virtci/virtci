@@ -6,13 +6,9 @@ trap 'rm -rf "$SEED_DIR"' EXIT
 
 cat > "$SEED_DIR/user-data" <<'EOF'
 #cloud-config
-chpasswd:
-expire: false
-users:
-    - name: debian
-    password: virtci
-    type: text
 ssh_pwauth: true
+runcmd:
+- echo 'debian:virtci' | chpasswd
 EOF
 
 cat > "$SEED_DIR/meta-data" <<EOF
