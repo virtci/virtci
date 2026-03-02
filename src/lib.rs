@@ -37,22 +37,24 @@ pub fn run_virtci(paths: VciGlobalPaths) {
             run_jobs(jobs, paths);
         }
         cli::Command::Setup(setup_args) => {
-            run_setup(setup_args);
+            run_setup(setup_args, &paths.home);
         }
         cli::Command::Cleanup(cleanup_args) => {
             run_cleanup(cleanup_args, paths);
         }
         cli::Command::List(list_args) => {
-            vm_image::list::run_list(list_args.verbose);
+            vm_image::list::run_list(list_args.verbose, &paths.home);
         }
         cli::Command::Export(export_args) => {
-            if let Err(e) = vm_image::export::run_export(&export_args.name, export_args.output) {
+            if let Err(e) =
+                vm_image::export::run_export(&export_args.name, export_args.output, &paths.home)
+            {
                 eprintln!("Export failed: {e}");
                 std::process::exit(1);
             }
         }
         cli::Command::Import(import_args) => {
-            if let Err(e) = vm_image::import::run_import(&import_args.archive) {
+            if let Err(e) = vm_image::import::run_import(&import_args.archive, &paths.home) {
                 eprintln!("Import failed: {e}");
                 std::process::exit(1);
             }
@@ -69,7 +71,7 @@ pub fn run_virtci(paths: VciGlobalPaths) {
     }
 }
 
-fn run_setup(args: cli::SetupArgs) {
+fn run_setup(args: cli::SetupArgs, home_path: &PathBuf) {
     assert!(
         !(args.qemu && args.tart),
         "Error: specify either --qemu or --tart, not both."
@@ -81,7 +83,7 @@ fn run_setup(args: cli::SetupArgs) {
     );
 
     if args.qemu {
-        if let Err(e) = vm_image::setup_qemu::run_interactive_setup() {
+        if let Err(e) = vm_image::setup_qemu::run_interactive_setup(home_path) {
             panic!("Setup failed: {e}");
         }
     }
@@ -89,7 +91,7 @@ fn run_setup(args: cli::SetupArgs) {
     #[cfg(target_os = "macos")]
     {
         if args.tart {
-            if let Err(e) = vm_image::setup_tart::run_interactive_setup() {
+            if let Err(e) = vm_image::setup_tart::run_interactive_setup(home_path) {
                 panic!("Setup failed: {e}");
             }
         }

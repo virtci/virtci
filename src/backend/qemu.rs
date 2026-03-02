@@ -296,7 +296,7 @@ impl VmBackend for QemuBackend {
 
         #[cfg(target_os = "windows")]
         let tpm_port = if qemu_config.tpm {
-            Some(get_tpm_port_flock()?)
+            Some(get_tpm_port_flock(temp_path)?)
         } else {
             None
         };
@@ -651,12 +651,12 @@ fn windows_path_to_wsl(path: &std::path::Path) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn get_tpm_port_flock() -> Result<(FileLock, u16), ()> {
+fn get_tpm_port_flock(temp_path: &PathBuf) -> Result<(FileLock, u16), ()> {
     const TPM_PORT_RANGE_START: u16 = 60001;
     const TPM_PORT_RANGE_END: u16 = 65000;
 
     for port in TPM_PORT_RANGE_START..=TPM_PORT_RANGE_END {
-        let lock_path = VCI_TEMP_PATH.join(format!("vci-qemu-tpm-port-{}.lock", port));
+        let lock_path = temp_path.join(format!("vci-qemu-tpm-port-{}.lock", port));
         let res = FileLock::try_new(lock_path);
         match res {
             Ok(lock) => {

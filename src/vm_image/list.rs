@@ -1,13 +1,15 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use crate::vm_image::{BackendConfig, ImageDescription, VCI_HOME_PATH};
+use std::path::PathBuf;
 
-pub fn run_list(verbose: bool) {
-    let mut images = load_all_images();
+use crate::vm_image::{BackendConfig, ImageDescription};
+
+pub fn run_list(verbose: bool, home_path: &PathBuf) {
+    let mut images = load_all_images(home_path);
 
     if images.is_empty() {
-        println!("No VM images found in {}", VCI_HOME_PATH.display());
+        println!("No VM images found in {}", home_path.display());
         return;
     }
 
@@ -27,8 +29,8 @@ pub fn run_list(verbose: bool) {
     }
 }
 
-fn load_all_images() -> Vec<ImageDescription> {
-    let Ok(entries) = std::fs::read_dir(&*VCI_HOME_PATH) else {
+fn load_all_images(home_path: &PathBuf) -> Vec<ImageDescription> {
+    let Ok(entries) = std::fs::read_dir(home_path) else {
         return Vec::new();
     };
 

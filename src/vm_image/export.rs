@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::vm_image::{BackendConfig, ImageDescription, QemuConfig, TartConfig, VCI_HOME_PATH};
+use crate::vm_image::{BackendConfig, ImageDescription, QemuConfig, TartConfig};
 
 struct ProgressReader<R> {
     inner: R,
@@ -75,8 +75,8 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-pub fn run_export(name: &str, output: Option<PathBuf>) -> Result<(), String> {
-    let desc = load_image(name)?;
+pub fn run_export(name: &str, output: Option<PathBuf>, home_path: &PathBuf) -> Result<(), String> {
+    let desc = load_image(name, home_path)?;
     let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.tar")));
 
     println!("Exporting '{}' to {}", name, output_path.display());
@@ -116,8 +116,8 @@ pub fn run_export(name: &str, output: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-fn load_image(name: &str) -> Result<ImageDescription, String> {
-    let vci_path = VCI_HOME_PATH.join(format!("{name}.vci"));
+fn load_image(name: &str, home_path: &PathBuf) -> Result<ImageDescription, String> {
+    let vci_path = home_path.join(format!("{name}.vci"));
     let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
         format!(
             "Failed to load image description '{}' (looked at {})",

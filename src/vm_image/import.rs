@@ -1,12 +1,12 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::io::Read;
 use std::path::Path;
+use std::{io::Read, path::PathBuf};
 
-use crate::vm_image::{BackendConfig, ImageDescription, VCI_HOME_PATH};
+use crate::vm_image::{BackendConfig, ImageDescription};
 
-pub fn run_import(archive_path: &Path) -> Result<(), String> {
+pub fn run_import(archive_path: &Path, home_path: &PathBuf) -> Result<(), String> {
     if !archive_path.exists() {
         return Err(format!("File not found: {}", archive_path.display()));
     }
@@ -58,7 +58,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to parse .vci from archive: {e}"))?;
     desc.name.clone_from(&name);
 
-    let dest_vci = VCI_HOME_PATH.join(format!("{}.vci", &name));
+    let dest_vci = home_path.join(format!("{}.vci", &name));
     if dest_vci.exists() {
         return Err(format!(
             "Image '{}' already exists at {}",
@@ -67,7 +67,7 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
         ));
     }
 
-    let managed_dir = VCI_HOME_PATH.join(&name);
+    let managed_dir = home_path.join(&name);
     std::fs::create_dir_all(&managed_dir)
         .map_err(|e| format!("Failed to create {}: {}", managed_dir.display(), e))?;
 
@@ -153,8 +153,8 @@ pub fn run_import(archive_path: &Path) -> Result<(), String> {
     let vci_out = serde_json::to_string_pretty(&desc)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
-    std::fs::create_dir_all(&*VCI_HOME_PATH)
-        .map_err(|e| format!("Failed to create {}: {}", VCI_HOME_PATH.display(), e))?;
+    std::fs::create_dir_all(home_path)
+        .map_err(|e| format!("Failed to create {}: {}", home_path.display(), e))?;
     std::fs::write(&dest_vci, vci_out)
         .map_err(|e| format!("Failed to write {}: {}", dest_vci.display(), e))?;
 

@@ -1,9 +1,11 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+use std::path::PathBuf;
+
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, Arch, BackendConfig, GuestOs, ImageDescription,
-    SshConfig, TartConfig, VCI_HOME_PATH,
+    SshConfig, TartConfig,
 };
 
 /// Interactive Tart image setup (macOS ARM64 only)
@@ -13,13 +15,13 @@ use crate::vm_image::{
 /// 4. SSH credentials
 /// 5. Summary + confirmation
 /// 6. Save .vci file
-pub fn run_interactive_setup() -> Result<(), String> {
+pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
     println!("VCI Tart Image Setup");
     println!("====================\n");
 
     verify_tart_installed()?;
 
-    let name = prompt_image_name()?;
+    let name = prompt_image_name(home_path)?;
     let vm_name = prompt_tart_vm_name()?;
     let guest_os = prompt_guest_os()?;
     let ssh = prompt_ssh_config()?;
@@ -36,8 +38,8 @@ pub fn run_interactive_setup() -> Result<(), String> {
     print_summary(&config);
 
     if prompt_yes_no("Save this configuration?", true)? {
-        save_config(&config)?;
-        println!("\nSaved to {}/{}.vci", VCI_HOME_PATH.display(), config.name);
+        save_config(&config, home_path)?;
+        println!("\nSaved to {}/{}.vci", home_path.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);
     } else {
         println!("Setup cancelled.");
@@ -62,7 +64,7 @@ fn verify_tart_installed() -> Result<(), String> {
 const INVALID_NAME_CHARS: [char; 12] =
     ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ', '.', '\t'];
 
-fn validate_image_name(name: &str) -> Result<(), String> {
+fn validate_image_name(name: &str, home_path: &PathBuf) -> Result<(), String> {
     if name.is_empty() {
         return Err("Name cannot be empty".to_string());
     }
@@ -71,7 +73,7 @@ fn validate_image_name(name: &str) -> Result<(), String> {
         return Err(format!("Name contains invalid character: '{c}'"));
     }
 
-    let vci_path = VCI_HOME_PATH.join(format!("{name}.vci"));
+    let vci_path = home_path.join(format!("{name}.vci"));
     if vci_path.exists() {
         return Err(format!(
             "VCI image '{}' already exists at {}",
@@ -84,14 +86,14 @@ fn validate_image_name(name: &str) -> Result<(), String> {
 }
 
 /// Step 1
-fn prompt_image_name() -> Result<String, String> {
+fn prompt_image_name(home_path: &PathBuf) -> Result<String, String> {
     println!("Step 1: Image Name");
     println!("  This name will be used in workflow files (e.g., image: macos-sequoia)");
 
     loop {
         let name = read_line("Image name: ")?;
 
-        match validate_image_name(&name) {
+        match validate_image_name(&name, home_path) {
             Ok(()) => {
                 println!();
                 return Ok(name);
@@ -300,13 +302,13 @@ fn print_summary(config: &ImageDescription) {
     println!();
 }
 
-fn save_config(config: &ImageDescription) -> Result<(), String> {
-    if !VCI_HOME_PATH.exists() {
-        std::fs::create_dir_all(&*VCI_HOME_PATH)
+fn save_config(config: &ImageDescription, home_path: &PathBuf) -> Result<(), String> {
+    if !home_path.exists() {
+        std::fs::create_dir_all(home_path)
             .map_err(|e| format!("Failed to create VCI home directory: {e}"))?;
     }
 
-    let file_path = VCI_HOME_PATH.join(format!("{}.vci", config.name));
+    let file_path = home_path.join(format!("{}.vci", config.name));
 
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;

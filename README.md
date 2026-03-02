@@ -70,9 +70,9 @@ Setup a QEMU or Tart VM through your method of choice. See [docs](/docs) for mor
 ```sh
 virtci setup --qemu
 # Follow the interactive setup.
-# Note that you may need to use UEFI files.
-# Note that you may need to use UEFI files.
-# VirtCI automatically scans your system files to find the relevant UEFI files.
+# VirtCI will, by default, use the settings that are validated on common
+# VM configurations across multiple operating systems and cpu architectures.
+# VirtCI automatically scans your system files to find relevant UEFI files if necessary.
 ```
 
 #### Add Tart VM

@@ -13,41 +13,6 @@ pub mod setup_qemu;
 #[cfg(target_os = "macos")]
 pub mod setup_tart;
 
-pub(crate) static VCI_HOME_PATH: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
-    if let Some(vci_home) = std::env::var_os("VCI_HOME") {
-        return PathBuf::from(vci_home);
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // ~/.vci/ (kinda matches tart)
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(".vci");
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // $XDG_DATA_HOME/vci or ~/.local/share/vci/
-        if let Some(xdg_data) = std::env::var_os("XDG_DATA_HOME") {
-            return PathBuf::from(xdg_data).join("vci");
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(".local/share/vci");
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // %LOCALAPPDATA%\vci\
-        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(local_app_data).join("vci");
-        }
-    }
-
-    PathBuf::from(".vci")
-});
-
 // https://www.linux-kvm.org/downloads/lersek/ovmf-whitepaper-c770f8c.txt
 // https://github.com/tianocore/tianocore.github.io/wiki/How-to-run-OVMF
 // The UEFI firmware can be split into two sections
@@ -137,7 +102,7 @@ pub struct ImageDescription {
     pub arch: Arch,
     pub backend: BackendConfig,
     pub ssh: SshConfig,
-    /// When true, VCI owns the backing files (stored in VCI_HOME_PATH/<name>/).
+    /// When true, VirtCI owns the backing files (stored in home_path/<name>/).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed: Option<bool>,
 }
