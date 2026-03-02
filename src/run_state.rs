@@ -1,16 +1,17 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+use std::path::PathBuf;
+
+use crate::cli;
 use crate::file_lock::{FileLock, FileLockError, LockMetadata};
-use crate::{cli, VCI_TEMP_PATH};
 
 /// Returns metadata for all lock files currently held by a live process
 /// that have run info (run_name + ssh target). Doesn't do stale ones.
-pub fn list_active_runs() -> Vec<LockMetadata> {
-    let temp_dir = &*VCI_TEMP_PATH;
+pub fn list_active_runs(temp_path: &PathBuf) -> Vec<LockMetadata> {
     let mut active = Vec::new();
 
-    let Ok(entries) = std::fs::read_dir(temp_dir) else {
+    let Ok(entries) = std::fs::read_dir(temp_path) else {
         return active;
     };
 
@@ -51,8 +52,8 @@ pub fn list_active_runs() -> Vec<LockMetadata> {
     active
 }
 
-pub fn find_active_run(name: &str) -> Option<LockMetadata> {
-    let runs = list_active_runs();
+pub fn find_active_run(name: &str, temp_path: &PathBuf) -> Option<LockMetadata> {
+    let runs = list_active_runs(temp_path);
 
     if let Some(run) = runs.iter().find(|r| r.run_name.as_deref() == Some(name)) {
         return Some(run.clone());
@@ -61,10 +62,10 @@ pub fn find_active_run(name: &str) -> Option<LockMetadata> {
     None
 }
 
-pub fn run_active() {
+pub fn run_active(temp_path: &PathBuf) {
     use colored::Colorize;
 
-    let runs = list_active_runs();
+    let runs = list_active_runs(temp_path);
     if runs.is_empty() {
         println!("{}", "No active VirtCI jobs".dimmed());
         return;
@@ -82,8 +83,8 @@ pub fn run_active() {
     }
 }
 
-pub fn run_shell(args: &cli::ShellArgs) {
-    let run = find_active_run(&args.name);
+pub fn run_shell(args: &cli::ShellArgs, temp_path: &PathBuf) {
+    let run = find_active_run(&args.name, temp_path);
     match run {
         None => {
             eprintln!("No active job found with name '{}'", args.name);

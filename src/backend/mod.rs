@@ -9,7 +9,7 @@ pub mod tart;
 use crate::vm_image::{Arch, GuestOs, SshTarget};
 
 pub trait VmBackend {
-    fn setup_clone(&mut self) -> Result<(), ()>;
+    fn setup_clone(&mut self, temp_path: &PathBuf) -> Result<(), ()>;
 
     fn start_vm(&mut self, offline: bool) -> Result<(), ()>;
 

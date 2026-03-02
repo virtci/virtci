@@ -6,11 +6,9 @@ use std::{path::PathBuf, process::Child};
 use colored::Colorize;
 
 use crate::{
-    backend::VmBackend,
-    backend::{expand_path, expand_path_in_string},
+    backend::{expand_path, expand_path_in_string, VmBackend},
     file_lock::FileLock,
     vm_image::{Arch, GuestOs, ImageDescription},
-    VCI_TEMP_PATH,
 };
 
 pub struct QemuRunner {
@@ -44,6 +42,7 @@ impl QemuBackend {
         base_image: ImageDescription,
         cpus: u32,
         memory_mb: u64,
+        temp_path: &PathBuf,
     ) -> Result<Self, ()> {
         let mut backend = QemuBackend {
             name,
@@ -54,7 +53,7 @@ impl QemuBackend {
             runner: None,
         };
 
-        backend.setup_clone()?;
+        backend.setup_clone(temp_path)?;
 
         Ok(backend)
     }
@@ -175,7 +174,8 @@ impl QemuBackend {
         // disable-modern=on on Windows forces virtio legacy mode (virtio 1.0
         // disabled), using INTx interrupts instead of MSI-X which crash WHPX.
         #[cfg(target_os = "windows")]
-        cmd.arg("-device").arg("virtio-net-pci,netdev=net0,disable-modern=on");
+        cmd.arg("-device")
+            .arg("virtio-net-pci,netdev=net0,disable-modern=on");
         #[cfg(not(target_os = "windows"))]
         cmd.arg("-device").arg("virtio-net-pci,netdev=net0");
 
@@ -228,21 +228,20 @@ impl QemuBackend {
 impl VmBackend for QemuBackend {
     /// BEFORE: self.runner.is_none()
     /// AFTER: self.runner.is_some()
-    fn setup_clone(&mut self) -> Result<(), ()> {
+    fn setup_clone(&mut self, temp_path: &PathBuf) -> Result<(), ()> {
         assert!(self.runner.is_none());
 
         let qemu_config = self.base_image.backend.as_qemu().unwrap();
 
-        let host_port_flock = get_port_flock().expect("Failed to get any port for QEMU");
+        let host_port_flock = get_port_flock(temp_path).expect("Failed to get any port for QEMU");
 
         let source_image = expand_path(&qemu_config.image);
-        let temp_image =
-            VCI_TEMP_PATH.join(format!("vci-{}-{}.qcow2", self.name, host_port_flock.1));
+        let temp_image = temp_path.join(format!("vci-{}-{}.qcow2", self.name, host_port_flock.1));
         create_backing_file(&source_image, &temp_image)?;
 
         let temp_vars = if let Some(ref split) = qemu_config.uefi {
             let temp_vars_path =
-                VCI_TEMP_PATH.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
+                temp_path.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
             let contents = std::fs::read(expand_path(&split.vars)).map_err(|_| ())?;
             std::fs::write(&temp_vars_path, &contents).map_err(|_| ())?;
             Some(temp_vars_path)
@@ -262,17 +261,17 @@ impl VmBackend for QemuBackend {
                     };
 
                     let source_path = expand_path(file_path);
-                    let temp_path = VCI_TEMP_PATH.join(format!(
+                    let temp_drive_path = temp_path.join(format!(
                         "vci-{}-drive{}-{}.qcow2",
                         &self.name, idx, host_port_flock.1
                     ));
-                    create_backing_file(&source_path, &temp_path)?;
+                    create_backing_file(&source_path, &temp_drive_path)?;
 
                     let updated_spec = drive_spec.replace(
                         &format!("file={file_path}"),
-                        &format!("file={}", temp_path.display()),
+                        &format!("file={}", temp_drive_path.display()),
                     );
-                    temp_additional_drives.push((updated_spec, temp_path));
+                    temp_additional_drives.push((updated_spec, temp_drive_path));
                 } else {
                     // TODO is this necessary?
                     // temp_additional_drives.push((drive_spec.clone(), ??));
@@ -282,10 +281,9 @@ impl VmBackend for QemuBackend {
 
         let (tpm_state_dir, tpm_socket_path, tpm_flock) = if qemu_config.tpm {
             let tpm_lock_file =
-                VCI_TEMP_PATH.join(format!("vci-{}-{}-tpm.lock", self.name, host_port_flock.1));
+                temp_path.join(format!("vci-{}-{}-tpm.lock", self.name, host_port_flock.1));
             let tpm_flock_file = FileLock::try_new(tpm_lock_file).map_err(|_| ())?;
-            let state_dir =
-                VCI_TEMP_PATH.join(format!("vci-{}-{}-tpm", self.name, host_port_flock.1));
+            let state_dir = temp_path.join(format!("vci-{}-{}-tpm", self.name, host_port_flock.1));
             std::fs::create_dir_all(&state_dir).map_err(|_| ())?;
             #[cfg(not(target_os = "windows"))]
             let socket_path = Some(state_dir.join("swtpm-sock"));
@@ -625,12 +623,12 @@ pub fn check_kvm_access() -> Result<(), String> {
     }
 }
 
-fn get_port_flock() -> Result<(FileLock, u16), ()> {
+fn get_port_flock(temp_path: &PathBuf) -> Result<(FileLock, u16), ()> {
     const PORT_RANGE_START: u16 = 50000;
     const PORT_RANGE_END: u16 = 60000;
 
     for port in PORT_RANGE_START..=PORT_RANGE_END {
-        let lock_path = VCI_TEMP_PATH.join(format!("vci-qemu-port-{port}.lock"));
+        let lock_path = temp_path.join(format!("vci-qemu-port-{port}.lock"));
         let res = FileLock::try_new(lock_path);
         if let Ok(lock) = res {
             return Ok((lock, port));
@@ -670,10 +668,8 @@ fn get_tpm_port_flock() -> Result<(FileLock, u16), ()> {
     return Err(());
 }
 
-pub fn cleanup_stale_qemu_files() {
-    let temp_dir = &*VCI_TEMP_PATH;
-
-    let entries: Vec<_> = match std::fs::read_dir(temp_dir) {
+pub fn cleanup_stale_qemu_files(temp_path: &PathBuf) {
+    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
         Ok(e) => e.filter_map(std::result::Result::ok).collect(),
         Err(_) => return,
     };
@@ -699,7 +695,7 @@ pub fn cleanup_stale_qemu_files() {
         let tpm_lock_suffix = format!("-{port_str}-tpm.lock");
         let tpm_dir_suffix = format!("-{port_str}-tpm");
 
-        if let Ok(assoc_entries) = std::fs::read_dir(temp_dir) {
+        if let Ok(assoc_entries) = std::fs::read_dir(temp_path) {
             for assoc in assoc_entries.flatten() {
                 let aname = assoc.file_name();
                 let aname_str = aname.to_string_lossy();
@@ -728,7 +724,7 @@ pub fn cleanup_stale_qemu_files() {
         drop(lock);
     }
 
-    let entries: Vec<_> = match std::fs::read_dir(temp_dir) {
+    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
         Ok(e) => e.filter_map(std::result::Result::ok).collect(),
         Err(_) => return,
     };
@@ -746,7 +742,7 @@ pub fn cleanup_stale_qemu_files() {
         };
 
         let dir_name = name_str.strip_suffix(".lock").unwrap();
-        let dir_path = temp_dir.join(std::path::Path::new(dir_name));
+        let dir_path = temp_path.join(std::path::Path::new(dir_name));
         if dir_path.is_dir() {
             let _ = std::fs::remove_dir_all(&dir_path);
         }
@@ -756,7 +752,7 @@ pub fn cleanup_stale_qemu_files() {
     }
 
     // windows specific TCP based TPM
-    let entries: Vec<_> = match std::fs::read_dir(temp_dir) {
+    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
         Ok(e) => e.filter_map(std::result::Result::ok).collect(),
         Err(_) => return,
     };

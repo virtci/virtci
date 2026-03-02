@@ -15,7 +15,11 @@ use russh::client;
 use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
 
-use crate::{backend::VmBackend, vm_image::GuestOs, vm_image::SshTarget, yaml};
+use crate::{
+    backend::VmBackend,
+    vm_image::{GuestOs, SshTarget},
+    yaml, VciGlobalPaths,
+};
 
 pub const SSH_WAIT_TIMEOUT: u64 = 300;
 pub const SSH_POLL_INTERVAL: u64 = 2;
@@ -53,7 +57,7 @@ pub enum StepKind {
 }
 
 impl Job {
-    pub async fn run(&mut self) -> Result<(), String> {
+    pub async fn run(&mut self, _paths: &VciGlobalPaths) -> Result<(), String> {
         use colored::Colorize;
 
         let ssh_target = self.backend.ssh_target();

@@ -18,6 +18,8 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+/// This one doesn't need to be part of the lib.rs `VciGlobalPaths`,
+/// as it genuinely does need to be global state.
 static LOCK_FILE_PATH: std::sync::LazyLock<PathBuf> =
     std::sync::LazyLock::new(|| std::env::temp_dir().join("vci-transfer.lock"));
 

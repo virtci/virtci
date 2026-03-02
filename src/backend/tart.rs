@@ -1,7 +1,7 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::process::Child;
+use std::{path::PathBuf, process::Child};
 
 use colored::Colorize;
 
@@ -9,7 +9,6 @@ use crate::{
     backend::VmBackend,
     file_lock::FileLock,
     vm_image::{GuestOs, ImageDescription},
-    VCI_TEMP_PATH,
 };
 
 pub struct TartRunner {
@@ -35,6 +34,7 @@ impl TartBackend {
         base_image: ImageDescription,
         cpus: u32,
         memory_mb: u64,
+        temp_path: &PathBuf,
     ) -> Result<Self, ()> {
         let mut backend = TartBackend {
             name,
@@ -44,18 +44,19 @@ impl TartBackend {
             runner: None,
         };
 
-        backend.setup_clone()?;
+        backend.setup_clone(temp_path)?;
 
         Ok(backend)
     }
 }
 
 impl VmBackend for TartBackend {
-    fn setup_clone(&mut self) -> Result<(), ()> {
+    fn setup_clone(&mut self, temp_path: &PathBuf) -> Result<(), ()> {
         assert!(self.runner.is_none());
 
         let tart_config = self.base_image.backend.as_tart().unwrap();
-        let (slot_lock, slot) = get_slot_flock().expect("Failed to acquire tart slot lock");
+        let (slot_lock, slot) =
+            get_slot_flock(temp_path).expect("Failed to acquire tart slot lock");
 
         let clone_name = format!("vci-{}-{}", self.name, slot);
         let _ = std::process::Command::new("tart")
@@ -269,12 +270,12 @@ fn resolve_tart_ip(clone_name: &str) -> Result<String, ()> {
     Err(())
 }
 
-fn get_slot_flock() -> Result<(FileLock, u32), ()> {
+fn get_slot_flock(temp_path: &PathBuf) -> Result<(FileLock, u32), ()> {
     const SLOT_RANGE_START: u32 = 0;
     const SLOT_RANGE_END: u32 = 10000;
 
     for slot in SLOT_RANGE_START..=SLOT_RANGE_END {
-        let lock_path = VCI_TEMP_PATH.join(format!("vci-tart-slot-{slot}.lock"));
+        let lock_path = temp_path.join(format!("vci-tart-slot-{slot}.lock"));
         if let Ok(lock) = FileLock::try_new(lock_path) {
             return Ok((lock, slot));
         }
@@ -282,10 +283,8 @@ fn get_slot_flock() -> Result<(FileLock, u32), ()> {
     Err(())
 }
 
-pub fn cleanup_stale_tart_clones() {
-    let temp_dir = &*VCI_TEMP_PATH;
-
-    let entries: Vec<_> = match std::fs::read_dir(temp_dir) {
+pub fn cleanup_stale_tart_clones(temp_path: &PathBuf) {
+    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
         Ok(e) => e.filter_map(std::result::Result::ok).collect(),
         Err(_) => return,
     };

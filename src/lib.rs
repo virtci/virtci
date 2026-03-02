@@ -13,14 +13,11 @@ mod yaml;
 
 use std::path::PathBuf;
 
-pub(crate) static VCI_TEMP_PATH: std::sync::LazyLock<PathBuf> =
-    std::sync::LazyLock::new(|| std::env::temp_dir().join("vci"));
-
-pub fn run_virtci() {
+pub fn run_virtci(paths: VciGlobalPaths) {
     setup_signal_handlers();
 
-    backend::qemu::cleanup_stale_qemu_files();
-    backend::tart::cleanup_stale_tart_clones();
+    backend::qemu::cleanup_stale_qemu_files(&paths.temp);
+    backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     let args: cli::Args = argh::from_env();
 
@@ -29,21 +26,21 @@ pub fn run_virtci() {
             println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
         }
         cli::Command::Run(run_args) => {
-            std::fs::create_dir_all(&*VCI_TEMP_PATH).unwrap_or_else(|e| {
+            std::fs::create_dir_all(&paths.temp).unwrap_or_else(|e| {
                 panic!(
                     "Failed to create temp directory {}: {}",
-                    VCI_TEMP_PATH.display(),
+                    paths.temp.display(),
                     e
                 )
             });
-            let jobs = extract_yaml_workflows(&run_args);
-            run_jobs(jobs);
+            let jobs = extract_yaml_workflows(&run_args, &paths);
+            run_jobs(jobs, paths);
         }
         cli::Command::Setup(setup_args) => {
             run_setup(setup_args);
         }
         cli::Command::Cleanup(cleanup_args) => {
-            run_cleanup(cleanup_args);
+            run_cleanup(cleanup_args, paths);
         }
         cli::Command::List(list_args) => {
             vm_image::list::run_list(list_args.verbose);
@@ -61,10 +58,10 @@ pub fn run_virtci() {
             }
         }
         cli::Command::Active(_) => {
-            run_state::run_active();
+            run_state::run_active(&paths.temp);
         }
         cli::Command::Shell(shell_args) => {
-            run_state::run_shell(&shell_args);
+            run_state::run_shell(&shell_args, &paths.temp);
         }
         cli::Command::Serve(serve_args) => {
             web::serve(serve_args.port);
@@ -104,7 +101,7 @@ fn run_setup(args: cli::SetupArgs) {
     }
 }
 
-fn run_jobs(jobs: Vec<run::Job>) {
+fn run_jobs(jobs: Vec<run::Job>, paths: VciGlobalPaths) {
     use colored::Colorize;
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -118,7 +115,7 @@ fn run_jobs(jobs: Vec<run::Job>) {
         let job_name = job.name.clone();
         println!("{}", format!("=== Job {job_name} ===").cyan().bold());
 
-        let result = rt.block_on(job.run());
+        let result = rt.block_on(job.run(&paths));
 
         match result {
             Ok(()) => println!(
@@ -136,8 +133,8 @@ fn run_jobs(jobs: Vec<run::Job>) {
         }
     }
 
-    backend::qemu::cleanup_stale_qemu_files();
-    backend::tart::cleanup_stale_tart_clones();
+    backend::qemu::cleanup_stale_qemu_files(&paths.temp);
+    backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     if failed {
         std::process::exit(1);
@@ -146,11 +143,11 @@ fn run_jobs(jobs: Vec<run::Job>) {
     println!("{}", "All jobs completed successfully".green().bold());
 }
 
-fn run_cleanup(args: cli::CleanupArgs) {
+fn run_cleanup(args: cli::CleanupArgs, paths: VciGlobalPaths) {
     use colored::Colorize;
     use std::io::{self, Write};
 
-    let files = find_vci_temp_files(&VCI_TEMP_PATH);
+    let files = find_vci_temp_files(&paths.temp);
 
     if files.is_empty() {
         println!("{}", "No temporary VCI files found".dimmed());
@@ -277,8 +274,8 @@ async fn signal_handler() {
     }
 }
 
-fn load_image_description(image_name: &str) -> vm_image::ImageDescription {
-    let vci_path = vm_image::VCI_HOME_PATH.join(format!("{image_name}.vci"));
+fn load_image_description(image_name: &str, home_path: &PathBuf) -> vm_image::ImageDescription {
+    let vci_path = home_path.join(format!("{image_name}.vci"));
     let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|_| {
         panic!(
             "Failed to load image description '{}' (looked at {})",
@@ -292,7 +289,7 @@ fn load_image_description(image_name: &str) -> vm_image::ImageDescription {
     desc
 }
 
-fn extract_yaml_workflows(args: &cli::RunArgs) -> Vec<run::Job> {
+fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<run::Job> {
     let file_contents = std::fs::read_to_string(&args.workflow)
         .unwrap_or_else(|_| panic!("Failed to load workflow file: {}", args.workflow.display()));
 
@@ -310,7 +307,7 @@ fn extract_yaml_workflows(args: &cli::RunArgs) -> Vec<run::Job> {
         //     .to_string();
         let image_name = yaml_job.image;
 
-        let image_desc = load_image_description(&image_name);
+        let image_desc = load_image_description(&image_name, &paths.home);
 
         // let cpus: u32 = match cli::resolve_for_job(&cpus_overrides, &name) {
         //     Some(s) => s.parse::<u32>().expect("Expected number for --cpus"),
@@ -369,16 +366,24 @@ fn extract_yaml_workflows(args: &cli::RunArgs) -> Vec<run::Job> {
 
         let backend: Box<dyn backend::VmBackend> = match &image_desc.backend {
             vm_image::BackendConfig::Qemu(_) => Box::new(
-                backend::qemu::QemuBackend::new(name.clone(), image_desc, cpus, memory_mb)
-                    .unwrap_or_else(|()| {
-                        panic!("Failed to create QEMU backend for job '{}'", &name)
-                    }),
+                backend::qemu::QemuBackend::new(
+                    name.clone(),
+                    image_desc,
+                    cpus,
+                    memory_mb,
+                    &paths.temp,
+                )
+                .unwrap_or_else(|()| panic!("Failed to create QEMU backend for job '{}'", &name)),
             ),
             vm_image::BackendConfig::Tart(_) => Box::new(
-                backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb)
-                    .unwrap_or_else(|()| {
-                        panic!("Failed to create Tart backend for job '{}'", &name)
-                    }),
+                backend::tart::TartBackend::new(
+                    name.clone(),
+                    image_desc,
+                    cpus,
+                    memory_mb,
+                    &paths.temp,
+                )
+                .unwrap_or_else(|()| panic!("Failed to create Tart backend for job '{}'", &name)),
             ),
         };
 
@@ -391,4 +396,57 @@ fn extract_yaml_workflows(args: &cli::RunArgs) -> Vec<run::Job> {
     }
 
     jobs
+}
+
+/// Tests need to be able to control where they're writing to. Using
+/// `VciGlobalPaths::default()` works for normal use.
+pub struct VciGlobalPaths {
+    pub home: PathBuf,
+    pub temp: PathBuf,
+}
+
+impl VciGlobalPaths {
+    fn default_home_path() -> PathBuf {
+        if let Some(vci_home) = std::env::var_os("VCI_HOME") {
+            return PathBuf::from(vci_home);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // ~/.vci/ (kinda matches tart)
+            if let Some(home) = std::env::var_os("HOME") {
+                return PathBuf::from(home).join(".vci");
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // $XDG_DATA_HOME/vci or ~/.local/share/vci/
+            if let Some(xdg_data) = std::env::var_os("XDG_DATA_HOME") {
+                return PathBuf::from(xdg_data).join("vci");
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                return PathBuf::from(home).join(".local/share/vci");
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // %LOCALAPPDATA%\vci\
+            if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+                return PathBuf::from(local_app_data).join("vci");
+            }
+        }
+
+        PathBuf::from(".vci")
+    }
+}
+
+impl Default for VciGlobalPaths {
+    fn default() -> Self {
+        Self {
+            home: Self::default_home_path(),
+            temp: std::env::temp_dir().join("vci"),
+        }
+    }
 }
