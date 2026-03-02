@@ -83,6 +83,21 @@ Run in powershell, and assuming that is your qemu executable install location.
 -netdev user,id=net0,hostfwd=tcp::2222-:22 `
 -device virtio-net-pci,netdev=net0,disable-modern=on `
 -serial stdio
+
+& 'C:\Program Files\qemu\qemu-system-aarch64.exe' `
+-machine virt `
+-cpu cortex-a72 `
+-name debian-arm64 `
+-m 1024M `
+-smp 2 `
+-bios 'C:\Program Files\qemu\share\edk2-aarch64-code.fd' `
+-drive file=test/upstream_image/debian-12-genericcloud-arm64.qcow2,format=qcow2,if=virtio `
+-drive file=test/upstream_image/seed.iso,format=raw,if=virtio,readonly=on `
+-rtc base=utc `
+-accel tcg `
+-netdev user,id=net0,hostfwd=tcp::2223-:22 `
+-device virtio-net-pci,netdev=net0,disable-modern=on `
+-serial stdio
 ```
 
 ## SSH Into VM to Validate it Works
