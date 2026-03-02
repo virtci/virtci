@@ -1,7 +1,7 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, Arch, BackendConfig, GuestOs, ImageDescription,
@@ -64,7 +64,7 @@ fn verify_tart_installed() -> Result<(), String> {
 const INVALID_NAME_CHARS: [char; 12] =
     ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ', '.', '\t'];
 
-fn validate_image_name(name: &str, home_path: &PathBuf) -> Result<(), String> {
+fn validate_image_name(name: &str, home_path: &Path) -> Result<(), String> {
     if name.is_empty() {
         return Err("Name cannot be empty".to_string());
     }
@@ -86,7 +86,7 @@ fn validate_image_name(name: &str, home_path: &PathBuf) -> Result<(), String> {
 }
 
 /// Step 1
-fn prompt_image_name(home_path: &PathBuf) -> Result<String, String> {
+fn prompt_image_name(home_path: &Path) -> Result<String, String> {
     println!("Step 1: Image Name");
     println!("  This name will be used in workflow files (e.g., image: macos-sequoia)");
 

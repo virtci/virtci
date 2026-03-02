@@ -11,9 +11,9 @@ mod vm_image;
 mod web;
 mod yaml;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-pub fn run_virtci(paths: VciGlobalPaths) {
+pub fn run_virtci(paths: &VciGlobalPaths) {
     setup_signal_handlers();
 
     backend::qemu::cleanup_stale_qemu_files(&paths.temp);
@@ -33,7 +33,7 @@ pub fn run_virtci(paths: VciGlobalPaths) {
                     e
                 )
             });
-            let jobs = extract_yaml_workflows(&run_args, &paths);
+            let jobs = extract_yaml_workflows(&run_args, paths);
             run_jobs(jobs, paths);
         }
         cli::Command::Setup(setup_args) => {
@@ -103,7 +103,7 @@ fn run_setup(args: cli::SetupArgs, home_path: &PathBuf) {
     }
 }
 
-fn run_jobs(jobs: Vec<run::Job>, paths: VciGlobalPaths) {
+fn run_jobs(jobs: Vec<run::Job>, paths: &VciGlobalPaths) {
     use colored::Colorize;
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -117,7 +117,7 @@ fn run_jobs(jobs: Vec<run::Job>, paths: VciGlobalPaths) {
         let job_name = job.name.clone();
         println!("{}", format!("=== Job {job_name} ===").cyan().bold());
 
-        let result = rt.block_on(job.run(&paths));
+        let result = rt.block_on(job.run(paths));
 
         match result {
             Ok(()) => println!(
@@ -145,7 +145,7 @@ fn run_jobs(jobs: Vec<run::Job>, paths: VciGlobalPaths) {
     println!("{}", "All jobs completed successfully".green().bold());
 }
 
-fn run_cleanup(args: cli::CleanupArgs, paths: VciGlobalPaths) {
+fn run_cleanup(args: cli::CleanupArgs, paths: &VciGlobalPaths) {
     use colored::Colorize;
     use std::io::{self, Write};
 
@@ -276,7 +276,7 @@ async fn signal_handler() {
     }
 }
 
-fn load_image_description(image_name: &str, home_path: &PathBuf) -> vm_image::ImageDescription {
+fn load_image_description(image_name: &str, home_path: &Path) -> vm_image::ImageDescription {
     let vci_path = home_path.join(format!("{image_name}.vci"));
     let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|_| {
         panic!(

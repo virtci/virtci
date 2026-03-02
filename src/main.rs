@@ -4,5 +4,5 @@
 use virtci::run_virtci;
 
 fn main() {
-    run_virtci(virtci::VciGlobalPaths::default());
+    run_virtci(&virtci::VciGlobalPaths::default());
 }

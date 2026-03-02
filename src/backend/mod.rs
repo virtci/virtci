@@ -1,7 +1,10 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 pub mod qemu;
 pub mod tart;
@@ -9,7 +12,7 @@ pub mod tart;
 use crate::vm_image::{Arch, GuestOs, SshTarget};
 
 pub trait VmBackend {
-    fn setup_clone(&mut self, temp_path: &PathBuf) -> Result<(), ()>;
+    fn setup_clone(&mut self, temp_path: &Path) -> Result<(), ()>;
 
     fn start_vm(&mut self, offline: bool) -> Result<(), ()>;
 

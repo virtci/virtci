@@ -1,7 +1,10 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::{path::PathBuf, process::Child};
+use std::{
+    path::Path,
+    process::Child,
+};
 
 use colored::Colorize;
 
@@ -34,7 +37,7 @@ impl TartBackend {
         base_image: ImageDescription,
         cpus: u32,
         memory_mb: u64,
-        temp_path: &PathBuf,
+        temp_path: &Path,
     ) -> Result<Self, ()> {
         let mut backend = TartBackend {
             name,
@@ -51,7 +54,7 @@ impl TartBackend {
 }
 
 impl VmBackend for TartBackend {
-    fn setup_clone(&mut self, temp_path: &PathBuf) -> Result<(), ()> {
+    fn setup_clone(&mut self, temp_path: &Path) -> Result<(), ()> {
         assert!(self.runner.is_none());
 
         let tart_config = self.base_image.backend.as_tart().unwrap();
@@ -270,7 +273,7 @@ fn resolve_tart_ip(clone_name: &str) -> Result<String, ()> {
     Err(())
 }
 
-fn get_slot_flock(temp_path: &PathBuf) -> Result<(FileLock, u32), ()> {
+fn get_slot_flock(temp_path: &Path) -> Result<(FileLock, u32), ()> {
     const SLOT_RANGE_START: u32 = 0;
     const SLOT_RANGE_END: u32 = 10000;
 
@@ -283,7 +286,7 @@ fn get_slot_flock(temp_path: &PathBuf) -> Result<(FileLock, u32), ()> {
     Err(())
 }
 
-pub fn cleanup_stale_tart_clones(temp_path: &PathBuf) {
+pub fn cleanup_stale_tart_clones(temp_path: &Path) {
     let entries: Vec<_> = match std::fs::read_dir(temp_path) {
         Ok(e) => e.filter_map(std::result::Result::ok).collect(),
         Err(_) => return,

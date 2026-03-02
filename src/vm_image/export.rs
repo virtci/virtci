@@ -75,7 +75,7 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-pub fn run_export(name: &str, output: Option<PathBuf>, home_path: &PathBuf) -> Result<(), String> {
+pub fn run_export(name: &str, output: Option<PathBuf>, home_path: &Path) -> Result<(), String> {
     let desc = load_image(name, home_path)?;
     let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.tar")));
 
@@ -116,7 +116,7 @@ pub fn run_export(name: &str, output: Option<PathBuf>, home_path: &PathBuf) -> R
     Ok(())
 }
 
-fn load_image(name: &str, home_path: &PathBuf) -> Result<ImageDescription, String> {
+fn load_image(name: &str, home_path: &Path) -> Result<ImageDescription, String> {
     let vci_path = home_path.join(format!("{name}.vci"));
     let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
         format!(

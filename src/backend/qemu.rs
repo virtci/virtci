@@ -1,7 +1,10 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::{path::PathBuf, process::Child};
+use std::{
+    path::{Path, PathBuf},
+    process::Child,
+};
 
 use colored::Colorize;
 
@@ -42,7 +45,7 @@ impl QemuBackend {
         base_image: ImageDescription,
         cpus: u32,
         memory_mb: u64,
-        temp_path: &PathBuf,
+        temp_path: &Path,
     ) -> Result<Self, ()> {
         let mut backend = QemuBackend {
             name,
@@ -228,7 +231,7 @@ impl QemuBackend {
 impl VmBackend for QemuBackend {
     /// BEFORE: self.runner.is_none()
     /// AFTER: self.runner.is_some()
-    fn setup_clone(&mut self, temp_path: &PathBuf) -> Result<(), ()> {
+    fn setup_clone(&mut self, temp_path: &Path) -> Result<(), ()> {
         assert!(self.runner.is_none());
 
         let qemu_config = self.base_image.backend.as_qemu().unwrap();
@@ -623,7 +626,7 @@ pub fn check_kvm_access() -> Result<(), String> {
     }
 }
 
-fn get_port_flock(temp_path: &PathBuf) -> Result<(FileLock, u16), ()> {
+fn get_port_flock(temp_path: &Path) -> Result<(FileLock, u16), ()> {
     const PORT_RANGE_START: u16 = 50000;
     const PORT_RANGE_END: u16 = 60000;
 
@@ -651,7 +654,7 @@ fn windows_path_to_wsl(path: &std::path::Path) -> String {
 }
 
 #[cfg(target_os = "windows")]
-fn get_tpm_port_flock(temp_path: &PathBuf) -> Result<(FileLock, u16), ()> {
+fn get_tpm_port_flock(temp_path: &Path) -> Result<(FileLock, u16), ()> {
     const TPM_PORT_RANGE_START: u16 = 60001;
     const TPM_PORT_RANGE_END: u16 = 65000;
 
@@ -668,7 +671,7 @@ fn get_tpm_port_flock(temp_path: &PathBuf) -> Result<(FileLock, u16), ()> {
     return Err(());
 }
 
-pub fn cleanup_stale_qemu_files(temp_path: &PathBuf) {
+pub fn cleanup_stale_qemu_files(temp_path: &Path) {
     let entries: Vec<_> = match std::fs::read_dir(temp_path) {
         Ok(e) => e.filter_map(std::result::Result::ok).collect(),
         Err(_) => return,
