@@ -5,3 +5,5 @@ web/dist
 *.qcow2
 *.qcow2.tmp
 .DS_Store
+scripts/swtpm
+scripts/libtpms

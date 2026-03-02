@@ -65,6 +65,26 @@ qemu-system-aarch64 \
 -nographic
 ```
 
+### Windows x64 Host
+
+Run in powershell, and assuming that is your qemu executable install location.
+
+```sh
+& 'C:\Program Files\qemu\qemu-system-x86_64.exe' `
+-machine q35,kernel-irqchip=off `
+-cpu qemu64 `
+-name debian `
+-m 1024M `
+-smp 2 `
+-drive file=test/upstream_image/debian-12-genericcloud-amd64.qcow2,format=qcow2,if=virtio `
+-drive file=test/upstream_image/seed.iso,format=raw,if=virtio,readonly=on `
+-rtc base=utc `
+-accel whpx -accel tcg `
+-netdev user,id=net0,hostfwd=tcp::2222-:22 `
+-device virtio-net-pci,netdev=net0,disable-modern=on `
+-serial stdio
+```
+
 ## SSH Into VM to Validate it Works
 
 This step isn't necessary.

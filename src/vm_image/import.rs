@@ -179,6 +179,12 @@ fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) {
                     *drive = rewrite_drive_file_to_managed(drive, managed_dir);
                 }
             }
+
+            if let Some(ref mut isos) = qemu.readonly_isos {
+                for iso in isos.iter_mut() {
+                    *iso = managed_dir.join(&*iso).to_string_lossy().to_string();
+                }
+            }
         }
         BackendConfig::Tart(_) => {
             // vm_name is a logical name, not a path

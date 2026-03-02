@@ -240,6 +240,21 @@ fn export_qemu<W: std::io::Write>(
         exported_drives = Some(rewritten);
     }
 
+    let mut exported_isos = qemu.readonly_isos.clone();
+    if let Some(ref isos) = qemu.readonly_isos {
+        let mut rewritten = Vec::new();
+        for iso_path in isos {
+            let iso_filename = filename_of(iso_path);
+            append_file(
+                archive,
+                Path::new(iso_path),
+                &format!("{name}/{iso_filename}"),
+            )?;
+            rewritten.push(iso_filename);
+        }
+        exported_isos = Some(rewritten);
+    }
+
     exported_desc.backend = BackendConfig::Qemu(QemuConfig {
         image: image_filename,
         uefi: exported_uefi,
@@ -248,6 +263,7 @@ fn export_qemu<W: std::io::Write>(
         additional_devices: qemu.additional_devices.clone(),
         tpm: qemu.tpm,
         nvme: qemu.nvme,
+        readonly_isos: exported_isos,
     });
 
     Ok(())

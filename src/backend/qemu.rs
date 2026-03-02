@@ -118,9 +118,27 @@ impl QemuBackend {
                     }
                 }
                 Arch::X64 => {
-                    cmd.arg("-drive")
-                        .arg(format!("file={temp_image_display},format=qcow2"));
+                    if qemu_config.nvme {
+                        cmd.arg("-drive").arg(format!(
+                            "id=SystemDisk,if=none,file={temp_image_display},format=qcow2"
+                        ));
+                        cmd.arg("-device")
+                            .arg("nvme,drive=SystemDisk,serial=SystemDisk,bootindex=0");
+                    } else {
+                        cmd.arg("-drive")
+                            .arg(format!("file={temp_image_display},format=qcow2,if=virtio"));
+                    }
                 }
+            }
+        }
+
+        if let Some(ref isos) = qemu_config.readonly_isos {
+            for iso_path in isos {
+                let expanded = expand_path(iso_path);
+                cmd.arg("-drive").arg(format!(
+                    "file={},format=raw,if=virtio,readonly=on",
+                    expanded.display()
+                ));
             }
         }
 
@@ -154,6 +172,11 @@ impl QemuBackend {
             )
         };
         cmd.arg("-netdev").arg(netdev);
+        // disable-modern=on on Windows forces virtio legacy mode (virtio 1.0
+        // disabled), using INTx interrupts instead of MSI-X which crash WHPX.
+        #[cfg(target_os = "windows")]
+        cmd.arg("-device").arg("virtio-net-pci,netdev=net0,disable-modern=on");
+        #[cfg(not(target_os = "windows"))]
         cmd.arg("-device").arg("virtio-net-pci,netdev=net0");
 
         // TPM stuff
@@ -357,13 +380,18 @@ impl VmBackend for QemuBackend {
                 (&runner.tpm_state_dir, &runner.tpm_port)
             {
                 let port = tpm_port.1;
-                let mut tpm_cmd = std::process::Command::new("swtpm");
+                // swtpm will run inside WSL2 (cannot get SWTPM to build at all cause of libtpms).
+                // bindaddr must be 0.0.0.0 to allow WSL2 to port-forward
+                let wsl_state_dir = windows_path_to_wsl(state_dir);
+                let mut tpm_cmd = std::process::Command::new("wsl");
                 tpm_cmd
+                    .arg("--")
+                    .arg("swtpm")
                     .arg("socket")
                     .arg("--tpmstate")
-                    .arg(format!("dir={}", state_dir.display()))
+                    .arg(format!("dir={}", wsl_state_dir))
                     .arg("--ctrl")
-                    .arg(format!("type=tcp,port={},bindaddr=127.0.0.1", port))
+                    .arg(format!("type=tcp,port={},bindaddr=0.0.0.0", port))
                     .arg("--tpm2")
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null());
@@ -506,7 +534,16 @@ fn qemu_system_binary(arch: Arch) -> String {
     };
 
     #[cfg(target_os = "windows")]
-    return format!("{}.exe", base);
+    {
+        let exe = format!("{}.exe", base);
+        let candidates = [format!("C:\\Program Files\\qemu\\{}", exe)];
+        for candidate in candidates {
+            if std::path::Path::new(&candidate).exists() {
+                return candidate;
+            }
+        }
+        return exe;
+    }
 
     #[cfg(not(target_os = "windows"))]
     return base.to_string();
@@ -518,7 +555,16 @@ fn qemu_img_binary() -> String {
     }
 
     #[cfg(target_os = "windows")]
-    return "qemu-img.exe".to_string();
+    {
+        let exe = "qemu-img.exe".to_string();
+        let candidates = [format!("C:\\Program Files\\qemu\\{}", exe)];
+        for candidate in candidates {
+            if std::path::Path::new(&candidate).exists() {
+                return candidate;
+            }
+        }
+        return exe;
+    }
 
     #[cfg(not(target_os = "windows"))]
     return "qemu-img".to_string();
@@ -526,14 +572,32 @@ fn qemu_img_binary() -> String {
 
 fn qemu_machine(arch: Arch) -> &'static str {
     match arch {
-        Arch::X64 => "q35",
+        Arch::X64 => {
+            // Emulate the APIC for windows hypervisor
+            #[cfg(target_os = "windows")]
+            return "q35,kernel-irqchip=off";
+            #[cfg(not(target_os = "windows"))]
+            return "q35";
+        }
         Arch::RISCV64 | Arch::ARM64 => "virt",
     }
 }
 
 pub fn qemu_cpu(arch: Arch) -> &'static str {
     match arch {
-        Arch::X64 | Arch::RISCV64 => "max",
+        Arch::X64 => {
+            // WHPX is sensitive to CPUID values set during vCPU initialization.
+            // -cpu host (even with stripped flags) passes through host XSAVE
+            // feature bits and other CPUID leaves that WHPX cannot handle,
+            // causing an immediate triple-fault before the BIOS executes a
+            // single instruction. qemu64 uses a fixed minimal CPUID set with
+            // no host-derived values, which WHPX initializes correctly.
+            #[cfg(target_os = "windows")]
+            return "qemu64";
+            #[cfg(not(target_os = "windows"))]
+            return "max";
+        }
+        Arch::RISCV64 => "max",
         Arch::ARM64 => "host",
     }
 }
@@ -573,6 +637,19 @@ fn get_port_flock() -> Result<(FileLock, u16), ()> {
         }
     }
     Err(())
+}
+
+/// `C:\foo\bar` to `/mnt/c/foo/bar`
+#[cfg(target_os = "windows")]
+fn windows_path_to_wsl(path: &std::path::Path) -> String {
+    let s = path.display().to_string();
+    if s.len() >= 2 && s.chars().nth(1) == Some(':') {
+        let drive = s.chars().next().unwrap().to_lowercase().to_string();
+        let rest = s[2..].replace('\\', "/");
+        format!("/mnt/{}{}", drive, rest)
+    } else {
+        s.replace('\\', "/")
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -706,6 +783,8 @@ fn create_backing_file(
     dest_path: &std::path::Path,
 ) -> Result<(), ()> {
     let qemu_img = qemu_img_binary();
+
+    println!("{qemu_img}");
 
     let output = std::process::Command::new(&qemu_img)
         .args([

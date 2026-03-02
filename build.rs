@@ -29,8 +29,14 @@ fn build_frontend() {
         return;
     }
 
+    let npm = if cfg!(target_os = "windows") {
+        "npm.cmd"
+    } else {
+        "npm"
+    };
+
     if !Path::new("web/node_modules").exists() {
-        let status = Command::new("npm")
+        let status = Command::new(npm)
             .args(["install"])
             .current_dir("web")
             .status();
@@ -45,7 +51,7 @@ fn build_frontend() {
         }
     }
 
-    let status = Command::new("npm")
+    let status = Command::new(npm)
         .args(["run", "build"])
         .current_dir("web")
         .status();

@@ -105,6 +105,8 @@ pub struct QemuConfig {
     pub additional_devices: Option<Vec<String>>,
     pub tpm: bool,
     pub nvme: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readonly_isos: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

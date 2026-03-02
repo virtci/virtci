@@ -26,7 +26,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
     let image_path = prompt_image_path()?;
     let ssh = prompt_ssh_config()?;
     let uefi = prompt_uefi_config(guest_os, arch)?;
-    let (tpm, nvme, cpu_model, additional_drives, additional_devices) =
+    let (tpm, nvme, cpu_model, additional_drives, additional_devices, readonly_isos) =
         prompt_advanced_options(guest_os, arch)?;
 
     let config = ImageDescription {
@@ -43,6 +43,7 @@ pub fn run_interactive_setup() -> Result<(), String> {
             additional_devices,
             tpm,
             nvme,
+            readonly_isos,
         }),
     };
 
@@ -483,6 +484,7 @@ fn prompt_advanced_options(
         Option<String>,
         Option<Vec<String>>,
         Option<Vec<String>>,
+        Option<Vec<String>>,
     ),
     String,
 > {
@@ -580,8 +582,17 @@ fn prompt_advanced_options(
         }
     }
 
+    let readonly_isos = prompt_readonly_isos()?;
+
     println!();
-    Ok((tpm, nvme, cpu_model, additional_drives, additional_devices))
+    Ok((
+        tpm,
+        nvme,
+        cpu_model,
+        additional_drives,
+        additional_devices,
+        readonly_isos,
+    ))
 }
 
 fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
@@ -654,6 +665,57 @@ fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>
     Ok((Some(additional_drives), Some(additional_devices)))
 }
 
+fn prompt_readonly_isos() -> Result<Option<Vec<String>>, String> {
+    println!();
+    println!("  Read-only ISO drives (optional)");
+    println!("    Attach raw ISO images as read-only virtio drives.");
+    println!("    Useful for cloud-init seed ISOs, data discs, etc.");
+    println!("    Enter one path for line, or enter to skip/finish.");
+
+    let mut isos: Vec<String> = Vec::new();
+
+    loop {
+        let prompt = if isos.is_empty() {
+            "  ISO path (enter to skip): ".to_string()
+        } else {
+            format!("  ISO path {} (enter to finish): ", isos.len() + 1)
+        };
+
+        let input = read_line(&prompt)?;
+
+        if input.is_empty() {
+            break;
+        }
+
+        let expanded = expand_path(&input);
+
+        if !expanded.exists() {
+            println!("    Error: File does not exist: {}\n", expanded.display());
+            continue;
+        }
+
+        if !expanded.is_file() {
+            println!("    Error: Path is not a file: {}\n", expanded.display());
+            continue;
+        }
+
+        let absolute = expanded
+            .canonicalize()
+            .unwrap_or(expanded)
+            .to_string_lossy()
+            .to_string();
+
+        println!("    Added: {absolute}");
+        isos.push(absolute);
+    }
+
+    if isos.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(isos))
+    }
+}
+
 fn print_summary(config: &ImageDescription) {
     println!();
     println!("Configuration Summary");
@@ -695,6 +757,12 @@ fn print_summary(config: &ImageDescription) {
                 println!("    Additional devices: {}", devices.len());
                 for device in devices {
                     println!("      - {device}");
+                }
+            }
+            if let Some(ref isos) = qemu.readonly_isos {
+                println!("    Read-only ISOs: {}", isos.len());
+                for iso in isos {
+                    println!("      - {iso}");
                 }
             }
         }

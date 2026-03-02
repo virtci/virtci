@@ -45,13 +45,19 @@ brew install --cask utm
 
 **Windows:**
 
-Install QEMU and build SWTPM.
+Install QEMU
 
 ```sh
 choco install qemu
 ```
 
-Build [swtpm](https://github.com/stefanberger/swtpm) using msys2 and mingw.
+Add chocolatey qemu to your PATH. The location is `C:\Program Files\qemu`
+
+Run the `install_swtpm_win.ps1` powershell script. WSL2 is required, along with a linux distro within.
+
+```sh
+./scripts/install_swtpm_win.ps1
+```
 
 ### Setup VM
 
