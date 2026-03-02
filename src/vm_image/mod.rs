@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod export;
 pub mod import;
 pub mod list;
+pub mod remove;
 pub mod setup_qemu;
 #[cfg(target_os = "macos")]
 pub mod setup_tart;

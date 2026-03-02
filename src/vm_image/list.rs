@@ -65,7 +65,7 @@ fn load_all_images(home_path: &PathBuf) -> Vec<ImageDescription> {
     images
 }
 
-fn print_verbose(img: &ImageDescription) {
+pub fn print_verbose(img: &ImageDescription) {
     println!("{}:", img.name);
     println!("  OS:   {:?}", img.os);
     println!("  Arch: {:?}", img.arch);

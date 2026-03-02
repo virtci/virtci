@@ -597,7 +597,7 @@ fn prompt_advanced_options(
     ))
 }
 
-fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
+pub fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
     let default_str = if default { "Y/n" } else { "y/N" };
     loop {
         let input = read_line(&format!("{prompt} [{default_str}]: "))?;

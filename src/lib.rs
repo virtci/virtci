@@ -1,25 +1,38 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-mod backend;
-mod cli;
-mod file_lock;
-mod run;
-mod run_state;
-mod transfer_lock;
-mod vm_image;
-mod web;
-mod yaml;
+pub mod backend;
+pub mod cli;
+pub mod file_lock;
+pub mod run;
+pub mod run_state;
+pub mod transfer_lock;
+pub mod vm_image;
+pub mod web;
+pub mod yaml;
 
 use std::path::{Path, PathBuf};
 
-pub fn run_virtci(paths: &VciGlobalPaths) {
+use argh::FromArgs;
+
+/// `args` should not contain the command/executable name.
+///
+/// For instance, if you're testing `virtci import hello.tar`, the `args` should be
+/// `["import", "hello.tar"]`.
+pub fn run_virtci_with_args(paths: &VciGlobalPaths, args: &[&str]) {
+    let cli_args = cli::Args::from_args(&["virtci"], args).expect("Failed to parse args");
+    run_virtci(paths, cli_args);
+}
+
+pub fn run_virtci_cli(paths: &VciGlobalPaths) {
+    run_virtci(paths, argh::from_env());
+}
+
+fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     setup_signal_handlers();
 
     backend::qemu::cleanup_stale_qemu_files(&paths.temp);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
-
-    let args: cli::Args = argh::from_env();
 
     match args.command {
         cli::Command::Version(_) => {
@@ -61,6 +74,9 @@ pub fn run_virtci(paths: &VciGlobalPaths) {
         }
         cli::Command::Active(_) => {
             run_state::run_active(&paths.temp);
+        }
+        cli::Command::Remove(remove_args) => {
+            vm_image::remove::run_remove(&remove_args, &paths.home);
         }
         cli::Command::Shell(shell_args) => {
             run_state::run_shell(&shell_args, &paths.temp);

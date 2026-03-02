@@ -22,6 +22,7 @@ pub enum Command {
     Export(ExportArgs),
     Import(ImportArgs),
     Active(ActiveArgs),
+    Remove(RemoveArgs),
     Shell(ShellArgs),
     Serve(ServeArgs),
 }
@@ -132,6 +133,19 @@ pub struct ImportArgs {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "active")]
 pub struct ActiveArgs {}
+
+/// Remove a VirtCI VM image
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "remove")]
+pub struct RemoveArgs {
+    /// name of the VM image to export
+    #[argh(positional)]
+    pub name: String,
+
+    /// delete without confirmation
+    #[argh(switch)]
+    pub force: bool,
+}
 
 /// SSH into a running VM by job name
 #[derive(FromArgs, Debug)]

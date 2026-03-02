@@ -166,7 +166,7 @@ fn filename_of(path: &str) -> String {
         .to_string()
 }
 
-fn parse_drive_file_path(drive_str: &str) -> Option<String> {
+pub fn parse_drive_file_path(drive_str: &str) -> Option<String> {
     for part in drive_str.split(',') {
         if let Some(path) = part.strip_prefix("file=") {
             if !path.is_empty() {
