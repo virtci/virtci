@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -129,6 +129,134 @@ pub fn read_line_with_default(prompt: &str, default: &str) -> Result<String, Str
     } else {
         Ok(input)
     }
+}
+
+/// Characters that are invalid in VM image names across platforms.
+const INVALID_NAME_CHARS: [char; 12] =
+    ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ', '.', '\t'];
+
+pub fn validate_image_name(name: &str, home_path: &Path) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Name cannot be empty".to_string());
+    }
+
+    if let Some(c) = name.chars().find(|c| INVALID_NAME_CHARS.contains(c)) {
+        return Err(format!("Name contains invalid character: '{c}'"));
+    }
+
+    let vci_path = home_path.join(format!("{name}.vci"));
+    if vci_path.exists() {
+        return Err(format!(
+            "VCI image '{}' already exists at {}",
+            name,
+            vci_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn save_config(config: &ImageDescription, home_path: &PathBuf) -> Result<(), String> {
+    if !home_path.exists() {
+        std::fs::create_dir_all(home_path)
+            .map_err(|e| format!("Failed to create VCI home directory: {e}"))?;
+    }
+
+    let file_path = home_path.join(format!("{}.vci", config.name));
+
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize config: {e}"))?;
+
+    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {e}"))?;
+
+    Ok(())
+}
+
+pub fn run_from_file(path: &Path, home_path: &PathBuf, name: Option<&str>) -> Result<(), String> {
+    let json =
+        std::fs::read_to_string(path).map_err(|e| format!("Cannot read config file: {e}"))?;
+
+    let mut config: ImageDescription =
+        serde_json::from_str(&json).map_err(|e| format!("Invalid JSON config: {e}"))?;
+
+    config.name = if let Some(n) = name {
+        n.to_string()
+    } else {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| "Cannot determine image name from filename".to_string())?
+            .to_string()
+    };
+
+    validate_image_name(&config.name, home_path)?;
+    resolve_config_paths(&mut config)?;
+    save_config(&config, home_path)?;
+
+    println!("Registered '{}'.", config.name);
+    println!("Use in workflows with: image: {}", config.name);
+    Ok(())
+}
+
+fn resolve_config_paths(config: &mut ImageDescription) -> Result<(), String> {
+    if let Some(ref key) = config.ssh.key {
+        config.ssh.key = Some(resolve_path(key, "SSH key")?);
+    }
+
+    match &mut config.backend {
+        BackendConfig::Qemu(qemu) => {
+            qemu.image = resolve_path(&qemu.image, "image")?;
+
+            if let Some(ref uefi) = qemu.uefi {
+                let code = resolve_path(&uefi.code, "UEFI code")?;
+                let vars = resolve_path(&uefi.vars, "UEFI vars")?;
+                qemu.uefi = Some(UefiSplit { code, vars });
+            }
+
+            if let Some(ref mut isos) = qemu.readonly_isos {
+                for iso in isos.iter_mut() {
+                    *iso = resolve_path(iso, "readonly ISO")?;
+                }
+            }
+
+            if let Some(ref mut drives) = qemu.additional_drives {
+                for spec in drives.iter_mut() {
+                    *spec = resolve_drive_spec_path(spec)?;
+                }
+            }
+        }
+        BackendConfig::Tart(_) => {
+            // vm_name is not a filesystem path
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_path(path_str: &str, label: &str) -> Result<String, String> {
+    let expanded = expand_path(path_str);
+    if !expanded.exists() {
+        return Err(format!(
+            "{label} path does not exist: {}",
+            expanded.display()
+        ));
+    }
+    expanded
+        .canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| format!("Cannot resolve {label} path '{}': {e}", expanded.display()))
+}
+
+fn resolve_drive_spec_path(spec: &str) -> Result<String, String> {
+    let Some(file_start) = spec.find("file=") else {
+        return Ok(spec.to_string());
+    };
+    let after_file = &spec[file_start + 5..];
+    let file_path = match after_file.find(',') {
+        Some(comma) => &after_file[..comma],
+        None => after_file,
+    };
+    let resolved = resolve_path(file_path, "additional drive")?;
+    Ok(spec.replace(&format!("file={file_path}"), &format!("file={resolved}")))
 }
 
 pub fn expand_path(path: &str) -> PathBuf {

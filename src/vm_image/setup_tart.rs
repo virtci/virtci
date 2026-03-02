@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::vm_image::{
-    expand_path, read_line, read_line_with_default, Arch, BackendConfig, GuestOs, ImageDescription,
-    SshConfig, TartConfig,
+    expand_path, read_line, read_line_with_default, save_config, validate_image_name, Arch,
+    BackendConfig, GuestOs, ImageDescription, SshConfig, TartConfig,
 };
 
 /// Interactive Tart image setup (macOS ARM64 only)
@@ -58,31 +58,6 @@ fn verify_tart_installed() -> Result<(), String> {
         }
         _ => Err("tart is not installed or not in PATH. Install from https://tart.run".to_string()),
     }
-}
-
-/// Characters that are invalid in filenames across platforms
-const INVALID_NAME_CHARS: [char; 12] =
-    ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ', '.', '\t'];
-
-fn validate_image_name(name: &str, home_path: &Path) -> Result<(), String> {
-    if name.is_empty() {
-        return Err("Name cannot be empty".to_string());
-    }
-
-    if let Some(c) = name.chars().find(|c| INVALID_NAME_CHARS.contains(c)) {
-        return Err(format!("Name contains invalid character: '{c}'"));
-    }
-
-    let vci_path = home_path.join(format!("{name}.vci"));
-    if vci_path.exists() {
-        return Err(format!(
-            "VCI image '{}' already exists at {}",
-            name,
-            vci_path.display()
-        ));
-    }
-
-    Ok(())
 }
 
 /// Step 1
@@ -300,20 +275,4 @@ fn print_summary(config: &ImageDescription) {
         println!("    Auth: key ({key})");
     }
     println!();
-}
-
-fn save_config(config: &ImageDescription, home_path: &PathBuf) -> Result<(), String> {
-    if !home_path.exists() {
-        std::fs::create_dir_all(home_path)
-            .map_err(|e| format!("Failed to create VCI home directory: {e}"))?;
-    }
-
-    let file_path = home_path.join(format!("{}.vci", config.name));
-
-    let json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("Failed to serialize config: {e}"))?;
-
-    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {e}"))?;
-
-    Ok(())
 }

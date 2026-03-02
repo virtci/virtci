@@ -73,7 +73,7 @@ pub struct RunArgs {
 }
 
 /// Interactive setup for a new VM image description
-#[derive(FromArgs, Debug, Copy, Clone)]
+#[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "setup")]
 pub struct SetupArgs {
     /// set up a QEMU-backed VM image
@@ -83,6 +83,14 @@ pub struct SetupArgs {
     /// set up a Tart-backed VM image (macOS only)
     #[argh(switch)]
     pub tart: bool,
+
+    /// non-interactive: register from an existing JSON config file
+    #[argh(option)]
+    pub from: Option<PathBuf>,
+
+    /// image name to use when registering with --from (defaults to the filename stem)
+    #[argh(option)]
+    pub name: Option<String>,
 }
 
 /// Clean up leftover temporary VM images

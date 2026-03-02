@@ -390,23 +390,22 @@ impl VmBackend for QemuBackend {
                     .arg("swtpm")
                     .arg("socket")
                     .arg("--tpmstate")
-                    .arg(format!("dir={}", wsl_state_dir))
+                    .arg(format!("dir={wsl_state_dir}"))
                     .arg("--ctrl")
-                    .arg(format!("type=tcp,port={},bindaddr=0.0.0.0", port))
+                    .arg(format!("type=tcp,port={port},bindaddr=0.0.0.0"))
                     .arg("--tpm2")
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null());
 
                 runner.tpm_process = Some(tpm_cmd.spawn().map_err(|e| {
-                    println!("{}", e);
-                    ()
+                    println!("{e}");
                 })?);
 
                 std::thread::sleep(std::time::Duration::from_millis(500));
 
                 let mut retries = 0;
                 while retries < 10 {
-                    if std::net::TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
+                    if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
                         break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -536,14 +535,14 @@ fn qemu_system_binary(arch: Arch) -> String {
 
     #[cfg(target_os = "windows")]
     {
-        let exe = format!("{}.exe", base);
-        let candidates = [format!("C:\\Program Files\\qemu\\{}", exe)];
+        let exe = format!("{base}.exe");
+        let candidates = [format!("C:\\Program Files\\qemu\\{exe}")];
         for candidate in candidates {
             if std::path::Path::new(&candidate).exists() {
                 return candidate;
             }
         }
-        return exe;
+        exe
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -558,13 +557,13 @@ fn qemu_img_binary() -> String {
     #[cfg(target_os = "windows")]
     {
         let exe = "qemu-img.exe".to_string();
-        let candidates = [format!("C:\\Program Files\\qemu\\{}", exe)];
+        let candidates = [format!("C:\\Program Files\\qemu\\{exe}")];
         for candidate in candidates {
             if std::path::Path::new(&candidate).exists() {
                 return candidate;
             }
         }
-        return exe;
+        exe
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -647,7 +646,7 @@ fn windows_path_to_wsl(path: &std::path::Path) -> String {
     if s.len() >= 2 && s.chars().nth(1) == Some(':') {
         let drive = s.chars().next().unwrap().to_lowercase().to_string();
         let rest = s[2..].replace('\\', "/");
-        format!("/mnt/{}{}", drive, rest)
+        format!("/mnt/{drive}{rest}")
     } else {
         s.replace('\\', "/")
     }
@@ -659,16 +658,13 @@ fn get_tpm_port_flock(temp_path: &Path) -> Result<(FileLock, u16), ()> {
     const TPM_PORT_RANGE_END: u16 = 65000;
 
     for port in TPM_PORT_RANGE_START..=TPM_PORT_RANGE_END {
-        let lock_path = temp_path.join(format!("vci-qemu-tpm-port-{}.lock", port));
+        let lock_path = temp_path.join(format!("vci-qemu-tpm-port-{port}.lock"));
         let res = FileLock::try_new(lock_path);
-        match res {
-            Ok(lock) => {
-                return Ok((lock, port));
-            }
-            _ => (),
+        if let Ok(lock) = res {
+            return Ok((lock, port));
         }
     }
-    return Err(());
+    Err(())
 }
 
 pub fn cleanup_stale_qemu_files(temp_path: &Path) {

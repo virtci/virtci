@@ -1,0 +1,22 @@
+{
+  "os": "Linux",
+  "arch": "X64",
+  "backend": {
+    "type": "qemu",
+    "image": "tests/upstream_image/debian-12-genericcloud-amd64.qcow2",
+    "uefi": null,
+    "cpu_model": null,
+    "additional_drives": null,
+    "additional_devices": null,
+    "tpm": false,
+    "nvme": false,
+    "readonly_isos": [
+      "tests/upstream_image/seed.iso"
+    ]
+  },
+  "ssh": {
+    "user": "debian",
+    "pass": "virtci",
+    "key": null
+  }
+}

@@ -50,7 +50,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             run_jobs(jobs, paths);
         }
         cli::Command::Setup(setup_args) => {
-            run_setup(setup_args, &paths.home);
+            run_setup(&setup_args, &paths.home);
         }
         cli::Command::Cleanup(cleanup_args) => {
             run_cleanup(cleanup_args, paths);
@@ -87,7 +87,15 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     }
 }
 
-fn run_setup(args: cli::SetupArgs, home_path: &PathBuf) {
+fn run_setup(args: &cli::SetupArgs, home_path: &PathBuf) {
+    if let Some(ref from_path) = args.from {
+        if let Err(e) = vm_image::run_from_file(from_path, home_path, args.name.as_deref()) {
+            eprintln!("Setup failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     assert!(
         !(args.qemu && args.tart),
         "Error: specify either --qemu or --tart, not both."
@@ -95,7 +103,7 @@ fn run_setup(args: cli::SetupArgs, home_path: &PathBuf) {
 
     assert!(
         !(!args.qemu && !args.tart),
-        "Error: specify a backend with --qemu or --tart."
+        "Error: specify a backend with --qemu or --tart, and optionally provide --from <config.json>."
     );
 
     if args.qemu {
