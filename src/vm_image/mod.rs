@@ -207,8 +207,20 @@ fn resolve_config_paths(config: &mut ImageDescription) -> Result<(), String> {
             qemu.image = resolve_path(&qemu.image, "image")?;
 
             if let Some(ref uefi) = qemu.uefi {
-                let code = resolve_path(&uefi.code, "UEFI code")?;
-                let vars = resolve_path(&uefi.vars, "UEFI vars")?;
+                let is_auto = uefi.code == "auto" || uefi.vars == "auto";
+                let (code, vars) = if is_auto {
+                    setup_qemu::find_uefi_firmware(config.arch).ok_or_else(|| {
+                        format!(
+                            "UEFI set to 'auto' but no firmware found for {:?} on this system",
+                            config.arch
+                        )
+                    })?
+                } else {
+                    (
+                        resolve_path(&uefi.code, "UEFI code")?,
+                        resolve_path(&uefi.vars, "UEFI vars")?,
+                    )
+                };
                 qemu.uefi = Some(UefiSplit { code, vars });
             }
 

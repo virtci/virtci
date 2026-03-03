@@ -5,8 +5,8 @@
     "type": "qemu",
     "image": "tests/upstream_image/debian-12-genericcloud-arm64.qcow2",
     "uefi": {
-      "code": "tests/upstream_image/edk2-aarch64-code.fd", // TODO
-      "vars": "tests/upstream_image/edk2-arm-vars.fd", // TODO
+      "code": "auto",
+      "vars": "auto"
     },
     "cpu_model": null,
     "additional_drives": null,

@@ -384,7 +384,7 @@ fn prompt_uefi_file(label: &str, default: Option<&str>) -> Result<String, String
 }
 
 /// The 4M variants seem to work best for x64? Maybe? This will try to find the firmware.
-fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
+pub fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
     let candidates: Vec<(&str, &str)> = match arch {
         Arch::ARM64 => vec![
             // macOS Homebrew
@@ -400,6 +400,11 @@ fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
             (
                 "/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw",
                 "/usr/share/edk2/aarch64/vars-template-pflash.raw",
+            ),
+            // Windows
+            (
+                "C:\\Program Files\\qemu\\share\\edk2-aarch64-code.fd",
+                "C:\\Program Files\\qemu\\share\\edk2-arm-vars.fd",
             ),
         ],
         Arch::X64 => vec![
