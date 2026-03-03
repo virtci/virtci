@@ -15,8 +15,6 @@ Currently supports [QEMU](https://www.qemu.org/) and [Tart](https://tart.run/) a
 
 ### Install
 
-Install all necessary tooling for your OS:
-
 #### Linux
 
 **Debian / Ubuntu / Mint / Debian-based:**
@@ -51,7 +49,7 @@ brew install virtci/virtci/virtci # Yes it's actually that command
 
 *Useful:*
 
-You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs.
+You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs. It is highly recommended.
 
 #### Windows
 

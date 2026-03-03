@@ -34,7 +34,7 @@ ubuntu-arm64:
 
     - name: Build .deb
       run: |
-        VERSION=$(cat VERSION | sed 's/^v//')
+        VERSION=$(cat VERSION | sed 's/^v//' | sed 's/^preview_/0~preview./')
         PKGDIR="virtci_${VERSION}_arm64"
         mkdir -p "${PKGDIR}/DEBIAN" "${PKGDIR}/usr/bin"
         cp target/release/virtci "${PKGDIR}/usr/bin/virtci"
