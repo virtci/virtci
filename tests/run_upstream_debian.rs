@@ -1,10 +1,17 @@
+use std::path::PathBuf;
+
 use virtci::{run_virtci_with_args, vm_image::list::load_all_images};
+
+const MANIFEST_DIR: &'static str = env!("CARGO_MANIFEST_DIR");
 
 #[test]
 #[ignore]
 fn run_debian_upstream_x64() {
     const VM_IMAGE_NAME: &'static str = "TEST_run_debian_upstream_x64";
-    let paths = virtci::VciGlobalPaths::default();
+    let paths = virtci::VciGlobalPaths {
+        home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/home")),
+        temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/temp")),
+    };
 
     {
         let all_images = load_all_images(&paths.home);
@@ -20,7 +27,7 @@ fn run_debian_upstream_x64() {
             "setup",
             "--qemu",
             "--from",
-            "tests/upstream_image/test-debian-x64.json",
+            "tests/upstream_image/test_debian_x64.json",
             "--name",
             VM_IMAGE_NAME,
         ],
@@ -36,7 +43,7 @@ fn run_debian_upstream_x64() {
         &paths,
         &[
             "run",
-            "tests/upstream_image/basic-test-debian.yml",
+            "tests/upstream_image/basic_test_debian.yml",
             "--image",
             VM_IMAGE_NAME,
         ],
@@ -54,7 +61,10 @@ fn run_debian_upstream_x64() {
 #[ignore]
 fn run_debian_upstream_arm64() {
     const VM_IMAGE_NAME: &'static str = "TEST_run_debian_upstream_arm64";
-    let paths = virtci::VciGlobalPaths::default();
+    let paths = virtci::VciGlobalPaths {
+        home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/home")),
+        temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/temp")),
+    };
 
     {
         let all_images = load_all_images(&paths.home);
@@ -70,7 +80,7 @@ fn run_debian_upstream_arm64() {
             "setup",
             "--qemu",
             "--from",
-            "tests/upstream_image/test-debian-arm64.json",
+            "tests/upstream_image/test_debian_arm64.json",
             "--name",
             VM_IMAGE_NAME,
         ],
@@ -86,7 +96,7 @@ fn run_debian_upstream_arm64() {
         &paths,
         &[
             "run",
-            "tests/upstream_image/basic-test-debian.yml",
+            "tests/upstream_image/basic_test_debian.yml",
             "--image",
             VM_IMAGE_NAME,
         ],

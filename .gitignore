@@ -7,3 +7,4 @@ web/dist
 .DS_Store
 scripts/swtpm
 scripts/libtpms
+tests/temp/
