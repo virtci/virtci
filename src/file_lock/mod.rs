@@ -82,9 +82,6 @@ pub enum FileLockError {
 impl FileLock {
     #[allow(clippy::result_large_err)]
     pub fn try_new<P: AsRef<Path>>(path: P) -> Result<Self, FileLockError> {
-        let metadata = LockMetadata::new();
-        let json = serde_json::to_string_pretty(&metadata).map_err(|_| FileLockError::Other)?;
-
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -106,6 +103,9 @@ impl FileLock {
         let locked = unsafe { try_lock_file_exclusive_native(handle) };
 
         if locked {
+            // Metadata is prepared and written only after the lock is held.
+            let json = serde_json::to_string_pretty(&LockMetadata::new())
+                .map_err(|_| FileLockError::Other)?;
             file.set_len(0).map_err(|_| FileLockError::Other)?;
             file.seek(SeekFrom::Start(0))
                 .map_err(|_| FileLockError::Other)?;
@@ -113,6 +113,54 @@ impl FileLock {
                 .map_err(|_| FileLockError::Other)?;
             file.flush().map_err(|_| FileLockError::Other)?;
 
+            Ok(FileLock {
+                file,
+                path: path.as_ref().to_path_buf(),
+            })
+        } else {
+            let mut contents = String::new();
+            file.seek(SeekFrom::Start(0)).ok();
+            if file.read_to_string(&mut contents).is_ok() {
+                if let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents) {
+                    return Err(FileLockError::OtherProcessBlock(blocking_metadata));
+                }
+            }
+            Err(FileLockError::Other)
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn try_new_shared<P: AsRef<Path>>(path: P) -> Result<Self, FileLockError> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|_| FileLockError::Other)?;
+
+        #[cfg(unix)]
+        {
+            if let Ok(perms) = file.metadata().map(|m| m.permissions()) {
+                let mut perms = perms;
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&path, perms);
+            }
+        }
+
+        let handle = Self::get_raw_handle(&file);
+        let locked = unsafe { try_lock_file_shared_native(handle) };
+
+        if locked {
+            let metadata = LockMetadata::new();
+            if let Ok(json) = serde_json::to_string_pretty(&metadata) {
+                file.set_len(0).map_err(|_| FileLockError::Other)?;
+                file.seek(SeekFrom::Start(0))
+                    .map_err(|_| FileLockError::Other)?;
+                file.write_all(json.as_bytes())
+                    .map_err(|_| FileLockError::Other)?;
+                file.flush().map_err(|_| FileLockError::Other)?;
+            }
             Ok(FileLock {
                 file,
                 path: path.as_ref().to_path_buf(),
@@ -211,6 +259,7 @@ fn format_local_time(unix_secs: u64) -> String {
 
 extern "C" {
     fn try_lock_file_exclusive_native(handle: RawHandle) -> bool;
+    fn try_lock_file_shared_native(handle: RawHandle) -> bool;
     fn unlock_file_native(handle: RawHandle);
     fn get_process_start_time_native(pid: u32, out_start_time: *mut u64) -> bool;
     fn start_time_to_unix_secs(start_time: u64) -> u64;

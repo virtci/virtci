@@ -12,6 +12,9 @@ use crate::{
 };
 
 pub struct TartRunner {
+    pub is_base_mode: bool,
+    /// shared or exclusive `vci_image_{name}.lock`.
+    _image_lock: FileLock,
     clone_name: String,
     slot_lock: FileLock,
     tart_process: Option<Child>,
@@ -25,6 +28,7 @@ pub struct TartBackend {
     pub cpus: u32,
     /// Megabytes
     pub memory_mb: u64,
+    pub graphics: bool,
     pub runner: Option<TartRunner>,
 }
 
@@ -41,6 +45,7 @@ impl TartBackend {
             base_image,
             cpus,
             memory_mb,
+            graphics: false,
             runner: None,
         };
 
@@ -48,11 +53,119 @@ impl TartBackend {
 
         Ok(backend)
     }
+
+    /// Boot the base VM directly
+    pub fn new_base(
+        name: String,
+        base_image: ImageDescription,
+        cpus: u32,
+        memory_mb: u64,
+        nographics: bool,
+        temp_path: &Path,
+    ) -> Result<Self, ()> {
+        let mut backend = TartBackend {
+            name,
+            base_image,
+            cpus,
+            memory_mb,
+            graphics: !nographics,
+            runner: None,
+        };
+        backend.setup_base(temp_path)?;
+        Ok(backend)
+    }
+
+    fn setup_base(&mut self, temp_path: &Path) -> Result<(), ()> {
+        assert!(self.runner.is_none());
+
+        let image_lock = {
+            let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
+            FileLock::try_new(lock_path).map_err(|_| {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "Image '{}' is currently in use by another virtci process — \
+                         cannot boot for modification while it is running.",
+                        self.base_image.name
+                    )
+                    .red()
+                );
+            })?
+        };
+
+        let tart_config = self.base_image.backend.as_tart().unwrap();
+        let vm_name = tart_config.vm_name.clone();
+        let (slot_lock, _slot) =
+            get_slot_flock(temp_path).expect("Failed to acquire tart slot lock");
+
+        // Brief headless boot to resolve DHCP IP (SHOULD be stable for 24h lease).
+        let mut boot_process = std::process::Command::new("tart")
+            .args(["run", &vm_name, "--no-graphics"])
+            .spawn()
+            .map_err(|e| {
+                eprintln!(
+                    "{}",
+                    format!("Failed to boot tart VM for IP discovery: {e}").red()
+                );
+            })?;
+
+        let Ok(ip) = resolve_tart_ip(&vm_name) else {
+            let _ = std::process::Command::new("tart")
+                .args(["stop", &vm_name])
+                .output();
+            let _ = boot_process.wait();
+            return Err(());
+        };
+
+        let _ = std::process::Command::new("tart")
+            .args(["stop", &vm_name])
+            .output();
+        let _ = boot_process.wait();
+
+        self.runner = Some(TartRunner {
+            is_base_mode: true,
+            _image_lock: image_lock,
+            clone_name: vm_name,
+            slot_lock,
+            tart_process: None,
+            vm_ip: ip,
+        });
+
+        let ssh_target = self.ssh_target();
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target);
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = self
+                .runner
+                .as_mut()
+                .unwrap()
+                .slot_lock
+                .write_content(json.as_bytes());
+        }
+
+        Ok(())
+    }
 }
 
 impl VmBackend for TartBackend {
     fn setup_clone(&mut self, temp_path: &Path) -> Result<(), ()> {
         assert!(self.runner.is_none());
+
+        // Shared lock: multiple CI runs on the same base image are allowed,
+        // but an active `virtci boot` holding an exclusive lock will block this.
+        let image_lock = {
+            let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
+            FileLock::try_new_shared(lock_path).map_err(|_| {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "Image '{}' is currently being modified by `virtci boot` — \
+                         wait for it to finish before starting a new run.",
+                        self.base_image.name
+                    )
+                    .red()
+                );
+            })?
+        };
 
         let tart_config = self.base_image.backend.as_tart().unwrap();
         let (slot_lock, slot) =
@@ -133,6 +246,8 @@ impl VmBackend for TartBackend {
         let _ = boot_process.wait();
 
         self.runner = Some(TartRunner {
+            is_base_mode: false,
+            _image_lock: image_lock,
             clone_name,
             slot_lock,
             tart_process: None,
@@ -157,14 +272,21 @@ impl VmBackend for TartBackend {
         let runner = self.runner.as_mut().unwrap();
 
         let mut cmd = std::process::Command::new("tart");
-        cmd.args(["run", &runner.clone_name, "--no-graphics"]);
 
         // Tart's network isolation flags (--net-host, --net-softnet) all require
         // root via Softnet. Offline mode is enforced post-boot inside the VM
         // via offline_enforce_cmd() instead.
 
-        let fancy_cmd = format!("tart run {} --no-graphics", &runner.clone_name);
-        println!("{}", fancy_cmd.dimmed());
+        if self.graphics {
+            cmd.args(["run", &runner.clone_name]);
+            println!("{}", format!("tart run {}", &runner.clone_name).dimmed());
+        } else {
+            cmd.args(["run", &runner.clone_name, "--no-graphics"]);
+            println!(
+                "{}",
+                format!("tart run {} --no-graphics", &runner.clone_name).dimmed()
+            );
+        }
 
         runner.tart_process = Some(cmd.spawn().map_err(|e| {
             eprintln!("{}", format!("Failed to start tart VM: {e}").red());
@@ -211,6 +333,15 @@ impl VmBackend for TartBackend {
     fn run_name(&self) -> String {
         self.runner.as_ref().unwrap().clone_name.clone()
     }
+
+    fn wait_for_exit(&mut self) {
+        if let Some(ref mut runner) = self.runner {
+            if let Some(ref mut process) = runner.tart_process {
+                let _ = process.wait();
+            }
+            runner.tart_process = None;
+        }
+    }
 }
 
 impl Drop for TartBackend {
@@ -225,9 +356,12 @@ impl Drop for TartBackend {
                 let _ = process.wait();
             }
 
-            let _ = std::process::Command::new("tart")
-                .args(["delete", &runner.clone_name])
-                .output();
+            // **VERY VERY IMPORTANT TO NOT DELETE THE BASE IMAGE**
+            if !runner.is_base_mode {
+                let _ = std::process::Command::new("tart")
+                    .args(["delete", &runner.clone_name])
+                    .output();
+            }
 
             let lock_path = runner.slot_lock.get_path().clone();
             drop(runner);

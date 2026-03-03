@@ -3,8 +3,8 @@ import './App.css'
 function App() {
   return (
     <div>
-      <h1>VirtCI</h1>
-      <p>VM Storage</p>
+      <h1>VirtCI Dasboard</h1>
+      <p>Coming Soon!</p>
     </div>
   )
 }

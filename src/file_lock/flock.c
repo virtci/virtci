@@ -12,6 +12,11 @@ bool try_lock_file_exclusive_native(int fd) {
     return result == 0;
 }
 
+bool try_lock_file_shared_native(int fd) {
+    int result = flock(fd, LOCK_SH | LOCK_NB);
+    return result == 0;
+}
+
 void unlock_file_native(int fd) { (void)flock(fd, LOCK_UN); }
 
 #elif defined(_WIN32)
@@ -22,6 +27,13 @@ bool try_lock_file_exclusive_native(intptr_t handle) {
     OVERLAPPED overlapped = {0};
     BOOL result = LockFileEx((HANDLE)handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0,
                              1, 0, &overlapped);
+    return result != 0;
+}
+
+bool try_lock_file_shared_native(intptr_t handle) {
+    OVERLAPPED overlapped = {0};
+    // No LOCKFILE_EXCLUSIVE_LOCK is shared lock
+    BOOL result = LockFileEx((HANDLE)handle, LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped);
     return result != 0;
 }
 

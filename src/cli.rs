@@ -23,6 +23,7 @@ pub enum Command {
     Import(ImportArgs),
     Active(ActiveArgs),
     Remove(RemoveArgs),
+    Boot(BootArgs),
     Shell(ShellArgs),
     Serve(ServeArgs),
 }
@@ -154,6 +155,18 @@ pub struct RemoveArgs {
     pub force: bool,
 }
 
+/// Boot a base VM image to modify it, found using `virtci list`
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "boot")]
+pub struct BootArgs {
+    /// name of the VM to modify
+    #[argh(positional)]
+    pub name: String,
+    /// disable graphics
+    #[argh(switch)]
+    pub nographics: bool,
+}
+
 /// SSH into a running VM by job name
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "shell")]
@@ -163,7 +176,7 @@ pub struct ShellArgs {
     pub name: String,
 }
 
-/// Start the web UI server
+/// (TODO) Start the web UI server
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "serve")]
 pub struct ServeArgs {

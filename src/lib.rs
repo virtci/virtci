@@ -78,6 +78,9 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
         cli::Command::Remove(remove_args) => {
             vm_image::remove::run_remove(&remove_args, &paths.home);
         }
+        cli::Command::Boot(boot_args) => {
+            vm_image::boot::run_boot(&boot_args, paths);
+        }
         cli::Command::Shell(shell_args) => {
             run_state::run_shell(&shell_args, &paths.temp);
         }

@@ -29,6 +29,9 @@ pub trait VmBackend {
     }
 
     fn run_name(&self) -> String;
+
+    /// With `virtci boot` the user needs to shut down the VM internally.
+    fn wait_for_exit(&mut self) {}
 }
 
 impl FromStr for Arch {

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub mod boot;
 pub mod export;
 pub mod import;
 pub mod list;

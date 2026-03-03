@@ -15,6 +15,9 @@ use crate::{
 };
 
 pub struct QemuRunner {
+    pub is_base_mode: bool,
+    /// shared or exclusive `vci_image_{name}.lock`.
+    _image_lock: FileLock,
     pub host_port: (FileLock, u16),
     temp_image: PathBuf,
     temp_uefi_vars: Option<PathBuf>,
@@ -36,6 +39,7 @@ pub struct QemuBackend {
     pub memory_mb: u64,
     /// Port within the VM that SSH accesses.
     pub inside_vm_port: u16,
+    pub graphics: bool,
     pub runner: Option<QemuRunner>,
 }
 
@@ -53,12 +57,153 @@ impl QemuBackend {
             cpus,
             memory_mb,
             inside_vm_port: 22,
+            graphics: false,
             runner: None,
         };
 
         backend.setup_clone(temp_path)?;
 
         Ok(backend)
+    }
+
+    /// Boot the base image directly. UEFI vars and additional drives are copied and stuff.
+    /// Modifications to the VM will persist.
+    pub fn new_base(
+        name: String,
+        base_image: ImageDescription,
+        cpus: u32,
+        memory_mb: u64,
+        nographics: bool,
+        temp_path: &Path,
+    ) -> Result<Self, ()> {
+        let mut backend = QemuBackend {
+            name,
+            base_image,
+            cpus,
+            memory_mb,
+            inside_vm_port: 22,
+            graphics: !nographics,
+            runner: None,
+        };
+        backend.setup_base(temp_path)?;
+        Ok(backend)
+    }
+
+    fn setup_base(&mut self, temp_path: &Path) -> Result<(), ()> {
+        assert!(self.runner.is_none());
+
+        let qemu_config = self.base_image.backend.as_qemu().unwrap();
+
+        let image_lock = {
+            let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
+            FileLock::try_new(lock_path).map_err(|_| {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "Image '{}' is currently in use by another virtci process — \
+                         cannot boot for modification while it is running.",
+                        self.base_image.name
+                    )
+                    .red()
+                );
+            })?
+        };
+
+        let host_port_flock = get_port_flock(temp_path).expect("Failed to get any port for QEMU");
+
+        let base_image_path = expand_path(&qemu_config.image);
+
+        let temp_vars = if let Some(ref split) = qemu_config.uefi {
+            let temp_vars_path =
+                temp_path.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
+            let contents = std::fs::read(expand_path(&split.vars)).map_err(|_| ())?;
+            std::fs::write(&temp_vars_path, &contents).map_err(|_| ())?;
+            Some(temp_vars_path)
+        } else {
+            None
+        };
+
+        // OpenCore copy for instance
+        let mut temp_additional_drives = Vec::<(String, PathBuf)>::new();
+        if let Some(ref drives) = qemu_config.additional_drives {
+            for (idx, drive_spec) in drives.iter().enumerate() {
+                if let Some(file_start) = drive_spec.find("file=") {
+                    let after_file = &drive_spec[file_start + 5..];
+                    let file_path = if let Some(comma_pos) = after_file.find(',') {
+                        &after_file[..comma_pos]
+                    } else {
+                        after_file
+                    };
+
+                    let source_path = expand_path(file_path);
+                    let temp_drive_path = temp_path.join(format!(
+                        "vci-{}-drive{}-{}.qcow2",
+                        &self.name, idx, host_port_flock.1
+                    ));
+                    create_backing_file(&source_path, &temp_drive_path)?;
+
+                    let updated_spec = drive_spec.replace(
+                        &format!("file={file_path}"),
+                        &format!("file={}", temp_drive_path.display()),
+                    );
+                    temp_additional_drives.push((updated_spec, temp_drive_path));
+                }
+            }
+        }
+
+        let (tpm_state_dir, tpm_socket_path, tpm_flock) = if qemu_config.tpm {
+            let tpm_lock_file =
+                temp_path.join(format!("vci-{}-{}-tpm.lock", self.name, host_port_flock.1));
+            let tpm_flock_file = FileLock::try_new(tpm_lock_file).map_err(|_| ())?;
+            let state_dir = temp_path.join(format!("vci-{}-{}-tpm", self.name, host_port_flock.1));
+            std::fs::create_dir_all(&state_dir).map_err(|_| ())?;
+            #[cfg(not(target_os = "windows"))]
+            let socket_path = Some(state_dir.join("swtpm-sock"));
+            #[cfg(target_os = "windows")]
+            let socket_path: Option<PathBuf> = None;
+            (Some(state_dir), socket_path, Some(tpm_flock_file))
+        } else {
+            (None, None, None)
+        };
+
+        #[cfg(target_os = "windows")]
+        let tpm_port = if qemu_config.tpm {
+            Some(get_tpm_port_flock(temp_path)?)
+        } else {
+            None
+        };
+
+        let runner = QemuRunner {
+            is_base_mode: true,
+            _image_lock: image_lock,
+            host_port: host_port_flock,
+            temp_image: base_image_path,
+            temp_uefi_vars: temp_vars,
+            temp_additional_drives,
+            tpm_state_dir,
+            tpm_socket_path,
+            #[cfg(target_os = "windows")]
+            tpm_port,
+            tpm_flock,
+            qemu_process: None,
+            tpm_process: None,
+        };
+
+        self.runner = Some(runner);
+
+        let ssh_target = self.ssh_target();
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target);
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = self
+                .runner
+                .as_mut()
+                .unwrap()
+                .host_port
+                .0
+                .write_content(json.as_bytes());
+        }
+
+        Ok(())
     }
 
     fn build_qemu_cmd(&self, offline: bool) -> std::process::Command {
@@ -144,7 +289,15 @@ impl QemuBackend {
             }
         }
 
-        cmd.arg("-display").arg("none");
+        if !self.graphics {
+            cmd.arg("-display").arg("none");
+        }
+
+        if let Some(ref r) = self.runner {
+            if r.is_base_mode {
+                cmd.arg("-serial").arg("stdio");
+            }
+        }
         cmd.arg("-rtc").arg("base=utc");
 
         // hardware accel if possible
@@ -236,6 +389,22 @@ impl VmBackend for QemuBackend {
 
         let qemu_config = self.base_image.backend.as_qemu().unwrap();
 
+        // If `virtci boot` is running, the shared lock will fail
+        let image_lock = {
+            let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
+            FileLock::try_new_shared(lock_path).map_err(|_| {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "Image '{}' is currently being modified by `virtci boot` — \
+                         wait for it to finish before starting a new run.",
+                        self.base_image.name
+                    )
+                    .red()
+                );
+            })?
+        };
+
         let host_port_flock = get_port_flock(temp_path).expect("Failed to get any port for QEMU");
 
         let source_image = expand_path(&qemu_config.image);
@@ -305,6 +474,8 @@ impl VmBackend for QemuBackend {
         };
 
         let runner = QemuRunner {
+            is_base_mode: false,
+            _image_lock: image_lock,
             host_port: host_port_flock,
             temp_image,
             temp_uefi_vars: temp_vars,
@@ -470,6 +641,15 @@ impl VmBackend for QemuBackend {
             self.runner.as_ref().unwrap().host_port.1
         )
     }
+
+    fn wait_for_exit(&mut self) {
+        if let Some(ref mut runner) = self.runner {
+            if let Some(ref mut process) = runner.qemu_process {
+                let _ = process.wait();
+            }
+            runner.qemu_process = None;
+        }
+    }
 }
 
 impl Drop for QemuBackend {
@@ -488,7 +668,10 @@ impl Drop for QemuBackend {
             }
 
             let mut paths_to_delete: Vec<PathBuf> = Vec::new();
-            paths_to_delete.push(runner.temp_image.clone());
+            // **VERY VERY IMPORTANT TO NOT DELETE THE BASE IMAGE**
+            if !runner.is_base_mode {
+                paths_to_delete.push(runner.temp_image.clone());
+            }
             if let Some(ref vars) = runner.temp_uefi_vars {
                 paths_to_delete.push(vars.clone());
             }
@@ -778,8 +961,6 @@ fn create_backing_file(
     dest_path: &std::path::Path,
 ) -> Result<(), ()> {
     let qemu_img = qemu_img_binary();
-
-    println!("{qemu_img}");
 
     let output = std::process::Command::new(&qemu_img)
         .args([
