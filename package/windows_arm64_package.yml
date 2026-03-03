@@ -29,11 +29,12 @@ win-11-arm64:
 
     - name: Install NPM Dependencies
       run: |
+        $env:Path = "C:\Program Files\nodejs;$env:Path"
         cd web
         npm install
 
     - name: Build
-      run: $env:Path = "C:\Program Files\LLVM\bin;$env:Path"; cargo build --release
+      run: $env:Path = "C:\Program Files\nodejs;C:\Program Files\LLVM\bin;$env:Path"; cargo build --release
 
     - name: Package
       run: tar czf virtci-windows-arm64.tar.gz -C target/release virtci.exe
