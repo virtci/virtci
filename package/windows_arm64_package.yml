@@ -20,21 +20,18 @@ win-11-arm64:
       run: curl -o rustup-init.exe https://win.rustup.rs/aarch64; .\rustup-init.exe -y
 
     - name: Install Dependencies
-      run: choco install llvm -y
-
-    - name: Install Node and NPM
-      run: |
-        curl -o node.msi https://nodejs.org/dist/v22.14.0/node-v22.14.0-arm64.msi
-        Start-Process msiexec -ArgumentList '/i node.msi /quiet /norestart' -Wait -NoNewWindow
+      run: choco install llvm nodejs -y
 
     - name: Install NPM Dependencies
       run: |
-        $env:Path = "C:\Program Files\nodejs;$env:Path"
+        $env:Path = "C:\Program Files\nodejs;env:Path"
         cd web
-        npm install
+        npm.cmd install
 
     - name: Build
-      run: $env:Path = "C:\Program Files\nodejs;C:\Program Files\LLVM\bin;$env:Path"; cargo build --release
+      run: |
+        $env:Path = "C:\Program Files\nodejs;C:\Program Files\LLVM\bin;$env:Path"
+        cargo build --release
 
     - name: Package
       run: tar czf virtci-windows-arm64.tar.gz -C target/release virtci.exe
