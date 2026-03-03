@@ -44,9 +44,9 @@ macos-arm64:
         chmod +x virtci
 
     - name: Package
-      run: tar czf virtci-macos.tar.gz virtci
+      run: tar czf virtci-macos-multiarch.tar.gz virtci
 
     - name: Copy Files
       copy:
-        from: vm:~/virtci-macos.tar.gz
+        from: vm:~/virtci-macos-multiarch.tar.gz
         to: ./

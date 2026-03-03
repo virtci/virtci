@@ -32,7 +32,23 @@ ubuntu-arm64:
     - name: Package
       run: tar czf virtci-linux-arm64.tar.gz -C target/release virtci
 
+    - name: Build .deb
+      run: |
+        VERSION=$(cat VERSION | sed 's/^v//')
+        PKGDIR="virtci_${VERSION}_arm64"
+        mkdir -p "${PKGDIR}/DEBIAN" "${PKGDIR}/usr/bin"
+        cp target/release/virtci "${PKGDIR}/usr/bin/virtci"
+        chmod +x "${PKGDIR}/usr/bin/virtci"
+        printf 'Package: virtci\nVersion: %s\nArchitecture: arm64\nMaintainer: virtci contributors\nDepends: qemu-kvm, qemu-utils, swtpm\nDescription: Virtual machine CI runner\n' \
+          "${VERSION}" > "${PKGDIR}/DEBIAN/control"
+        dpkg-deb --build "${PKGDIR}" virtci-linux-arm64.deb
+
     - name: Copy Files
       copy:
         from: vm:~/virtci-linux-arm64.tar.gz
+        to: ./
+
+    - name: Copy .deb
+      copy:
+        from: vm:~/virtci-linux-arm64.deb
         to: ./

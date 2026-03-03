@@ -13,37 +13,47 @@ Currently supports [QEMU](https://www.qemu.org/) and [Tart](https://tart.run/) a
 
 ## Getting Started
 
+### Install
+
 Install all necessary tooling for your OS:
 
-**Linux:**
+#### Linux
 
-Install QEMU through your method of choice. You may also choose to use quickemu to easily get started with pre-setup QEMU VM images.
-
-APT:
+**Debian / Ubuntu / Mint / Debian-based:**
 
 ```sh
 sudo apt update
-sudo apt install qemu-kvm libvirt-daemon-system libvirt-clients virt-manager swtpm
+# For x64
+curl -LO https://github.com/virtci/virtci/releases/latest/download/virtci-linux-x64.deb
+sudo apt install ./virtci-linux-x64.deb
+# For arm64
+curl -LO https://github.com/virtci/virtci/releases/latest/download/virtci-linux-arm64.deb
+sudo apt install ./virtci-linux-arm64.deb
 ```
 
-Arch:
+**Other:**
+
+[Build from source](/docs/build_from_source.md).
+
+VirtCI depends on qemu and swtpm on linux.
+
+*Useful:*
+
+You may also choose to use [quickemu](https://github.com/quickemu-project/quickemu) to easily get started with pre-setup QEMU VM images.
+
+#### MacOS
+
+Install QEMU and Tart.
 
 ```sh
-sudo pacman -S qemu-full virt-manager
+brew install virtci/virtci/virtci # Yes it's actually that command
 ```
 
-**MacOS:**
+*Useful:*
 
-Install QEMU and Tart. You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs.
+You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs.
 
-```sh
-brew install qemu
-brew install swtpm
-brew install cirruslabs/cli/tart
-brew install --cask utm
-```
-
-**Windows:**
+#### Windows
 
 Install QEMU
 
@@ -53,7 +63,7 @@ choco install qemu
 
 Add chocolatey qemu to your PATH. The location is `C:\Program Files\qemu`
 
-Run the `install_swtpm_win.ps1` powershell script. WSL2 is required, along with a linux distro within.
+[Build from source](/docs/build_from_source.md), then run the `install_swtpm_win.ps1` powershell script. WSL2 is required, along with a linux distro within.
 
 ```sh
 ./scripts/install_swtpm_win.ps1
@@ -194,6 +204,8 @@ For everything other than MacOS Arm64, QEMU works extremely well. If you would r
 
 ## Why
 
-I don't want to pay hosting fees for projects with a vast amount of CI. I wanted a way to easily run CI scripts for testing or deployment using VMs, so I made this to do my CI/CD on my own hardware.
+I don't want to pay hosting fees for projects with a vast amount of CI. I wanted a way to easily run CI scripts for testing or deployment across as many architectures (notably riscv64) and operating systems as possible, so I made this to do my CI/CD on my own hardware.
 
 This allows running CI/CD real OS images, as well as cross-architecture without having to go buy a bunch of machines myself. For most use cases, this is sufficient. If virtualization / emulation is not sufficient, you probably know what you are doing.
+
+Obviously, if your only target is Linux and you're making a SaaS product, emphemeral docker containers or something would also work very well. This provides a solution to a niche problem.

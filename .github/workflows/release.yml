@@ -18,6 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "${{ github.ref_name }}" > VERSION
+          else
+            echo "preview_${{ github.ref_name }}" > VERSION
+          fi
+
       - name: Run VirtCI build
         run: virtci run package/linux_x64_package.yml
 
@@ -25,7 +33,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: virtci-linux-x64
-          path: virtci-linux-x64.tar.gz
+          path: |
+            virtci-linux-x64.tar.gz
+            virtci-linux-x64.deb
 
   build-linux-arm64-bootstrap:
     runs-on:
@@ -35,6 +45,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "${{ github.ref_name }}" > VERSION
+          else
+            echo "preview_${{ github.ref_name }}" > VERSION
+          fi
+
       - name: Run VirtCI build
         run: virtci run package/linux_arm64_package.yml
 
@@ -42,7 +60,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: virtci-linux-arm64
-          path: virtci-linux-arm64.tar.gz
+          path: |
+            virtci-linux-arm64.tar.gz
+            virtci-linux-arm64.deb
 
   build-macos-bootstrap:
     runs-on:
@@ -58,8 +78,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: virtci-macos
-          path: virtci-macos.tar.gz
+          name: virtci-macos-multiarch
+          path: virtci-macos-multiarch.tar.gz
 
 
   build-windows-x64-bootstrap:
@@ -96,23 +116,62 @@ jobs:
           name: virtci-windows-arm64
           path: virtci-windows-arm64.tar.gz
 
-  # release:
-  #   needs: [build-macos, build-linux-x64, build-macos-bootstrap]
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         path: artifacts
-  #         merge-multiple: true
+  release:
+    needs: [build-linux-x64-bootstrap, build-linux-arm64-bootstrap, build-macos-bootstrap, build-windows-x64-bootstrap, build-windows-arm64-bootstrap]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
 
-  #     - name: Create GitHub Release
-  #       uses: softprops/action-gh-release@v2
-  #       with:
-  #         generate_release_notes: true
-  #         files: |
-  #           artifacts/virtci-apple-darwin.tar.gz
-  #           artifacts/virtci-linux-x86_64.tar.gz
-  #           artifacts/virtci-macos.tar.gz
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/virtci-linux-x64.tar.gz
+            artifacts/virtci-linux-x64.deb
+            artifacts/virtci-linux-arm64.tar.gz
+            artifacts/virtci-linux-arm64.deb
+            artifacts/virtci-macos-multiarch.tar.gz
+            artifacts/virtci-windows-x64.tar.gz
+            artifacts/virtci-windows-arm64.tar.gz
+
+  publish-homebrew:
+    needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: virtci-macos-multiarch
+
+      - name: Update Homebrew formula
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${TAG#v}"
+          URL="https://github.com/${REPO}/releases/download/${TAG}/virtci-macos-multiarch.tar.gz"
+          SHA256=$(sha256sum virtci-macos-multiarch.tar.gz | awk '{print $1}')
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${REPO_OWNER}/homebrew-virtci.git" tap
+          cd tap
+
+          sed -i "s|url \".*\"|url \"${URL}\"|"             Formula/virtci.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|"   Formula/virtci.rb
+          sed -i "s|version \".*\"|version \"${VERSION}\"|" Formula/virtci.rb
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add Formula/virtci.rb
+          git commit -m "virtci ${VERSION}"
+          git push
 
   # build-macos:
   #   runs-on: macos-latest
@@ -169,5 +228,3 @@ jobs:
   #       with:
   #         name: virtci-linux-x86_64
   #         path: virtci-linux-x86_64.tar.gz
-
-
