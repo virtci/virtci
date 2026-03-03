@@ -1,0 +1,7 @@
+debian:
+  image: FILLED_BY_TEST_RUNNER
+  cpus: 2
+  memory: 1G
+  steps:
+    - name: Say Hello
+      run: echo "Hello Debian World!"

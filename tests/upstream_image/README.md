@@ -5,7 +5,7 @@ Debian has `.qcow2` files at `https://cloud.debian.org/images/cloud/bookworm/lat
 Run the script to fetch the x64 and arm64 qcow2 files.
 
 ```sh
-./test/upstream_image/fetch_debian_genericcloud.sh
+./tests/upstream_image/fetch_debian_genericcloud.sh
 ```
 
 ## Boot VMs
@@ -21,8 +21,8 @@ qemu-system-x86_64 \
 -accel kvm \
 -cpu host \
 -m 512 \
--drive file=debian-12-genericcloud-amd64.qcow2,if=virtio \
--cdrom seed.iso \
+-drive file=tests/upstream_image/debian-12-genericcloud-amd64.qcow2,if=virtio \
+-cdrom tests/upstream_image/seed.iso \
 -netdev user,id=net0,hostfwd=tcp::2222-:22 \
 -device virtio-net-pci,netdev=net0 \
 -nographic
@@ -32,8 +32,8 @@ qemu-system-aarch64 \
 -cpu cortex-a72 \
 -m 512 \
 -bios /usr/share/AAVMF/AAVMF_CODE.fd \
--drive file=debian-12-genericcloud-arm64.qcow2,if=virtio \
--cdrom seed.iso \
+-drive file=tests/upstream_image/debian-12-genericcloud-arm64.qcow2,if=virtio \
+-cdrom tests/upstream_image/seed.iso \
 -netdev user,id=net0,hostfwd=tcp::2223-:22 \
 -device virtio-net-pci,netdev=net0 \
 -nographic
@@ -46,8 +46,8 @@ Assuming you are using homebrew qemu
 ```sh
 qemu-system-x86_64 \
 -m 512 \
--drive file=test/upstream_image/debian-12-genericcloud-amd64.qcow2,if=virtio \
--cdrom test/upstream_image/seed.iso \
+-drive file=tests/upstream_image/debian-12-genericcloud-amd64.qcow2,if=virtio \
+-cdrom tests/upstream_image/seed.iso \
 -netdev user,id=net0,hostfwd=tcp::2222-:22 \
 -device virtio-net-pci,netdev=net0 \
 -nographic
@@ -58,8 +58,8 @@ qemu-system-aarch64 \
 -cpu host \
 -m 512 \
 -bios /opt/homebrew/share/qemu/edk2-aarch64-code.fd \
--drive file=test/upstream_image/debian-12-genericcloud-arm64.qcow2,if=virtio \
--cdrom test/upstream_image/seed.iso \
+-drive file=tests/upstream_image/debian-12-genericcloud-arm64.qcow2,if=virtio \
+-cdrom tests/upstream_image/seed.iso \
 -netdev user,id=net0,hostfwd=tcp::2223-:22 \
 -device virtio-net-pci,netdev=net0 \
 -nographic

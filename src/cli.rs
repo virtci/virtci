@@ -39,10 +39,9 @@ pub struct RunArgs {
     /// path to workflow YAML file
     #[argh(positional)]
     pub workflow: PathBuf,
-    // /// VM disk image: --image path OR --image job=path
-    // #[argh(option)]
-    // pub image: Vec<String>,
-
+    /// VM image: --image <name>
+    #[argh(option)]
+    pub image: Option<String>,
     // /// CPU count: --cpus 4 OR --cpus job=2 (default: half system threads)
     // #[argh(option)]
     // pub cpus: Vec<String>,

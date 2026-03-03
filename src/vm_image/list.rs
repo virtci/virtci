@@ -29,7 +29,7 @@ pub fn run_list(verbose: bool, home_path: &PathBuf) {
     }
 }
 
-fn load_all_images(home_path: &PathBuf) -> Vec<ImageDescription> {
+pub fn load_all_images(home_path: &PathBuf) -> Vec<ImageDescription> {
     let Ok(entries) = std::fs::read_dir(home_path) else {
         return Vec::new();
     };

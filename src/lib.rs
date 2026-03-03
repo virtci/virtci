@@ -331,9 +331,13 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
         // let image_name = cli::resolve_for_job(&image_overrides, &name)
         //     .unwrap_or(&yaml_job.image)
         //     .to_string();
-        let image_name = yaml_job.image;
+        let image_name = if let Some(img) = &args.image {
+            img
+        } else {
+            &yaml_job.image
+        };
 
-        let image_desc = load_image_description(&image_name, &paths.home);
+        let image_desc = load_image_description(image_name, &paths.home);
 
         // let cpus: u32 = match cli::resolve_for_job(&cpus_overrides, &name) {
         //     Some(s) => s.parse::<u32>().expect("Expected number for --cpus"),
