@@ -25,7 +25,7 @@ win-11-arm64:
     - name: Install Node and NPM
       run: |
         curl -o node.msi https://nodejs.org/dist/v22.14.0/node-v22.14.0-arm64.msi
-        msiexec /i node.msi /quiet /norestart
+        Start-Process msiexec -ArgumentList '/i node.msi /quiet /norestart' -Wait -NoNewWindow
 
     - name: Install NPM Dependencies
       run: |
