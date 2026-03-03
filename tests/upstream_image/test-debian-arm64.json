@@ -1,0 +1,25 @@
+{
+  "os": "Linux",
+  "arch": "ARM64",
+  "backend": {
+    "type": "qemu",
+    "image": "tests/upstream_image/debian-12-genericcloud-arm64.qcow2",
+    "uefi": {
+      "code": "tests/upstream_image/edk2-aarch64-code.fd", // TODO
+      "vars": "tests/upstream_image/edk2-arm-vars.fd", // TODO
+    },
+    "cpu_model": null,
+    "additional_drives": null,
+    "additional_devices": null,
+    "tpm": false,
+    "nvme": false,
+    "readonly_isos": [
+      "tests/upstream_image/seed.iso"
+    ]
+  },
+  "ssh": {
+    "user": "debian",
+    "pass": "virtci",
+    "key": null
+  }
+}
