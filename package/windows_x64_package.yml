@@ -20,7 +20,12 @@ win-11-x64:
       run: Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
     - name: Install Dependencies
-      run: choco install llvm nodejs nasm -y
+      run: choco install llvm nasm -y
+
+    - name: Install Node and NPM
+      run: |
+        curl -o node.msi https://nodejs.org/dist/v22.14.0/node-v22.14.0-x64.msi
+        msiexec /i node.msi /quiet /norestart
 
     - name: Install NPM Dependencies
       run: |

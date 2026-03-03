@@ -20,7 +20,12 @@ win-11-arm64:
       run: curl -o rustup-init.exe https://win.rustup.rs/aarch64; .\rustup-init.exe -y
 
     - name: Install Dependencies
-      run: choco install llvm nodejs -y
+      run: choco install llvm -y
+
+    - name: Install Node and NPM
+      run: |
+        curl -o node.msi https://nodejs.org/dist/v22.14.0/node-v22.14.0-arm64.msi
+        msiexec /i node.msi /quiet /norestart
 
     - name: Install NPM Dependencies
       run: |
