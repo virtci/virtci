@@ -1,5 +1,7 @@
 <div align="center">
-  <img src="res/VirtCI-wordmark.png"/>
+    <a href="https://www.virtci.com" target="_blank" title="VirtCI">
+        <img src="res/VirtCI-wordmark.png"/>
+    </a>
 </div>
 
 *VirtCI* is a CI/CD tool for running real OS images across multiple CPU architectures on self-hosted hardware.

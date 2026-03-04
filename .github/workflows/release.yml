@@ -18,14 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "${{ github.ref_name }}" > VERSION
-          else
-            echo "preview_${{ github.ref_name }}" > VERSION
-          fi
-
       - name: Run VirtCI build
         run: virtci run package/linux_x64_package.yml
 
@@ -44,14 +36,6 @@ jobs:
       - ARM64
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "${{ github.ref_name }}" > VERSION
-          else
-            echo "preview_${{ github.ref_name }}" > VERSION
-          fi
 
       - name: Run VirtCI build
         run: virtci run package/linux_arm64_package.yml
