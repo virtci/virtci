@@ -45,15 +45,6 @@
     "description": "Minimal Android system properties wrapper"
   },
   {
-    "name": "anyhow",
-    "version": "1.0.100",
-    "authors": "David Tolnay <dtolnay@gmail.com>",
-    "repository": "https://github.com/dtolnay/anyhow",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "description": "Flexible concrete Error type built on std::error::Error"
-  },
-  {
     "name": "argh",
     "version": "0.1.13",
     "authors": "Taylor Cramer <cramertj@google.com>|Benjamin Brittain <bwb@google.com>|Erick Tryzelaar <etryzelaar@google.com>",
@@ -90,6 +81,15 @@
     "description": "Pure Rust implementation of the Argon2 password hashing function with support for the Argon2d, Argon2i, and Argon2id algorithmic variants"
   },
   {
+    "name": "ascii",
+    "version": "1.1.0",
+    "authors": "Thomas Bahn <thomas@thomas-bahn.net>|Torbjørn Birch Moltu <t.b.moltu@lyse.net>|Simon Sapin <simon.sapin@exyr.org>",
+    "repository": "https://github.com/tomprogrammer/rust-ascii",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "ASCII-only equivalents to `char`, `str` and `String`."
+  },
+  {
     "name": "autocfg",
     "version": "1.5.0",
     "authors": "Josh Stone <cuviper@gmail.com>",
@@ -97,6 +97,24 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Automatic cfg for Rust compiler features"
+  },
+  {
+    "name": "aws-lc-rs",
+    "version": "1.15.3",
+    "authors": "AWS-LibCrypto",
+    "repository": "https://github.com/aws/aws-lc-rs",
+    "license": "(Apache-2.0 OR ISC) AND ISC",
+    "license_file": null,
+    "description": "aws-lc-rs is a cryptographic library using AWS-LC for its cryptographic operations. This library strives to be API-compatible with the popular Rust library named ring."
+  },
+  {
+    "name": "aws-lc-sys",
+    "version": "0.36.0",
+    "authors": "AWS-LC",
+    "repository": "https://github.com/aws/aws-lc-rs",
+    "license": "(Apache-2.0 OR ISC) AND ISC AND OpenSSL",
+    "license_file": null,
+    "description": "AWS-LC is a general-purpose cryptographic library maintained by the AWS Cryptography team for AWS and their customers. It іs based on code from the Google BoringSSL project and the OpenSSL project."
   },
   {
     "name": "base16ct",
@@ -208,7 +226,7 @@
   },
   {
     "name": "bytes",
-    "version": "1.11.0",
+    "version": "1.11.1",
     "authors": "Carl Lerche <me@carllerche.com>|Sean McArthur <sean@seanmonstar.com>",
     "repository": "https://github.com/tokio-rs/bytes",
     "license": "MIT",
@@ -270,6 +288,15 @@
     "description": "Date and time library for Rust"
   },
   {
+    "name": "chunked_transfer",
+    "version": "1.5.0",
+    "authors": "Corey Farwell <coreyf@rwell.org>",
+    "repository": "https://github.com/frewsxcv/rust-chunked-transfer",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Encoder and decoder for HTTP chunked transfer coding (RFC 7230 § 4.1)"
+  },
+  {
     "name": "cipher",
     "version": "0.4.4",
     "authors": "RustCrypto Developers",
@@ -277,6 +304,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Traits for describing block ciphers and stream ciphers"
+  },
+  {
+    "name": "cmake",
+    "version": "0.1.54",
+    "authors": "Alex Crichton <alex@alexcrichton.com>",
+    "repository": "https://github.com/rust-lang/cmake-rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "A build dependency for running `cmake` to build a native library"
   },
   {
     "name": "cmov",
@@ -504,6 +540,15 @@
     "description": "Traits for cryptographic hash functions and message authentication codes"
   },
   {
+    "name": "dunce",
+    "version": "1.0.5",
+    "authors": "Kornel <kornel@geekhood.net>",
+    "repository": "https://gitlab.com/kornelski/dunce",
+    "license": "Apache-2.0 OR CC0-1.0 OR MIT-0",
+    "license_file": null,
+    "description": "Normalize Windows paths to the most compatible format, avoiding UNC where possible"
+  },
+  {
     "name": "ecdsa",
     "version": "0.16.9",
     "authors": "RustCrypto Developers",
@@ -585,6 +630,15 @@
     "description": "Fiat-crypto generated Rust"
   },
   {
+    "name": "filetime",
+    "version": "0.2.27",
+    "authors": "Alex Crichton <alex@alexcrichton.com>",
+    "repository": "https://github.com/alexcrichton/filetime",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Platform-agnostic accessors of timestamps in File metadata"
+  },
+  {
     "name": "find-msvc-tools",
     "version": "0.1.7",
     "authors": null,
@@ -601,6 +655,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Rust port of Java's ConcurrentHashMap"
+  },
+  {
+    "name": "fs_extra",
+    "version": "1.3.0",
+    "authors": "Denis Kurilenko <webdesus@gmail.com>",
+    "repository": "https://github.com/webdesus/fs_extra",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Expanding std::fs and std::io. Recursively copy folders with information about process and much more."
   },
   {
     "name": "futures",
@@ -828,6 +891,15 @@
     "description": "Shared definitions of home directories."
   },
   {
+    "name": "httpdate",
+    "version": "1.0.3",
+    "authors": "Pyfisch <pyfisch@posteo.org>",
+    "repository": "https://github.com/pyfisch/httpdate",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "HTTP date parsing and formatting"
+  },
+  {
     "name": "hybrid-array",
     "version": "0.4.5",
     "authors": "RustCrypto Developers",
@@ -889,6 +961,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Fast integer primitive to string conversion"
+  },
+  {
+    "name": "jobserver",
+    "version": "0.1.34",
+    "authors": "Alex Crichton <alex@alexcrichton.com>",
+    "repository": "https://github.com/rust-lang/jobserver-rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "An implementation of the GNU Make jobserver for Rust."
   },
   {
     "name": "js-sys",
@@ -972,13 +1053,22 @@
     "description": "libm in pure Rust"
   },
   {
-    "name": "libyml",
-    "version": "0.0.5",
-    "authors": "LibYML Contributors",
-    "repository": "https://github.com/sebastienrousseau/libyml",
+    "name": "libredox",
+    "version": "0.1.12",
+    "authors": "4lDO2 <4lDO2@protonmail.com>",
+    "repository": "https://gitlab.redox-os.org/redox-os/libredox.git",
     "license": "MIT",
     "license_file": null,
-    "description": "A safe and efficient Rust library for parsing, emitting, and manipulating YAML data."
+    "description": "Redox stable ABI"
+  },
+  {
+    "name": "linux-raw-sys",
+    "version": "0.11.0",
+    "authors": "Dan Gohman <dev@sunfishcode.online>",
+    "repository": "https://github.com/sunfishcode/linux-raw-sys",
+    "license": "Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT",
+    "license_file": null,
+    "description": "Generated bindings for Linux's userspace API"
   },
   {
     "name": "lock_api",
@@ -1015,6 +1105,24 @@
     "license": "MIT OR Unlicense",
     "license_file": null,
     "description": "Provides extremely fast (uses SIMD on x86_64, aarch64 and wasm32) routines for 1, 2 or 3 byte search and single substring search."
+  },
+  {
+    "name": "mime",
+    "version": "0.3.17",
+    "authors": "Sean McArthur <sean@seanmonstar.com>",
+    "repository": "https://github.com/hyperium/mime",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Strongly Typed Mimes"
+  },
+  {
+    "name": "mime_guess",
+    "version": "2.0.5",
+    "authors": "Austin Bonander <austin.bonander@gmail.com>",
+    "repository": "https://github.com/abonander/mime_guess",
+    "license": "MIT",
+    "license_file": null,
+    "description": "A simple crate for detection of a file's MIME type by its extension."
   },
   {
     "name": "mio",
@@ -1395,6 +1503,15 @@
     "description": "A Rust library to access raw Redox system calls"
   },
   {
+    "name": "redox_syscall",
+    "version": "0.7.0",
+    "authors": "Jeremy Soller <jackpot51@gmail.com>",
+    "repository": "https://gitlab.redox-os.org/redox-os/syscall",
+    "license": "MIT",
+    "license_file": null,
+    "description": "A Rust library to access raw Redox system calls"
+  },
+  {
     "name": "rfc6979",
     "version": "0.4.0",
     "authors": "RustCrypto Developers",
@@ -1402,15 +1519,6 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Pure Rust implementation of RFC6979: Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)"
-  },
-  {
-    "name": "ring",
-    "version": "0.17.14",
-    "authors": null,
-    "repository": "https://github.com/briansmith/ring",
-    "license": "Apache-2.0 AND ISC",
-    "license_file": null,
-    "description": "An experiment."
   },
   {
     "name": "rsa",
@@ -1458,6 +1566,33 @@
     "description": "Runtime abstraction utilities for russh."
   },
   {
+    "name": "rust-embed",
+    "version": "8.11.0",
+    "authors": "pyrossh",
+    "repository": "https://pyrossh.dev/repos/rust-embed",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Rust Custom Derive Macro which loads files into the rust binary at compile time during release and loads the file from the fs during dev"
+  },
+  {
+    "name": "rust-embed-impl",
+    "version": "8.11.0",
+    "authors": "pyrossh",
+    "repository": "https://pyrossh.dev/repos/rust-embed",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Rust Custom Derive Macro which loads files into the rust binary at compile time during release and loads the file from the fs during dev"
+  },
+  {
+    "name": "rust-embed-utils",
+    "version": "8.11.0",
+    "authors": "pyrossh",
+    "repository": "https://pyrossh.dev/repos/rust-embed",
+    "license": "MIT",
+    "license_file": null,
+    "description": "Utilities for rust-embed"
+  },
+  {
     "name": "rust-fuzzy-search",
     "version": "0.1.1",
     "authors": "EnricoCh <enricochiaramello@gmail.com>",
@@ -1474,6 +1609,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "A library for querying the version of a installed rustc compiler"
+  },
+  {
+    "name": "rustix",
+    "version": "1.1.3",
+    "authors": "Dan Gohman <dev@sunfishcode.online>|Jakub Konka <kubkon@jakubkonka.com>",
+    "repository": "https://github.com/bytecodealliance/rustix",
+    "license": "Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT",
+    "license_file": null,
+    "description": "Safe Rust bindings to POSIX/Unix/Linux/Winsock-like syscalls"
   },
   {
     "name": "rustversion",
@@ -1501,6 +1645,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Salsa20 Stream Cipher"
+  },
+  {
+    "name": "same-file",
+    "version": "1.0.6",
+    "authors": "Andrew Gallant <jamslam@gmail.com>",
+    "repository": "https://github.com/BurntSushi/same-file",
+    "license": "MIT OR Unlicense",
+    "license_file": null,
+    "description": "A simple crate for determining whether two file paths point to the same file."
   },
   {
     "name": "scopeguard",
@@ -1584,13 +1737,13 @@
     "description": "A JSON serialization file format"
   },
   {
-    "name": "serde_yml",
-    "version": "0.0.12",
-    "authors": "Serde YML Contributors",
-    "repository": "https://github.com/sebastienrousseau/serde_yml",
-    "license": "Apache-2.0 OR MIT",
+    "name": "serde_yaml_ng",
+    "version": "0.10.0",
+    "authors": "Antoine Catton <devel@antoine.catton.fr>",
+    "repository": "https://github.com/acatton/serde-yaml-ng",
+    "license": "MIT",
     "license_file": null,
-    "description": "A robust Rust library that simplifies the serialization and deserialization of Rust data structures to and from YAML format using the widely-used Serde framework."
+    "description": "YAML data format for Serde"
   },
   {
     "name": "serdect",
@@ -1755,6 +1908,15 @@
     "description": "Parser for Rust source code"
   },
   {
+    "name": "tar",
+    "version": "0.4.44",
+    "authors": "Alex Crichton <alex@alexcrichton.com>",
+    "repository": "https://github.com/alexcrichton/tar-rs",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "A Rust implementation of a TAR file reader and writer. This library does not currently handle compression, but it is abstract over all I/O readers and writers. Additionally, great lengths are taken to ensure that the entire contents are never required to be entirely resident in memory all at once."
+  },
+  {
     "name": "thiserror",
     "version": "1.0.69",
     "authors": "David Tolnay <dtolnay@gmail.com>",
@@ -1798,6 +1960,15 @@
     "license": "CC0-1.0",
     "license_file": null,
     "description": "An implementation of Keccak derived functions."
+  },
+  {
+    "name": "tiny_http",
+    "version": "0.12.0",
+    "authors": "pierre.krieger1708@gmail.com|Corey Farwell <coreyf@rwell.org>",
+    "repository": "https://github.com/tiny-http/tiny-http",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "Low level HTTP server library"
   },
   {
     "name": "tls_codec",
@@ -1854,6 +2025,15 @@
     "description": "Typenum is a Rust library for type-level numbers evaluated at     compile time. It currently supports bits, unsigned integers, and signed     integers. It also provides a type-level array of type-level numbers, but its     implementation is incomplete."
   },
   {
+    "name": "unicase",
+    "version": "2.9.0",
+    "authors": "Sean McArthur <sean@seanmonstar.com>",
+    "repository": "https://github.com/seanmonstar/unicase",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "A case-insensitive wrapper around strings."
+  },
+  {
     "name": "unicode-ident",
     "version": "1.0.22",
     "authors": "David Tolnay <dtolnay@gmail.com>",
@@ -1872,8 +2052,17 @@
     "description": "Traits which describe the functionality of universal hash functions (UHFs)"
   },
   {
+    "name": "unsafe-libyaml",
+    "version": "0.2.11",
+    "authors": "David Tolnay <dtolnay@gmail.com>",
+    "repository": "https://github.com/dtolnay/unsafe-libyaml",
+    "license": "MIT",
+    "license_file": null,
+    "description": "libyaml transpiled to rust by c2rust"
+  },
+  {
     "name": "untrusted",
-    "version": "0.9.0",
+    "version": "0.7.1",
     "authors": "Brian Smith <brian@briansmith.org>",
     "repository": "https://github.com/briansmith/untrusted",
     "license": "ISC",
@@ -1890,15 +2079,6 @@
     "description": "A library to generate and parse UUIDs."
   },
   {
-    "name": "vci",
-    "version": "0.1.0",
-    "authors": null,
-    "repository": null,
-    "license": null,
-    "license_file": null,
-    "description": null
-  },
-  {
     "name": "version_check",
     "version": "0.9.5",
     "authors": "Sergio Benitez <sb@sergio.bz>",
@@ -1906,6 +2086,24 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Tiny crate to check the version of the installed/running rustc."
+  },
+  {
+    "name": "virtci",
+    "version": "0.0.0",
+    "authors": null,
+    "repository": null,
+    "license": "GPL-2.0",
+    "license_file": null,
+    "description": null
+  },
+  {
+    "name": "walkdir",
+    "version": "2.5.0",
+    "authors": "Andrew Gallant <jamslam@gmail.com>",
+    "repository": "https://github.com/BurntSushi/walkdir",
+    "license": "MIT OR Unlicense",
+    "license_file": null,
+    "description": "Recursively walk a directory."
   },
   {
     "name": "wasi",
@@ -1996,6 +2194,15 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Import libraries for the i686-pc-windows-gnu target. Please don't use this crate directly, depend on winapi instead."
+  },
+  {
+    "name": "winapi-util",
+    "version": "0.1.11",
+    "authors": "Andrew Gallant <jamslam@gmail.com>",
+    "repository": "https://github.com/BurntSushi/winapi-util",
+    "license": "MIT OR Unlicense",
+    "license_file": null,
+    "description": "A dumping ground for high level safe wrappers over windows-sys."
   },
   {
     "name": "winapi-x86_64-pc-windows-gnu",
@@ -2095,15 +2302,6 @@
     "license": "Apache-2.0 OR MIT",
     "license_file": null,
     "description": "Windows string types"
-  },
-  {
-    "name": "windows-sys",
-    "version": "0.52.0",
-    "authors": "Microsoft",
-    "repository": "https://github.com/microsoft/windows-rs",
-    "license": "Apache-2.0 OR MIT",
-    "license_file": null,
-    "description": "Rust for Windows"
   },
   {
     "name": "windows-sys",
@@ -2311,6 +2509,15 @@
     "license": "Apache-2.0 OR Apache-2.0 WITH LLVM-exception OR MIT",
     "license_file": null,
     "description": "Rust bindings generator and runtime support for WIT and the component model. Used when compiling Rust programs to the component model."
+  },
+  {
+    "name": "xattr",
+    "version": "1.6.1",
+    "authors": "Steven Allen <steven@stebalien.com>",
+    "repository": "https://github.com/Stebalien/xattr",
+    "license": "Apache-2.0 OR MIT",
+    "license_file": null,
+    "description": "unix extended filesystem attributes"
   },
   {
     "name": "zerocopy",
