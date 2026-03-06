@@ -2,7 +2,7 @@ name: "CI"
 
 on:
   workflow_dispatch:
-  pull_request_target:
+  pull_request:
     branches:
       - main
     paths-ignore:
@@ -14,29 +14,19 @@ on:
       - '**/*.md'
 
 jobs:
-  security-check:
-    runs-on:
-      - self-hosted
-      - Linux
-      - X64
+  # Needs manual approval before it can run.
+  # Skipped for push and workflow_dispatch.
+  gate:
+    if: github.event_name == 'pull_request'
+    environment: ci-protected
+    runs-on: ubuntu-latest
     steps:
-      - name: Security check for YAML changes
-        if: github.event_name == 'pull_request_target'
-        run: |
-          CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --json files --jq '.files[].path')
-
-          if echo "$CHANGED_FILES" | grep -E '\.(yml|yaml)$'; then
-            echo "::error::YAML files detected in PR. CI blocked for security reasons."
-            echo "::error::YAML changes require manual administrator review before CI execution."
-            echo "Changed YAML files:"
-            echo "$CHANGED_FILES" | grep -E '\.(yml|yaml)$'
-            exit 1
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Approved
+        run: echo "CI approved"
 
   check:
-    needs: security-check
+    needs: gate
+    if: always() && (needs.gate.result == 'success' || needs.gate.result == 'skipped')
     runs-on:
       - self-hosted
       - Linux
