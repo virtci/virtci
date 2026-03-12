@@ -30,15 +30,21 @@ pub fn run_virtci_cli(paths: &VciGlobalPaths) {
 
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     setup_signal_handlers();
+    // Handle --version flag
+    if args.version {
+        println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
 
     backend::qemu::cleanup_stale_qemu_files(&paths.temp);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     match args.command {
-        cli::Command::Version(_) => {
+        Some(cli::Command::Version(_)) => {
             println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
         }
-        cli::Command::Run(run_args) => {
+        Some(cli::Command::Run(run_args)) => {
             std::fs::create_dir_all(&paths.temp).unwrap_or_else(|e| {
                 panic!(
                     "Failed to create temp directory {}: {}",
@@ -49,16 +55,16 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             let jobs = extract_yaml_workflows(&run_args, paths);
             run_jobs(jobs, paths);
         }
-        cli::Command::Setup(setup_args) => {
+        Some(cli::Command::Setup(setup_args)) => {
             run_setup(&setup_args, &paths.home);
         }
-        cli::Command::Cleanup(cleanup_args) => {
+        Some(cli::Command::Cleanup(cleanup_args)) => {
             run_cleanup(cleanup_args, paths);
         }
-        cli::Command::List(list_args) => {
+        Some(cli::Command::List(list_args)) => {
             vm_image::list::run_list(list_args.verbose, &paths.home);
         }
-        cli::Command::Export(export_args) => {
+        Some(cli::Command::Export(export_args)) => {
             if let Err(e) =
                 vm_image::export::run_export(&export_args.name, export_args.output, &paths.home)
             {
@@ -66,27 +72,32 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                 std::process::exit(1);
             }
         }
-        cli::Command::Import(import_args) => {
+        Some(cli::Command::Import(import_args)) => {
             if let Err(e) = vm_image::import::run_import(&import_args.archive, &paths.home) {
                 eprintln!("Import failed: {e}");
                 std::process::exit(1);
             }
         }
-        cli::Command::Active(_) => {
+        Some(cli::Command::Active(_)) => {
             run_state::run_active(&paths.temp);
         }
-        cli::Command::Remove(remove_args) => {
+        Some(cli::Command::Remove(remove_args)) => {
             vm_image::remove::run_remove(&remove_args, &paths.home);
         }
-        cli::Command::Boot(boot_args) => {
+        Some(cli::Command::Boot(boot_args)) => {
             vm_image::boot::run_boot(&boot_args, paths);
         }
-        cli::Command::Shell(shell_args) => {
+        Some(cli::Command::Shell(shell_args)) => {
             run_state::run_shell(&shell_args, &paths.temp);
         }
-        cli::Command::Serve(serve_args) => {
+        Some(cli::Command::Serve(serve_args)) => {
             web::serve(serve_args.port);
         }
+        None => {
+            eprintln!("Error: No subcommand provided. Use --help for usage information.");
+            std::process::exit(1);
+        }
+
     }
 }
 
