@@ -1,33 +1,26 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use rust_embed::Embed;
-use tiny_http::{Header, Response, Server, StatusCode};
+use tiny_http::{Response, Server, StatusCode};
 
-const DEFAULT_PORT: u16 = 8080;
+mod web_assets;
 
-#[derive(Embed)]
-#[folder = "web/dist"]
-struct WebAssets;
+const DEFAULT_PORT: u16 = 6399;
+const DEFAULT_S3_URLS: [&str; 1] = ["localhost:3900"];
 
-/// If `port` is not supplied, try to get the `VIRTCI_BACKEND_PORT` environment variable.
-/// If THAT is not supplied, use `DEFAULT_PORT` which is 8080.
-pub fn serve(port: Option<u16>) {
-    // If the `port` is
-    let port = port
-        .or_else(|| {
-            std::env::var("VIRTCI_BACKEND_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-        })
-        .unwrap_or(DEFAULT_PORT);
+#[derive(Debug)]
+pub struct ServerConfig {
+    pub port: u16,
+    pub s3: Vec<String>,
+}
 
-    let addr = format!("0.0.0.0:{port}");
+pub fn serve(config: &ServerConfig) {
+    let addr = format!("0.0.0.0:{}", config.port);
     let server = Server::http(&addr).unwrap_or_else(|e| {
         panic!("Failed to start HTTP server on {addr}: {e}");
     });
 
-    println!("Web UI available at http://localhost:{port}");
+    println!("Web UI available at localhost:{}", config.port);
 
     for request in server.incoming_requests() {
         let path = request.url().trim_start_matches('/');
@@ -36,7 +29,7 @@ pub fn serve(port: Option<u16>) {
         let response = if path.starts_with("api/") {
             handle_api(path)
         } else {
-            serve_static(path)
+            web_assets::serve_static(path)
         };
 
         let _ = request.respond(response);
@@ -46,35 +39,37 @@ pub fn serve(port: Option<u16>) {
 fn handle_api(path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     match path {
         "api/health" => Response::from_data(b"ok".to_vec())
-            .with_header(content_type_header("text/plain"))
+            .with_header(web_assets::content_type_header("text/plain"))
             .with_status_code(StatusCode(200)),
         _ => Response::from_data(b"not found".to_vec()).with_status_code(StatusCode(404)),
     }
 }
 
-fn serve_static(path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    let (file, mime_path) = if path.is_empty() {
-        (WebAssets::get("index.html"), "index.html")
-    } else {
-        let file = WebAssets::get(path);
-        if file.is_some() {
-            (file, path)
-        } else {
-            (WebAssets::get("index.html"), "index.html")
-        }
-    };
+impl Default for ServerConfig {
+    /// Load environment variable overrides, or just defaults if the env variables are not set.
+    fn default() -> ServerConfig {
+        let port = match std::env::var("VIRTCI_BACKEND_PORT") {
+            Ok(val) => val.parse::<u16>().unwrap_or(DEFAULT_PORT),
+            Err(_) => DEFAULT_PORT,
+        };
 
-    match file {
-        Some(file) => {
-            let mime = mime_guess::from_path(mime_path).first_or_octet_stream();
-            Response::from_data(file.data.to_vec())
-                .with_header(content_type_header(mime.as_ref()))
-                .with_status_code(StatusCode(200))
-        }
-        None => Response::from_data(b"not found".to_vec()).with_status_code(StatusCode(404)),
+        let s3 = {
+            if let Ok(val) = std::env::var("VIRTCI_S3_URLS") {
+                let url_split = val.split(' ');
+                let mut vec = Vec::<String>::new();
+                for url in url_split {
+                    vec.push(url.to_string());
+                }
+                vec
+            } else {
+                let mut vec = Vec::<String>::new();
+                for url in DEFAULT_S3_URLS {
+                    vec.push(url.to_string());
+                }
+                vec
+            }
+        };
+
+        ServerConfig { port, s3 }
     }
-}
-
-fn content_type_header(mime: &str) -> Header {
-    Header::from_bytes("Content-Type", mime).expect("valid content-type header")
 }

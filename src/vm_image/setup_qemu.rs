@@ -47,6 +47,7 @@ pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
             nvme,
             readonly_isos,
         }),
+        remote: None,
     };
 
     print_summary(&config);

@@ -180,9 +180,14 @@ pub struct ShellArgs {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "serve")]
 pub struct ServeArgs {
-    /// port to listen on (default: VIRTCI_BACKEND_PORT env var, or 8080)
+    /// port to listen on (default: VIRTCI_BACKEND_PORT env var, or 6399)
     #[argh(option)]
     pub port: Option<u16>,
+    /// S3 storage URL to use.
+    /// Multiple are supported, prioritizing the first for read operations,
+    /// but writing to both.
+    #[argh(option)]
+    pub s3_url: Vec<String>,
 }
 
 // #[derive(Debug, Clone)]

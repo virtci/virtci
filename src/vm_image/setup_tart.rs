@@ -33,6 +33,7 @@ pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
         ssh,
         managed: None,
         backend: BackendConfig::Tart(TartConfig { vm_name }),
+        remote: None,
     };
 
     print_summary(&config);

@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use virtci::{run_virtci_with_args, vm_image::list::load_all_images};
 
-const MANIFEST_DIR: &'static str = env!("CARGO_MANIFEST_DIR");
+const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 #[test]
-#[ignore]
+#[ignore = "Integration Test"]
 fn run_debian_upstream_x64() {
-    const VM_IMAGE_NAME: &'static str = "TEST_run_debian_upstream_x64";
+    const VM_IMAGE_NAME: &str = "TEST_run_debian_upstream_x64";
     let paths = virtci::VciGlobalPaths {
         home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/home")),
         temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/temp")),
@@ -58,9 +58,9 @@ fn run_debian_upstream_x64() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "Integration Test"]
 fn run_debian_upstream_arm64() {
-    const VM_IMAGE_NAME: &'static str = "TEST_run_debian_upstream_arm64";
+    const VM_IMAGE_NAME: &str = "TEST_run_debian_upstream_arm64";
     let paths = virtci::VciGlobalPaths {
         home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/home")),
         temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/temp")),

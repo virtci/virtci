@@ -9,17 +9,18 @@ argh = "0.1.13"
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
 serde_json = "1.0.149"
+serde_with = "3.17.0"
 russh = { version = "0.56", default-features = false, features = ["aws-lc-rs"] }
 russh-sftp = "2.0"
 tokio = { version = "1", features = [
-    "rt",
-    "net",
-    "time",
-    "io-util",
-    "macros",
-    "process",
-    "sync",
-    "signal",
+  "rt",
+  "net",
+  "time",
+  "io-util",
+  "macros",
+  "process",
+  "sync",
+  "signal",
 ] }
 colored = "3"
 tar = "0.4"
@@ -44,3 +45,4 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 must_use_candidate = "allow"
 result_unit_err = "allow"
+needless_return = "allow"

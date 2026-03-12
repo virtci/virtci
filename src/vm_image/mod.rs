@@ -3,8 +3,14 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+// https://stackoverflow.com/questions/75527167/serde-deserialize-string-into-u64
+use serde_with::{serde_as, DisplayFromStr};
+
+/// TTL for remote images if 24 hours by default
+pub const DEFAULT_REMOTE_TTL_SECS: u32 = 86400;
 
 pub mod boot;
 pub mod export;
@@ -96,6 +102,46 @@ pub struct SshTarget {
     pub cred: SshConfig,
 }
 
+// https://stackoverflow.com/a/75527280
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteInfo {
+    /// Unix timestamp in seconds of when this image was last pulled / used
+    #[serde_as(as = "DisplayFromStr")]
+    pub last_used: u64,
+    /// Time-to-live in seconds until the cached image is considered stale, and can be removed by
+    /// any other virtci runner that does cleanup.
+    pub ttl_secs: u32,
+    /// Hash of the cached image, used to check if there are any remote changes. Prefixed with the
+    /// hash type, such as "sha256:abc123...".
+    pub hash: String,
+}
+
+impl RemoteInfo {
+    pub fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_secs()
+    }
+
+    pub fn is_expired(&self) -> bool {
+        let now_secs = Self::now_secs();
+        if now_secs < self.last_used {
+            // Someone messing with their time?
+            return true;
+        }
+        let age = now_secs - self.last_used;
+        #[allow(clippy::cast_lossless)]
+        return age > self.ttl_secs as u64;
+    }
+
+    /// Update the last used time.
+    pub fn touch(&mut self) {
+        self.last_used = Self::now_secs();
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageDescription {
     #[serde(skip)]
@@ -107,6 +153,8 @@ pub struct ImageDescription {
     /// When true, VirtCI owns the backing files (stored in home_path/<name>/).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteInfo>,
 }
 
 pub fn read_line(prompt: &str) -> Result<String, String> {

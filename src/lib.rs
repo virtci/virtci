@@ -85,7 +85,16 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             run_state::run_shell(&shell_args, &paths.temp);
         }
         cli::Command::Serve(serve_args) => {
-            web::serve(serve_args.port);
+            let mut config = crate::web::ServerConfig::default();
+            if let Some(port) = serve_args.port {
+                config.port = port;
+            }
+
+            if !serve_args.s3_url.is_empty() {
+                config.s3 = serve_args.s3_url;
+            }
+
+            web::serve(&config);
         }
     }
 }
