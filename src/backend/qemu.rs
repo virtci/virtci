@@ -271,6 +271,9 @@ impl QemuBackend {
                         ));
                         cmd.arg("-device")
                             .arg("nvme,drive=SystemDisk,serial=SystemDisk,bootindex=0");
+                    } else if self.base_image.os == GuestOs::Windows {
+                        cmd.arg("-drive")
+                            .arg(format!("file={temp_image_display},format=qcow2,if=ide"));
                     } else {
                         cmd.arg("-drive")
                             .arg(format!("file={temp_image_display},format=qcow2,if=virtio"));
