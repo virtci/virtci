@@ -4,5 +4,6 @@
 use virtci::{run_virtci_cli, VciGlobalPaths};
 
 fn main() {
+    std::env::set_var("RUST_BACKTRACE", "1");
     run_virtci_cli(&VciGlobalPaths::default());
 }

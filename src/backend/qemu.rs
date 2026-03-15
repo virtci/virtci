@@ -735,7 +735,7 @@ fn qemu_system_binary(arch: Arch) -> String {
     return base.to_string();
 }
 
-fn qemu_img_binary() -> String {
+pub fn qemu_img_binary() -> String {
     if let Ok(custom) = std::env::var("VCI_QEMU_IMG_BINARY") {
         return custom;
     }

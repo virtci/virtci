@@ -26,6 +26,7 @@ pub enum Command {
     Boot(BootArgs),
     Shell(ShellArgs),
     Serve(ServeArgs),
+    Push(PushArgs),
 }
 
 /// Get the VirtCI version
@@ -188,6 +189,18 @@ pub struct ServeArgs {
     /// but writing to both.
     #[argh(option)]
     pub s3_url: Vec<String>,
+}
+
+/// (TODO) Push a local VM to remote storage
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "push")]
+pub struct PushArgs {
+    /// name of the VM to push
+    #[argh(positional)]
+    pub name: String,
+    /// LUKS encryption key
+    #[argh(option)]
+    pub encrypt: Option<String>,
 }
 
 // #[derive(Debug, Clone)]

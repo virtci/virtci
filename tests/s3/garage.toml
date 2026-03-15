@@ -1,0 +1,32 @@
+# There are gonna be a lot of comments here cause idk how garage fully works
+# https://garagehq.deuxfleurs.fr/documentation/quick-start/
+
+metadata_dir = "/tmp/meta"  # Garage stores SQLite DB here, which just contains metadata.
+data_dir = "/tmp/data"      # Garage stores the ACTUAL data here, on disk.
+db_engine = "sqlite"        # SQLite for metadata, in metadata_dir
+
+replication_factor = 1      # Only 1 node. Apparently production environments use 3 or so?
+
+rpc_bind_addr = "[::]:3901" # Multi-node RPC, unused here but it is required
+rpc_public_addr = "127.0.0.1:3901" # Address for other nodes to reach, also unused but required
+# Shared secret for other nodes, again unused but required
+rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[s3_api]
+s3_region = "garage"                  # Region name in S3 HTTP responses
+api_bind_addr = "[::]:3900"           # HTTP API endpoint for S3, clients connect here
+root_domain = ".s3.garage.localhost"  # Bucket URL, bucket.s3.garage.localhost
+
+# Static website, not necessary, but part of the docs so ill leave it
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.localhost"
+index = "index.html"
+
+[k2v_api]
+api_bind_addr = "[::]:3904"
+
+[admin]
+api_bind_addr = "[::]:3903"             # Admin and metrics stuff
+admin_token = "virtci-admin-token"      # Admin API calls
+metrics_token = "virtci-metrics-token"  # Metrics API calls

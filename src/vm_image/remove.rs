@@ -8,7 +8,8 @@ use crate::{
 };
 
 pub fn run_remove(remove_args: &RemoveArgs, home_path: &Path) {
-    let desc = load_image(&remove_args.name, home_path).expect("Failed to load image");
+    let desc = ImageDescription::load_from_disk(&remove_args.name, home_path)
+        .expect("Failed to load image");
     let name = &desc.name;
 
     println!("[VirtCI] Removing VM image:");
@@ -96,19 +97,4 @@ fn delete_qemu_managed_files(
     }
 
     Ok(())
-}
-
-fn load_image(name: &str, home_path: &Path) -> Result<ImageDescription, String> {
-    let vci_path = home_path.join(format!("{name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
-        format!(
-            "Failed to load image description '{}' (looked at {})",
-            name,
-            vci_path.display()
-        )
-    })?;
-    let mut desc: ImageDescription = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse image description '{name}': {e}"))?;
-    desc.name = name.to_string();
-    Ok(desc)
 }

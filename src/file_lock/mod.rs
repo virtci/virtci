@@ -74,6 +74,7 @@ pub struct FileLock {
     path: PathBuf,
 }
 
+#[derive(Debug)]
 pub enum FileLockError {
     OtherProcessBlock(LockMetadata),
     Other,
@@ -265,3 +266,16 @@ extern "C" {
     fn start_time_to_unix_secs(start_time: u64) -> u64;
     fn format_unix_time_local(unix_secs: u64, buf: *mut u8, buf_size: usize);
 }
+
+impl std::fmt::Display for FileLockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileLockError::OtherProcessBlock(metadata) => {
+                write!(f, "File is locked by another process: {metadata:?}")
+            }
+            FileLockError::Other => write!(f, "Unknown file lock error"),
+        }
+    }
+}
+
+impl std::error::Error for FileLockError {}

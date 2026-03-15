@@ -11,9 +11,11 @@ pub mod vm_image;
 pub mod web;
 pub mod yaml;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use argh::FromArgs;
+
+use crate::vm_image::ImageDescription;
 
 /// `args` should not contain the command/executable name.
 ///
@@ -79,13 +81,16 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             vm_image::remove::run_remove(&remove_args, &paths.home);
         }
         cli::Command::Boot(boot_args) => {
-            vm_image::boot::run_boot(&boot_args, paths);
+            if let Err(e) = vm_image::boot::run_boot(&boot_args, paths) {
+                eprintln!("Boot failed: {e:?}");
+                std::process::exit(1);
+            }
         }
         cli::Command::Shell(shell_args) => {
             run_state::run_shell(&shell_args, &paths.temp);
         }
         cli::Command::Serve(serve_args) => {
-            let mut config = crate::web::ServerConfig::default();
+            let mut config = crate::web::server::ServerConfig::default();
             if let Some(port) = serve_args.port {
                 config.port = port;
             }
@@ -94,7 +99,13 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                 config.s3 = serve_args.s3_url;
             }
 
-            web::serve(&config);
+            web::server::serve(&config);
+        }
+        cli::Command::Push(push_args) => {
+            if let Err(e) = web::push::run_push(&push_args, paths) {
+                eprintln!("Import failed: {e:?}");
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -312,21 +323,6 @@ async fn signal_handler() {
     }
 }
 
-fn load_image_description(image_name: &str, home_path: &Path) -> vm_image::ImageDescription {
-    let vci_path = home_path.join(format!("{image_name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|_| {
-        panic!(
-            "Failed to load image description '{}' (looked at {})",
-            image_name,
-            vci_path.display()
-        )
-    });
-    let mut desc: vm_image::ImageDescription = serde_json::from_str(&contents)
-        .unwrap_or_else(|e| panic!("Failed to parse image description '{image_name}': {e}"));
-    desc.name = image_name.to_string();
-    desc
-}
-
 fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<run::Job> {
     let file_contents = std::fs::read_to_string(&args.workflow)
         .unwrap_or_else(|_| panic!("Failed to load workflow file: {}", args.workflow.display()));
@@ -349,7 +345,8 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
             &yaml_job.image
         };
 
-        let image_desc = load_image_description(image_name, &paths.home);
+        let image_desc = ImageDescription::load_from_disk(image_name, &paths.home)
+            .expect("Failed to load image");
 
         // let cpus: u32 = match cli::resolve_for_job(&cpus_overrides, &name) {
         //     Some(s) => s.parse::<u32>().expect("Expected number for --cpus"),
@@ -481,6 +478,15 @@ impl VciGlobalPaths {
         }
 
         PathBuf::from(".vci")
+    }
+
+    pub fn create_temp_dir(&self) -> anyhow::Result<()> {
+        return anyhow::Context::with_context(std::fs::create_dir_all(&self.temp), || {
+            format!(
+                "Failed to create temp directory at '{}'",
+                self.temp.display()
+            )
+        });
     }
 }
 

@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 // https://stackoverflow.com/questions/75527167/serde-deserialize-string-into-u64
 use serde_with::{serde_as, DisplayFromStr};
@@ -155,6 +156,23 @@ pub struct ImageDescription {
     pub managed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteInfo>,
+}
+
+impl ImageDescription {
+    pub fn load_from_disk(name: &str, home_path: &Path) -> anyhow::Result<ImageDescription> {
+        let vci_path = home_path.join(format!("{name}.vci"));
+        let contents = std::fs::read_to_string(&vci_path)
+            .with_context(|| format!("Failed to read '{}'", vci_path.display()))?;
+        let mut desc: ImageDescription = serde_json::from_str(&contents).with_context(|| {
+            format!(
+                "Failed to parse image description '{}' ({})",
+                name,
+                vci_path.display()
+            )
+        })?;
+        desc.name = name.to_string();
+        Ok(desc)
+    }
 }
 
 pub fn read_line(prompt: &str) -> Result<String, String> {

@@ -1,8 +1,6 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::path::Path;
-
 use colored::Colorize;
 
 use crate::{
@@ -12,19 +10,17 @@ use crate::{
     VciGlobalPaths,
 };
 
-pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) {
-    let image_desc = load_image(&args.name, &paths.home).unwrap_or_else(|e| {
-        eprintln!(
-            "{}",
-            format!("Failed to load image '{}': {e}", args.name).red()
-        );
-        std::process::exit(1);
-    });
+pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) -> anyhow::Result<()> {
+    let image_desc =
+        ImageDescription::load_from_disk(&args.name, &paths.home).unwrap_or_else(|e| {
+            eprintln!(
+                "{}",
+                format!("Failed to load image '{}': {e}", args.name).red()
+            );
+            std::process::exit(1);
+        });
 
-    std::fs::create_dir_all(&paths.temp).unwrap_or_else(|e| {
-        eprintln!("{}", format!("Failed to create temp directory: {e}").red());
-        std::process::exit(1);
-    });
+    paths.create_temp_dir()?;
 
     println!(
         "{}",
@@ -40,6 +36,8 @@ pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) {
         BackendConfig::Qemu(_) => boot_qemu(image_desc, args, paths),
         BackendConfig::Tart(_) => boot_tart(image_desc, args, paths),
     }
+
+    Ok(())
 }
 
 fn boot_qemu(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPaths) {
@@ -124,19 +122,4 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
         eprintln!("{}", "Tart backend is only supported on macOS".red());
         std::process::exit(1);
     }
-}
-
-fn load_image(name: &str, home_path: &Path) -> Result<ImageDescription, String> {
-    let vci_path = home_path.join(format!("{name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
-        format!(
-            "image '{}' not found (looked at {})",
-            name,
-            vci_path.display()
-        )
-    })?;
-    let mut desc: ImageDescription = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse image description '{name}': {e}"))?;
-    desc.name = name.to_string();
-    Ok(desc)
 }
