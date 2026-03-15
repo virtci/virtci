@@ -1,7 +1,8 @@
-name: "CI"
+name: 'Smoke Tests'
 
 on:
   workflow_dispatch:
+  workflow_call:
   pull_request:
     branches:
       - main
@@ -32,7 +33,7 @@ jobs:
       - Linux
       - X64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run CI checks
-        run: virtci run tests/virtci/cargo.yml
+        run: virtci run tests/virtci/smoke_tests.yml

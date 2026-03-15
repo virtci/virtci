@@ -1,0 +1,49 @@
+name: 'Full Test Suite'
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  smoke-tests:
+    uses: ./.github/workflows/smoke_tests.yml
+
+  linux-x64-integration-system-tests:
+    needs: [smoke-tests]
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install NPM Dependencies
+        run: |
+          cd web
+          npm install
+
+      - name: Fetch Upstream Debian Genericcloud Images
+        run: ./tests/upstream_image/fetch_debian_genericcloud.sh
+
+      - name: Integration and System Tests
+        run: . "$HOME/.cargo/env" && cargo test -- --ignored
+
+  mac-arm64-integration-system-tests:
+    needs: [smoke-tests]
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install NPM Dependencies
+        run: |
+          cd web
+          npm install
+
+      - name: Fetch Upstream Debian Genericcloud Images
+        run: ./tests/upstream_image/fetch_debian_genericcloud.sh
+
+      - name: Integration and System Tests
+        run: . "$HOME/.cargo/env" && cargo test -- --ignored
