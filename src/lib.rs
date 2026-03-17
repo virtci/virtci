@@ -99,7 +99,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                 config.s3 = serve_args.s3_url;
             }
 
-            web::server::serve(&config);
+            let _server = web::server::Server::new(config).expect("Failed to start server");
         }
         cli::Command::Push(push_args) => {
             if let Err(e) = web::push::run_push(&push_args, paths) {

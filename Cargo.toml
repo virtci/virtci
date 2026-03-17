@@ -29,6 +29,7 @@ rust-embed = "8"
 mime_guess = "2"
 tiny_http = "0.12"
 rusty-s3 = "0.8.1"
+rand = "0.10.0"
 
 [build-dependencies]
 cc = "1.2.27"

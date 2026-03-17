@@ -1,12 +1,76 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use tiny_http::{Response, Server, StatusCode};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self};
 
-use super::web_assets;
+use anyhow::Context;
+use tiny_http::{Response, StatusCode};
+
+use crate::vm_image::RemoteInfo;
+
+mod api;
+mod web_assets;
 
 const DEFAULT_PORT: u16 = 6399;
 const DEFAULT_S3_URLS: [&str; 1] = ["localhost:3900"];
+
+pub struct Server {
+    should_stop: Arc<AtomicBool>,
+    _config: ServerConfig,
+    _http_server: Arc<tiny_http::Server>,
+    http_server_thread: Option<thread::JoinHandle<()>>,
+    sessions: Arc<Mutex<HashMap<api::SessionId, u64>>>,
+}
+
+impl Server {
+    pub fn new(config: ServerConfig) -> anyhow::Result<Server> {
+        let addr = format!("0.0.0.0:{}", config.port);
+
+        let http_server: Arc<tiny_http::Server> =
+            Arc::new(tiny_http::Server::http(&addr).map_err(|e| anyhow::anyhow!(e))?);
+        let http_server_clone = http_server.clone();
+
+        let should_stop = Arc::new(AtomicBool::new(false));
+        let should_stop_clone = should_stop.clone();
+
+        let sessions = Arc::new(Mutex::new(HashMap::<api::SessionId, u64>::default()));
+        let sessions_clone = sessions.clone();
+
+        let http_server_thread = thread::spawn(move || {
+            serve_web(
+                http_server_clone.as_ref(),
+                should_stop_clone.as_ref(),
+                &sessions_clone,
+            )
+        });
+
+        return Ok(Server {
+            should_stop,
+            _config: config,
+            _http_server: http_server,
+            http_server_thread: Some(http_server_thread),
+            sessions,
+        });
+    }
+
+    pub fn add_session(self: &Self, id: api::SessionId) {
+        let mut lock = self.sessions.lock().expect("what");
+        (*lock).insert(id, RemoteInfo::now_secs());
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.should_stop.store(true, Ordering::SeqCst);
+        thread::yield_now();
+        if let Some(http_thread) = self.http_server_thread.take() {
+            http_thread.join().expect("Failed to join thread");
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ServerConfig {
@@ -14,34 +78,39 @@ pub struct ServerConfig {
     pub s3: Vec<String>,
 }
 
-pub fn serve(config: &ServerConfig) {
-    let addr = format!("0.0.0.0:{}", config.port);
-    let server = Server::http(&addr).unwrap_or_else(|e| {
-        panic!("Failed to start HTTP server on {addr}: {e}");
-    });
-
-    println!("Web UI available at localhost:{}", config.port);
-
-    for request in server.incoming_requests() {
+fn serve_web(
+    http_server: &tiny_http::Server,
+    should_stop: &AtomicBool,
+    sessions: &Arc<Mutex<HashMap<api::SessionId, u64>>>,
+) {
+    for request in http_server.incoming_requests() {
+        let mut request = request;
+        if should_stop.load(Ordering::SeqCst) {
+            break;
+        }
         let path = request.url().trim_start_matches('/');
         let path = path.split('?').next().unwrap_or(path);
+        let mut path_buf: [u8; 64] = [0; 64]; // need to then do a mutable borrow of request
+
+        if path.len() > path_buf.len() {
+            let _ = request
+                .respond(Response::from_string("route too long").with_status_code(StatusCode(404)));
+            continue;
+        }
+
+        path_buf[..path.len()].copy_from_slice(path.as_bytes());
 
         let response = if path.starts_with("api/") {
-            handle_api(path)
+            api::handle_api(
+                str::from_utf8(&path_buf[..path.len()]).expect("HUH"),
+                &mut request,
+                sessions,
+            )
         } else {
             web_assets::serve_static(path)
         };
 
         let _ = request.respond(response);
-    }
-}
-
-fn handle_api(path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    match path {
-        "api/health" => Response::from_data(b"ok".to_vec())
-            .with_header(web_assets::content_type_header("text/plain"))
-            .with_status_code(StatusCode(200)),
-        _ => Response::from_data(b"not found".to_vec()).with_status_code(StatusCode(404)),
     }
 }
 
