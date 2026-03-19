@@ -12,7 +12,10 @@ use tiny_http::{Response, StatusCode};
 use crate::vm_image::RemoteInfo;
 
 mod api;
+mod session;
 mod web_assets;
+
+use session::Sessions;
 
 const DEFAULT_PORT: u16 = 6399;
 const DEFAULT_S3_URLS: [&str; 1] = ["localhost:3900"];
@@ -22,7 +25,7 @@ pub struct Server {
     _config: ServerConfig,
     _http_server: Arc<tiny_http::Server>,
     http_server_thread: Option<thread::JoinHandle<()>>,
-    sessions: Arc<Mutex<HashMap<api::SessionId, u64>>>,
+    pub sessions: Arc<Mutex<Sessions>>,
 }
 
 impl Server {
@@ -36,7 +39,7 @@ impl Server {
         let should_stop = Arc::new(AtomicBool::new(false));
         let should_stop_clone = should_stop.clone();
 
-        let sessions = Arc::new(Mutex::new(HashMap::<api::SessionId, u64>::default()));
+        let sessions = Arc::new(Mutex::new(Sessions::default()));
         let sessions_clone = sessions.clone();
 
         let http_server_thread = thread::spawn(move || {
@@ -54,11 +57,6 @@ impl Server {
             http_server_thread: Some(http_server_thread),
             sessions,
         });
-    }
-
-    pub fn add_session(self: &Self, id: api::SessionId) {
-        let mut lock = self.sessions.lock().expect("what");
-        (*lock).insert(id, RemoteInfo::now_secs());
     }
 }
 
@@ -81,7 +79,7 @@ pub struct ServerConfig {
 fn serve_web(
     http_server: &tiny_http::Server,
     should_stop: &AtomicBool,
-    sessions: &Arc<Mutex<HashMap<api::SessionId, u64>>>,
+    sessions: &Arc<Mutex<Sessions>>,
 ) {
     for request in http_server.incoming_requests() {
         let mut request = request;

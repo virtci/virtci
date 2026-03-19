@@ -8,26 +8,14 @@ use std::{
 };
 use tiny_http::{Request, Response, StatusCode};
 
+use super::session::{SessionId, Sessions};
+
 type ApiResponse = Response<std::io::Cursor<Vec<u8>>>;
-
-/// Only the 52 least significant bits are used, to ensure easy JSON serialization.
-#[derive(Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-pub struct SessionId(i64);
-
-impl SessionId {
-    pub fn new_rand() -> SessionId {
-        const RELEVANT_BITS: i64 = 0xFFFFFFFFFFFFF;
-        let id: i64 = rand::random();
-        return SessionId(id & RELEVANT_BITS);
-    }
-}
-
-use super::web_assets::content_type_header;
 
 pub fn handle_api(
     path: &str,
     request: &mut Request,
-    sessions: &Arc<Mutex<HashMap<SessionId, u64>>>,
+    sessions: &Arc<Mutex<Sessions>>,
 ) -> ApiResponse {
     match path {
         "api/health" => endpoint::health(),
@@ -37,6 +25,8 @@ pub fn handle_api(
         _ => Response::from_data(b"not found".to_vec()).with_status_code(StatusCode(404)),
     }
 }
+
+use super::web_assets::content_type_header;
 
 mod endpoint {
     use crate::vm_image::RemoteInfo;
@@ -57,7 +47,7 @@ mod endpoint {
 
     pub fn session_heartbeat(
         request: &mut Request,
-        sessions: &Arc<Mutex<HashMap<SessionId, u64>>>,
+        sessions: &Arc<Mutex<Sessions>>,
     ) -> ApiResponse {
         // TODO Auth
 
@@ -72,13 +62,6 @@ mod endpoint {
         {
             "type": "error",
             "error": "failed to parse session heartbeat request"
-        }
-        "#;
-
-        const INVALID_SESSION_ERR_MESSAGE: &str = r#"
-        {
-            "type": "error",
-            "error": "invalid session id"
         }
         "#;
 
@@ -99,13 +82,7 @@ mod endpoint {
                 {
                     // update heartbeat time stamp
                     let mut lock = sessions.lock().expect("Failed to acquire mutex");
-                    if let Some(v) = (*lock).get_mut(&heartbeat.session_id) {
-                        *v = RemoteInfo::now_secs();
-                    } else {
-                        return Response::from_string(INVALID_SESSION_ERR_MESSAGE)
-                            .with_header(content_type_header("application/json"))
-                            .with_status_code(StatusCode(403));
-                    }
+                    (*lock).touch_timestamp(heartbeat.session_id);
                 }
 
                 // why does tiny_http use generics for different response types :(
@@ -118,7 +95,7 @@ mod endpoint {
 
     // pub fn vm_push_begin(
     //     request: &Request,
-    //     sessions: &Arc<Mutex<HashMap<SessionId, u64>>>,
+    //     sessions: &Arc<Mutex<Sessions>>,
     // ) -> ApiResponse {
     // }
 }
