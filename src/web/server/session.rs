@@ -20,10 +20,18 @@ impl SessionId {
 }
 
 #[derive(Debug)]
-#[repr(u8)]
 pub enum SessionType {
     Pull,
-    Push,
+    Push(PushSession),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PushSession {
+    /// Account that owns the VM.
+    pub account: String,
+    /// Actual VM name. Duplicate `name` is not allowed per `account`.
+    /// TODO override existing VM?
+    pub name: String,
 }
 
 #[derive(Debug)]

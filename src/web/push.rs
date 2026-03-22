@@ -73,6 +73,9 @@ pub fn run_push(args: &PushArgs, paths: &VciGlobalPaths) -> anyhow::Result<()> {
     // The s3 itself will ALSO have auto-expire every 24h or so? Not sure yet.
     // during heartbeat, server can send necessary presigned s3 access urls / creds for multipart
     // upload.
+    //
+    // push will go to a `account/staging/SESSION_ID` in the `account` bucket.
+    // This allows easy orphan cleanup.
 
     Ok(())
 }
