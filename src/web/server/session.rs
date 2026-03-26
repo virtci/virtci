@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::vm_image::RemoteInfo;
+use crate::{vm_image::RemoteInfo, web::server::auth::AuthContext};
 
 /// Only the 52 least significant bits are used, to ensure easy JSON serialization.
 #[derive(Debug, Eq, Hash, PartialOrd, Ord, PartialEq, Clone, Copy, Serialize, Deserialize)]
@@ -27,8 +27,8 @@ pub enum SessionType {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PushSession {
-    /// Account that owns the VM.
-    pub account: String,
+    /// Account that owns the VM. If `None`, a VM is considered "globally accessible".
+    pub account: Option<String>,
     /// Actual VM name. Duplicate `name` is not allowed per `account`.
     /// TODO override existing VM?
     pub name: String,
@@ -36,7 +36,7 @@ pub struct PushSession {
 
 #[derive(Debug)]
 struct StoredSession {
-    // TODO auth
+    auth: AuthContext,
     session_type: SessionType,
 }
 
@@ -54,14 +54,26 @@ pub struct Sessions {
     timeout_timestamps: Vec<u64>,
 }
 
+pub enum SessionAuthErr {
+    /// Not an actual session
+    NotASession,
+    /// VirtCI auth tokens need "vci_" at the start
+    Prefix,
+    /// Use didn't supply a token but one was expected.
+    MissingToken,
+    /// The token used for the session does not match the supplied one.
+    TokenMismatch,
+}
+
 impl Sessions {
-    pub fn add_session(self: &mut Self, session_type: SessionType) -> SessionId {
+    pub fn add_session(self: &mut Self, auth: AuthContext, session_type: SessionType) -> SessionId {
         let mut id = SessionId::new_rand();
         while self.sessions.contains_key(&id) {
             id = SessionId::new_rand();
         }
 
-        self.sessions.insert(id, StoredSession { session_type });
+        self.sessions
+            .insert(id, StoredSession { auth, session_type });
 
         // https://doc.rust-lang.org/std/vec/struct.Vec.html#method.binary_search
         // binary_search() returns an Err() containing the index where the element could be
@@ -103,6 +115,83 @@ impl Sessions {
 
             self.timeout_ids.remove(index);
             self.timeout_timestamps.remove(index);
+        }
+    }
+
+    /// If session is anonymous, don't bother checking token.
+    pub fn is_token_authorized_for_session(
+        self: &Self,
+        id: SessionId,
+        token: Option<&String>,
+    ) -> Result<(), SessionAuthErr> {
+        if let Some(auth) = self.session_auth(id) {
+            match auth {
+                AuthContext::Anonymous => Ok(()),
+                AuthContext::Authenticated { token_hash } => {
+                    if let Some(token_str) = token {
+                        if !token_str.starts_with("vci_") {
+                            return Err(SessionAuthErr::Prefix);
+                        }
+
+                        let hashed_token = super::auth::hash_auth_token(token_str);
+                        // constant time equality check, not vulnerable to timing attacks
+                        if hashed_token.eq(token_hash) {
+                            return Ok(());
+                        }
+                        return Err(SessionAuthErr::TokenMismatch);
+                    } else {
+                        return Err(SessionAuthErr::MissingToken);
+                    }
+                }
+            }
+        } else {
+            return Err(SessionAuthErr::NotASession);
+        }
+    }
+
+    pub fn session_auth<'a>(self: &'a Self, id: SessionId) -> Option<&'a AuthContext> {
+        match self.sessions.get(&id) {
+            Some(session_info) => Some(&session_info.auth),
+            None => None,
+        }
+    }
+}
+
+impl SessionAuthErr {
+    pub fn json_api_response(self: &Self) -> &str {
+        match self {
+            SessionAuthErr::NotASession => {
+                r#"
+                                {
+                                    "type": "error",
+                                    "error": "auth not a session"
+                                }
+                                "#
+            }
+            SessionAuthErr::Prefix => {
+                r#"
+                                {
+                                    "type": "error",
+                                    "error": "token should have 'vci_' prefix"
+                                }
+                                "#
+            }
+            SessionAuthErr::MissingToken => {
+                r#"
+                                {
+                                    "type": "error",
+                                    "error": "expected an auth token"
+                                }
+                                "#
+            }
+            SessionAuthErr::TokenMismatch => {
+                r#"
+                                {
+                                    "type": "error",
+                                    "error": "session is authenticated for a different token"
+                                }
+                                "#
+            }
         }
     }
 }

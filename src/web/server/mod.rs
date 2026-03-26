@@ -1,17 +1,14 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self};
 
-use anyhow::Context;
 use tiny_http::{Response, StatusCode};
 
-use crate::vm_image::RemoteInfo;
-
 mod api;
+mod auth;
 mod session;
 mod web_assets;
 
