@@ -30,8 +30,8 @@ impl TokenScope {
 
 #[derive(Debug)]
 pub struct TokenPermissions {
-    /// Account specific vm.
-    pub account_vm: TokenScope,
+    /// Namespace specific vm.
+    pub namespace_vm: TokenScope,
     /// ALL tokens must have at least `ReadOnly` for this,
     /// as everyone should be able to fetch global vms.
     pub global_vm: TokenScope,
@@ -58,10 +58,10 @@ pub fn auth_required() -> bool {
 }
 
 impl TokenPermissions {
-    pub fn token_account_perms(_token: &str, _account: &str) -> TokenPermissions {
+    pub fn token_namespace_perms(_token: &str, _namespace: &str) -> TokenPermissions {
         // TODO actual SQLite check
         return TokenPermissions {
-            account_vm: TokenScope::Admin,
+            namespace_vm: TokenScope::Admin,
             global_vm: TokenScope::Admin,
         };
     }
@@ -69,7 +69,7 @@ impl TokenPermissions {
     pub fn token_global_perms(_token: &str) -> TokenPermissions {
         // TODO actual SQLite check
         return TokenPermissions {
-            account_vm: TokenScope::Admin,
+            namespace_vm: TokenScope::Admin,
             global_vm: TokenScope::Admin,
         };
     }

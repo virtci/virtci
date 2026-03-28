@@ -25,13 +25,65 @@ pub enum SessionType {
     Push(PushSession),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
+pub struct PushFile {
+    /// namespace/image_name/file.extension
+    pub s3_path: String,
+    /// From CreateMultipartUpload response
+    pub upload_id: String,
+    /// In bytes. S3 max is 5TB no matter what.
+    pub file_size: u64,
+    /// Max 9998. Is the total parts this file needs to upload. 10k max - 2 for the create / complete.
+    pub part_count: u16,
+    /// 64 MB, 128 MB, 256 MB, or 512 MB.
+    pub part_size: u64,
+}
+
+impl PushFile {
+    pub fn new(s3_path: String, file_size: u64) -> PushFile {
+        let part_size = Self::choose_part_size(file_size);
+        let part_count = ((file_size + part_size - 1) / part_size).max(1) as u16;
+        PushFile {
+            s3_path,
+            upload_id: String::new(),
+            file_size,
+            part_count,
+            part_size,
+        }
+    }
+
+    /// 64 MB, 128 MB, 256 MB, or 512 MB.
+    fn choose_part_size(file_size: u64) -> u64 {
+        const MB: u64 = 1024 * 1024;
+        const GB: u64 = MB * 1024;
+        const TB: u64 = GB * 1024;
+        // As long as the part size * 9998 is greater than the file_size, its good.
+        // Optimizations through recommend smaller-ish part sizes. Apparently
+        // 100MB is very good for large files, so 128MB will be prioritized.
+        if file_size <= GB {
+            return 64 * MB;
+        }
+        // VERY unlikely to have anything bigger
+        else if file_size <= 100 * GB {
+            return 128 * MB;
+        }
+        // User doing some nonsense if this is the case.
+        else if file_size <= TB {
+            return 256 * MB;
+        }
+        // HARD max of 5TB for S3.
+        return 512 * MB;
+    }
+}
+
+#[derive(Debug)]
 pub struct PushSession {
-    /// Account that owns the VM. If `None`, a VM is considered "globally accessible".
-    pub account: Option<String>,
-    /// Actual VM name. Duplicate `name` is not allowed per `account`.
+    /// Namespace that owns the VM. If `None`, a VM is considered "globally accessible".
+    pub namespace: Option<String>,
+    /// Actual VM name. Duplicate `name` is not allowed per `namespace`.
     /// TODO override existing VM?
-    pub name: String,
+    pub image_name: String,
+    pub files: Vec<PushFile>,
 }
 
 #[derive(Debug)]

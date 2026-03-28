@@ -65,7 +65,7 @@ mod endpoint {
 
     use crate::web::server::{
         auth::AuthContext,
-        session::{PushSession, SessionAuthErr, SessionType},
+        session::{PushFile, PushSession, SessionAuthErr, SessionType},
     };
 
     use super::*;
@@ -156,14 +156,34 @@ mod endpoint {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    pub struct VmPushRequestFileInfo {
+        /// File name with extension
+        name: String,
+        /// In bytes
+        size: u64,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
     pub struct VmPushBeginRequest {
-        push: PushSession,
+        /// VM name itself
+        name: String,
+        files: Vec<VmPushRequestFileInfo>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct VmPushResponseFileInfo {
+        file: String,
+        upload_id: String,
+        /// In bytes. Will be 64 MB, 128 MB, 256 MB, or 512 MB.
+        part_size: u64,
+        /// Presigned URLs
+        part_urls: Vec<String>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct VmPushBeginResponse {
-        // r#type: String,
         session_id: SessionId,
+        uploads: Vec<VmPushResponseFileInfo>,
     }
 
     pub fn vm_push_begin(request: &mut Request, sessions: &Arc<Mutex<Sessions>>) -> ApiResponse {
@@ -186,6 +206,38 @@ mod endpoint {
                 return api_err_response!("failed to parse vm push begin request", 400);
             }
             Ok(push) => {
+                let namespace: Option<String> = None; // TODO get from sqlite based on `auth_token`
+
+                let prefix = match &namespace {
+                    Some(ns) => format!("{ns}/{}", push.name),
+                    None => push.name.clone(),
+                };
+
+                let files: Vec<PushFile> = push
+                    .files
+                    .iter()
+                    .map(|f| {
+                        let s3_path = format!("{prefix}/{}", f.name);
+                        PushFile::new(s3_path, f.size) // TODO upload_id
+                    })
+                    .collect();
+
+                let uploads: Vec<VmPushResponseFileInfo> = files
+                    .iter()
+                    .map(|f| VmPushResponseFileInfo {
+                        file: f.s3_path.clone(),
+                        upload_id: f.upload_id.clone(),
+                        part_size: f.part_size,
+                        part_urls: Vec::new(), // TODO generate presigned URLs
+                    })
+                    .collect();
+
+                let push_session = PushSession {
+                    namespace: namespace.clone(),
+                    image_name: push.name,
+                    files,
+                };
+
                 let session_id = {
                     let auth = if auth::auth_required() {
                         let token = auth_token
@@ -197,16 +249,16 @@ mod endpoint {
                                 401,
                             );
                         }
-                        if let Some(account) = &push.push.account {
+                        if let Some(namespace) = &namespace {
                             let perms =
-                                auth::TokenPermissions::token_account_perms(&token, &account);
-                            if perms.account_vm.has_readwrite() {
+                                auth::TokenPermissions::token_namespace_perms(&token, &namespace);
+                            if perms.namespace_vm.has_readwrite() {
                                 AuthContext::Authenticated {
                                     token_hash: auth::hash_auth_token(&token),
                                 }
                             } else {
                                 return api_err_response!(
-                                    "token does not have write permissions for account",
+                                    "token does not have write permissions for namespace",
                                     403
                                 );
                             }
@@ -229,16 +281,13 @@ mod endpoint {
 
                     let mut lock = sessions.lock().expect("Failed to acquire mutex");
 
-                    (*lock).add_session(
-                        auth,
-                        SessionType::Push(PushSession {
-                            account: push.push.account,
-                            name: push.push.name,
-                        }),
-                    )
+                    (*lock).add_session(auth, SessionType::Push(push_session))
                 };
 
-                let response = VmPushBeginResponse { session_id };
+                let response = VmPushBeginResponse {
+                    session_id,
+                    uploads,
+                };
 
                 return api_json_str_response(
                     &serde_json::to_string(&response).expect("How did this fail"),
