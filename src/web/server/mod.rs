@@ -47,6 +47,8 @@ impl Server {
             )
         });
 
+        println!("listening on port {}", config.port);
+
         return Ok(Server {
             should_stop,
             _config: config,
@@ -54,6 +56,12 @@ impl Server {
             http_server_thread: Some(http_server_thread),
             sessions,
         });
+    }
+
+    pub fn wait(mut self) {
+        if let Some(http_thread) = self.http_server_thread.take() {
+            http_thread.join().expect("Failed to join server thread");
+        }
     }
 }
 

@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
-const backendPort = process.env.VIRTCI_BACKEND_PORT || '8080'
+const backendPort = process.env.VIRTCI_BACKEND_PORT || '6399';
 
 export default defineConfig({
   plugins: [react()],
@@ -14,4 +14,4 @@ export default defineConfig({
       },
     },
   },
-})
+});
