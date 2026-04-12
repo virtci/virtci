@@ -3,12 +3,13 @@
 
 pub mod backend;
 pub mod cli;
+pub mod client;
 pub mod file_lock;
 pub mod run;
 pub mod run_state;
+pub mod server;
 pub mod transfer_lock;
 pub mod vm_image;
-pub mod web;
 pub mod yaml;
 
 use std::path::PathBuf;
@@ -90,7 +91,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             run_state::run_shell(&shell_args, &paths.temp);
         }
         cli::Command::Serve(serve_args) => {
-            let mut config = crate::web::server::ServerConfig::default();
+            let mut config = server::ServerConfig::default();
             if let Some(port) = serve_args.port {
                 config.port = port;
             }
@@ -99,11 +100,11 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                 config.s3 = serve_args.s3_url;
             }
 
-            let server = web::server::Server::new(config).expect("Failed to start server");
+            let server = server::Server::new(config).expect("Failed to start server");
             server.wait();
         }
         cli::Command::Push(push_args) => {
-            if let Err(e) = web::push::run_push(&push_args, paths) {
+            if let Err(e) = client::push::run_push(&push_args, paths) {
                 eprintln!("Import failed: {e:?}");
                 std::process::exit(1);
             }

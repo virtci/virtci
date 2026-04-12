@@ -63,7 +63,7 @@ use super::web_assets::content_type_header;
 mod endpoint {
     use tiny_http::Method;
 
-    use crate::web::server::{
+    use crate::server::{
         auth::AuthContext,
         session::{PushFile, PushSession, SessionAuthErr, SessionType},
     };

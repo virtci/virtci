@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::net::TcpStream;
+pub mod pull;
+pub mod push;
 
 // TODO make a basic HTTP client, using std::net::TcpStream
 
 #[cfg(test)]
 mod tests {
-    use crate::web::server::{Server, ServerConfig};
+    use crate::server::{Server, ServerConfig};
 
     use super::*;
 

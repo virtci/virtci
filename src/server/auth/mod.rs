@@ -4,11 +4,13 @@
 #[derive(Debug, Copy, Clone)]
 #[repr(u8)]
 pub enum TokenScope {
-    /// Cannot `ReadWrite` or `Admin`. Lowest level of privilege.
+    /// Cannot `ReadWrite`, `Maintain`, or `Admin`. Lowest level of privilege.
     ReadOnly,
-    /// Has `ReadOnly`, but not `Admin`. Medium level of privilege.
+    /// Has `ReadOnly`, but not `Maintain` or `Admin`. Medium level of privilege.
     ReadWrite,
-    /// Has `ReadOnly` and `ReadWrite`. Highest level of privilege.
+    /// Has `ReadOnly` and `ReadWrite`. Can modify VMs after the fact, including deleting them. High level of privilege.
+    Maintain,
+    /// Has `ReadOnly` and `ReadWrite`. Highest level of privilege. Can do anything for the specific permission type.2
     Admin,
 }
 
@@ -16,13 +18,13 @@ impl TokenScope {
     pub fn has_readwrite(self) -> bool {
         match self {
             TokenScope::ReadOnly => false,
-            TokenScope::ReadWrite | TokenScope::Admin => true,
+            TokenScope::ReadWrite | TokenScope::Maintain | TokenScope::Admin => true,
         }
     }
 
     pub fn has_admin(self) -> bool {
         match self {
-            TokenScope::ReadOnly | TokenScope::ReadWrite => false,
+            TokenScope::ReadOnly | TokenScope::ReadWrite | TokenScope::Maintain => false,
             TokenScope::Admin => true,
         }
     }

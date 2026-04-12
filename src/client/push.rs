@@ -295,8 +295,8 @@ fn create_encrypted_qcow2_upload_file(
 
 #[cfg(test)]
 mod tests {
+    use super::super::pull::decrypt_qcow2_file;
     use super::*;
-    use crate::web::pull::decrypt_qcow2_file;
 
     const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 

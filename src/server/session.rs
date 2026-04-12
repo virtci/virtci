@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{vm_image::RemoteInfo, web::server::auth::AuthContext};
+use crate::{server::auth::AuthContext, vm_image::RemoteInfo};
 
 /// Only the 52 least significant bits are used, to ensure easy JSON serialization.
 #[derive(Debug, Eq, Hash, PartialOrd, Ord, PartialEq, Clone, Copy, Serialize, Deserialize)]
