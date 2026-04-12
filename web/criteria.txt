@@ -1,0 +1,129 @@
+1. see the your vms (github your/organizations(namespace) profiale shows repo scoped inside the group)
+2. download the vms - wiht the actul vm
+3. inside vm info: name, cpu archtecture it's for (x86_64, arm64, RISKV64) - tags,  operating system it's using (Linux) - tags, private or public(of the namespace (accessability))
+4. storage availabilty should be visible
+6. Billing tab (increase limits etc)
+7. should be able to see access token = e.g. i can give gabe to see my stuff but limit readability for certain information = read, readwrite, admin, also it must be expirable (limited time of: )
+8. general search for anyone's public vm
+9. add description for the VM.
+10. audit log (directly visible within the site)
+12. user forum within the vm page wihtin the vm page itself (comment style)
+13. report, notifications of your vm (comment etc) - will be a small icon style
+14. data collection limited
+17. min required storage for vm (min spec required)
+18. organizations will implement resource lock so certian vms are not accessable/editable
+19. for self hosted users, they should be able to "top" the resources - logic of resource cap will be applied rather you are "paying" customer or not (if they have physical hardware withitn their server)***
+
+nav bar will include the following
+5. search bar (search by architecture, name, OS)
+
+11. login logout signup
+16. pricing tab - pricing breakdown
+
+
+left side bar will include the following
+
+15. category that divides the languages & frameworks
+
+<pre>
+
+  ┌─────────────────────┬────────────────────────┬───────────────────────────┐
+  │                     │      Cloud (paid)      │        Self-hosted        │
+  ├─────────────────────┼────────────────────────┼───────────────────────────┤
+  │ Storage cap source  │ Billing tier           │ Physical disk             │
+  ├─────────────────────┼────────────────────────┼───────────────────────────┤
+  │ Sidebar storage bar │ <font color="#B1B9F9">255</font> <font color="#B1B9F9">GB</font> <font color="#B1B9F9">/</font> <font color="#B1B9F9">400</font> <font color="#B1B9F9">GB</font> (tier) │ <font color="#B1B9F9">1.2</font> <font color="#B1B9F9">TB</font> <font color="#B1B9F9">/</font> <font color="#B1B9F9">3.8</font> <font color="#B1B9F9">TB</font> (disk)    │
+  ├─────────────────────┼────────────────────────┼───────────────────────────┤
+  │ Dashboard tab       │ Billing                │ Storage                   │
+  ├─────────────────────┼────────────────────────┼───────────────────────────┤
+  │ Upgrade prompts     │ Yes                    │ No                        │
+  ├─────────────────────┼────────────────────────┼───────────────────────────┤
+  │ Hit storage limit   │ Prompt to upgrade      │ Hard block, contact admin │
+  └─────────────────────┴────────────────────────┴───────────────────────────┘
+
+</pre>
+
+for disks there is an upper limit of how big the vm can get so we want it next to the "min spec" column
+the download button should be up instead (use icon)
+
+
+
+when you step down how much storage you have, though you are still billed for the original amount for that month cycle, storage limit will be automatically reduced - if you can reduced
+if the vm storage is over the "limit" say 50gb and they want to reduce, it cannot be done because they're already over and thus it should accomdate user's data
+
+
+----------------------------------------------------
+enterprise - history of the vm to revert back
+
+
+
+Design implementations
+- dark theme only
+- access all the informaiton from the initial page
+- simple
+-
+2 page
+- homepage: searching etc
+- admin dashboard : get to anything they need within 2 clicks. (except payment)
+-
+
+
+
+
+=-------------------------------=----------------------------=-----------------------=-----
+❯ look through the frontend of the website under /web/src/app.css, app.tsx, index.css, main.tsx
+  and follow the below guidelines to implemenet
+
+1. Delete disk pool: it does not need to be there
+2. yellow line on the top is too striking and it doesn't have to be colored like such make it subtle and blend in the website (don't use company primary colour(#FFD200 #0096FF #00D22D) for this)
+3. add your own dashboard along with the organizations tab which is the dropdown menu (currently there's owner, member and read so on thed very top add the "personal" which will act as a personla vm display dashboard)
+4. general texts and heading are too muted and we want more bright colour so it's more visible
+5. the text wihtin "discusson" can be smaller and the whole "discussion" are can be more condensed so the information can be more prominant
+6. downloadable informaiton such as docker, swift, nodejs - libraries are not important and doesn't need to be colored.
+Important information that MUST be highlighted are 1. CPU architecture, OS system, Size of the VM (40 GB) is very important and MUST be highlighted.
+7. public/private tag doesn't need to be included unless it's a personal project as it's implicit
+8. use https://www.flaticon.com/uicons/interface-icons for interface icons.
+9. download must be icon use the site above for download icon
+
+
+--------------------------------------------------------------------------------
+
+1. Get rid of purple and orange entirely. the accent colors should only be the following three:company primary colour(#FFD200 #0096FF #00D22D)
+2. Hero text can be gone
+3. a little more paddinf for the nav bar
+4. under specs & size the label of following: cpu, ram, min disk should be changed to: min CPU, min RAM, default max disk
+5. image size is SUPER important and it'll come after the OS configuration. nodejs and javascript type of libraries and tags while visible will be placed lower level after the follwoing order of tag display: OS system, CPU architecture, Size of the VM (40 GB)
+6. storage management is serviced by whatever storage handling company it's not handeled by virtci so no need to have the "nodes" section and it can be deleted
+
+pricing structure changes:
+
+Free:
+- unlimited pulling of any public VM
+- join organizations
+- community support
+
+Pro:
+- $5 usd for 50gb of vm storage
+- + 75cent per 10gb vm storage added
+- email support
+- audit log
+- priority support
+
+Enterprise:
+- custom pricing per month
+- custom deletion retention
+- vm history + revert
+- priority support
+- vm versioning
+
+-------------------------------------
+1. after storage there must be a space after
+2. min cpu should come down on the same line with min ram, default max disk
+3. not spec & size, just specs
+4. table view of storage log - vms within the server storage and display the total used and available of you plan
+5. when viewing vms tabs from the organizations or personal there should be a public / private tag just not available in the overall browsing
+6. $5 for 50 GB VM storage (clearer wording) and to add extra it'll be .75 per 10gb added
+7. aesthetic is more bold
+    - what if for each pricing model, when you click it, there is a colour coordinated spotlight?
+    - virtci logo
+    - gb sign should be adjustable based on the caracters and length of the text (never two lines)
