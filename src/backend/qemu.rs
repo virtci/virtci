@@ -877,8 +877,20 @@ pub fn check_kvm_access() -> Result<(), String> {
         Ok(_) => Ok(()),
         Err(e) => {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
-                Err("permission denied on /dev/kvm — add user to kvm group:\nsudo usermod -aG kvm $USER && newgrp kvm"
+                Err("permission denied on /dev/kvm add user to the KVM group with the following command:\nsudo usermod -aG kvm $USER && newgrp kvm"
                     .to_string())
+            } else if e.raw_os_error() == Some(19) {
+                // ENODEV: hardware virtualization nested not exposed to WSL2.
+                Err(
+                    "hardware virtualisation not available to this guest (ENODEV).\n\
+                     ensure nested virtualization is enabled in the BIOS.\n\
+                     On WSL2, add to C:\\Users\\<you>\\.wslconfig:\n\
+                     [wsl2]\n\
+                     nestedVirtualization=true\n\
+                     then run `wsl --shutdown` and reopen WSL2.\n\
+                     If that does not help, the host CPU or hypervisor does not support nested virtualisation."
+                        .to_string(),
+                )
             } else {
                 Err(format!("cannot open /dev/kvm: {e}"))
             }
