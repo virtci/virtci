@@ -9,6 +9,7 @@ use tiny_http::{Response, StatusCode};
 
 mod api;
 mod auth;
+mod db;
 mod namespace;
 mod session;
 mod web_assets;

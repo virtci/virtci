@@ -1,4 +1,6 @@
-# Server DB Schema
+# Server DB Schema Version 1
+
+For VirtCI Version 0.2.0+
 
 This document is a dev reference describing the SQLite database schema for the VirtCI storage management server. It covers reasoning as to why each design decision was made.
 
@@ -17,8 +19,6 @@ The storage server runs in one of two modes, set on startup.
 - Storage limits come entirely from the S3 storage API.
 - Versioning is freely available and MFA is optional.
 - Anonymous write usage is permitted if auth requirements are disabled.
-
-## Version 0.2.0
 
 ## SQLite configuration
 
@@ -239,7 +239,7 @@ For CLI auth, membership alone grants pull access for personal tokens. Push requ
 
 Invites are accepted in the web dashboard, but an email is sent to the email of `username` instructing them to do so.
 
-`username` must be unique to `namespace_id`.
+`username` must be unique to `namespace_id` provided `accepted_at` is null.
 
 ### `api_tokens`
 
