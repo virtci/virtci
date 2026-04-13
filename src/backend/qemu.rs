@@ -326,8 +326,24 @@ impl QemuBackend {
         // hardware accel if possible
         #[cfg(target_os = "linux")]
         {
-            if check_kvm_access().is_ok() {
-                cmd.arg("-accel").arg("kvm");
+            match check_kvm_access() {
+                Ok(()) => {
+                    cmd.arg("-accel").arg("kvm");
+                }
+                Err(reason) => {
+                    eprintln!(
+                        "{}",
+                        format!(
+                            "WARNING: KVM unavailable ({reason}). \
+                             Falling back to TCG software emulation — \
+                             the VM will be extremely slow. \
+                             On WSL2: ensure nested virtualisation is enabled and \
+                             /dev/kvm exists, then add your user to the kvm group:\n\
+                             \x20 sudo usermod -aG kvm $USER  && newgrp kvm"
+                        )
+                        .yellow()
+                    );
+                }
             }
         }
         #[cfg(target_os = "macos")]
@@ -853,16 +869,18 @@ pub fn check_kvm_access() -> Result<(), String> {
         return Err("KVM module not loaded (modprobe kvm_intel or kvm_amd)".to_string());
     }
 
-    match std::fs::File::open(kvm_path) {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(kvm_path)
+    {
         Ok(_) => Ok(()),
         Err(e) => {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
-                Err(
-                    "Permission denied for /dev/kvm (add user to kvm group and re-login)"
-                        .to_string(),
-                )
+                Err("permission denied on /dev/kvm — add user to kvm group:\nsudo usermod -aG kvm $USER && newgrp kvm"
+                    .to_string())
             } else {
-                Err(format!("Cannot access /dev/kvm: {e}"))
+                Err(format!("cannot open /dev/kvm: {e}"))
             }
         }
     }
