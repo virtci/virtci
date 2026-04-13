@@ -154,16 +154,20 @@ impl VmBackend for TartBackend {
         // but an active `virtci boot` holding an exclusive lock will block this.
         let image_lock = {
             let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
-            FileLock::try_new_shared(lock_path).map_err(|_| {
-                eprintln!(
-                    "{}",
-                    format!(
+            FileLock::try_new_shared(lock_path).map_err(|e| {
+                let msg = match e {
+                    crate::file_lock::FileLockError::OtherProcessBlock(_) => format!(
                         "Image '{}' is currently being modified by `virtci boot` — \
                          wait for it to finish before starting a new run.",
                         self.base_image.name
-                    )
-                    .red()
-                );
+                    ),
+                    crate::file_lock::FileLockError::Other => format!(
+                        "Failed to acquire shared lock for image '{}' — \
+                         if `virtci boot` is not running, try `virtci cleanup --force`.",
+                        self.base_image.name
+                    ),
+                };
+                eprintln!("{}", msg.red());
             })?
         };
 
@@ -363,9 +367,11 @@ impl Drop for TartBackend {
                     .output();
             }
 
-            let lock_path = runner.slot_lock.get_path().clone();
+            let slot_lock_path = runner.slot_lock.get_path().clone();
+            let image_lock_path = runner._image_lock.get_path().clone();
             drop(runner);
-            let _ = std::fs::remove_file(&lock_path);
+            let _ = std::fs::remove_file(&image_lock_path);
+            let _ = std::fs::remove_file(&slot_lock_path);
         }
     }
 }

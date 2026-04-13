@@ -131,7 +131,7 @@ impl FileLock {
 
     #[allow(clippy::result_large_err)]
     pub fn try_new_shared<P: AsRef<Path>>(path: P) -> Result<Self, FileLockError> {
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
@@ -152,20 +152,12 @@ impl FileLock {
         let locked = unsafe { try_lock_file_shared_native(handle) };
 
         if locked {
-            let metadata = LockMetadata::new();
-            if let Ok(json) = serde_json::to_string_pretty(&metadata) {
-                file.set_len(0).map_err(|_| FileLockError::Other)?;
-                file.seek(SeekFrom::Start(0))
-                    .map_err(|_| FileLockError::Other)?;
-                file.write_all(json.as_bytes())
-                    .map_err(|_| FileLockError::Other)?;
-                file.flush().map_err(|_| FileLockError::Other)?;
-            }
             Ok(FileLock {
                 file,
                 path: path.as_ref().to_path_buf(),
             })
         } else {
+            let mut file = file;
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
             if file.read_to_string(&mut contents).is_ok() {

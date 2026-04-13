@@ -244,11 +244,16 @@ fn find_vci_temp_files(temp_dir: &std::path::Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("vci-")
-                    && std::path::Path::new(name)
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("qcow2"))
-                {
+                let ext = std::path::Path::new(name)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+
+                let is_vci_file = (name.starts_with("vci-") || name.starts_with("vci_"))
+                    && matches!(ext.as_str(), "qcow2" | "lock" | "fd");
+
+                if is_vci_file {
                     files.push(path);
                 }
             }

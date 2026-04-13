@@ -94,6 +94,11 @@ impl QemuBackend {
 
         let qemu_config = self.base_image.backend.as_qemu().unwrap();
 
+        #[cfg(target_os = "windows")]
+        if qemu_config.tpm {
+            check_qemu_tpm_support(self.base_image.arch)?;
+        }
+
         let image_lock = {
             let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
             FileLock::try_new(lock_path).map_err(|_| {
@@ -116,8 +121,23 @@ impl QemuBackend {
         let temp_vars = if let Some(ref split) = qemu_config.uefi {
             let temp_vars_path =
                 temp_path.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
-            let contents = std::fs::read(expand_path(&split.vars)).map_err(|_| ())?;
-            std::fs::write(&temp_vars_path, &contents).map_err(|_| ())?;
+            let vars_src = expand_path(&split.vars);
+            let contents = std::fs::read(&vars_src).map_err(|e| {
+                eprintln!(
+                    "{}",
+                    format!("Failed to read UEFI vars '{}': {e}", vars_src.display()).red()
+                );
+            })?;
+            std::fs::write(&temp_vars_path, &contents).map_err(|e| {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "Failed to write UEFI vars to '{}': {e}",
+                        temp_vars_path.display()
+                    )
+                    .red()
+                );
+            })?;
             Some(temp_vars_path)
         } else {
             None
@@ -392,19 +412,28 @@ impl VmBackend for QemuBackend {
 
         let qemu_config = self.base_image.backend.as_qemu().unwrap();
 
+        #[cfg(target_os = "windows")]
+        if qemu_config.tpm {
+            check_qemu_tpm_support(self.base_image.arch)?;
+        }
+
         // If `virtci boot` is running, the shared lock will fail
         let image_lock = {
             let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
-            FileLock::try_new_shared(lock_path).map_err(|_| {
-                eprintln!(
-                    "{}",
-                    format!(
+            FileLock::try_new_shared(lock_path).map_err(|e| {
+                let msg = match e {
+                    crate::file_lock::FileLockError::OtherProcessBlock(_) => format!(
                         "Image '{}' is currently being modified by `virtci boot` — \
                          wait for it to finish before starting a new run.",
                         self.base_image.name
-                    )
-                    .red()
-                );
+                    ),
+                    crate::file_lock::FileLockError::Other => format!(
+                        "Failed to acquire shared lock for image '{}' — \
+                         if `virtci boot` is not running, try `virtci cleanup --force`.",
+                        self.base_image.name
+                    ),
+                };
+                eprintln!("{}", msg.red());
             })?
         };
 
@@ -417,8 +446,23 @@ impl VmBackend for QemuBackend {
         let temp_vars = if let Some(ref split) = qemu_config.uefi {
             let temp_vars_path =
                 temp_path.join(format!("vci-{}-{}-VARS.fd", self.name, host_port_flock.1));
-            let contents = std::fs::read(expand_path(&split.vars)).map_err(|_| ())?;
-            std::fs::write(&temp_vars_path, &contents).map_err(|_| ())?;
+            let vars_src = expand_path(&split.vars);
+            let contents = std::fs::read(&vars_src).map_err(|e| {
+                eprintln!(
+                    "{}",
+                    format!("Failed to read UEFI vars '{}': {e}", vars_src.display()).red()
+                );
+            })?;
+            std::fs::write(&temp_vars_path, &contents).map_err(|e| {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "Failed to write UEFI vars to '{}': {e}",
+                        temp_vars_path.display()
+                    )
+                    .red()
+                );
+            })?;
             Some(temp_vars_path)
         } else {
             None
@@ -686,6 +730,7 @@ impl Drop for QemuBackend {
             #[cfg(target_os = "windows")]
             let tpm_port_lock_path = runner.tpm_port.as_ref().map(|p| p.0.get_path().clone());
             let tpm_state_dir = runner.tpm_state_dir.clone();
+            let image_lock_path = runner._image_lock.get_path().clone();
 
             // release flocks before deleting their files
             drop(runner);
@@ -693,6 +738,7 @@ impl Drop for QemuBackend {
             for path in &paths_to_delete {
                 let _ = std::fs::remove_file(path);
             }
+            let _ = std::fs::remove_file(&image_lock_path);
             let _ = std::fs::remove_file(&port_lock_path);
             if let Some(ref path) = tpm_lock_path {
                 let _ = std::fs::remove_file(path);
@@ -722,7 +768,14 @@ fn qemu_system_binary(arch: Arch) -> String {
     #[cfg(target_os = "windows")]
     {
         let exe = format!("{base}.exe");
-        let candidates = [format!("C:\\Program Files\\qemu\\{exe}")];
+        let candidates = [
+            // MSYS2 UCRT64 (mingw-w64-ucrt-x86_64-qemu) — includes TPM support
+            format!("C:\\msys64\\ucrt64\\bin\\{exe}"),
+            // MSYS2 MINGW64
+            format!("C:\\msys64\\mingw64\\bin\\{exe}"),
+            // Official QEMU Windows installer — no TPM support
+            format!("C:\\Program Files\\qemu\\{exe}"),
+        ];
         for candidate in candidates {
             if std::path::Path::new(&candidate).exists() {
                 return candidate;
@@ -743,7 +796,11 @@ fn qemu_img_binary() -> String {
     #[cfg(target_os = "windows")]
     {
         let exe = "qemu-img.exe".to_string();
-        let candidates = [format!("C:\\Program Files\\qemu\\{exe}")];
+        let candidates = [
+            format!("C:\\msys64\\ucrt64\\bin\\{exe}"),
+            format!("C:\\msys64\\mingw64\\bin\\{exe}"),
+            format!("C:\\Program Files\\qemu\\{exe}"),
+        ];
         for candidate in candidates {
             if std::path::Path::new(&candidate).exists() {
                 return candidate;
@@ -853,6 +910,31 @@ fn get_tpm_port_flock(temp_path: &Path) -> Result<(FileLock, u16), ()> {
     Err(())
 }
 
+#[cfg(target_os = "windows")]
+fn check_qemu_tpm_support(arch: Arch) -> Result<(), ()> {
+    let binary = qemu_system_binary(arch);
+    let output = std::process::Command::new(&binary)
+        .arg("-tpmdev")
+        .arg("help")
+        .output();
+
+    let supported = match output {
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stderr.contains("emulator") || stdout.contains("emulator")
+        }
+        Err(_) => false,
+    };
+
+    if supported {
+        return Ok(());
+    }
+
+    eprintln!("QEMU at '{binary}' was not built with TPM support");
+    Err(())
+}
+
 pub fn cleanup_stale_qemu_files(temp_path: &Path) {
     let entries: Vec<_> = match std::fs::read_dir(temp_path) {
         Ok(e) => e.filter_map(std::result::Result::ok).collect(),
@@ -957,6 +1039,28 @@ pub fn cleanup_stale_qemu_files(temp_path: &Path) {
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
     }
+
+    // stale vci_image_*.lock files from crashed or previous runs
+    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
+        Ok(e) => e.filter_map(std::result::Result::ok).collect(),
+        Err(_) => return,
+    };
+
+    for entry in &entries {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        if !name_str.starts_with("vci_image_") || !name_str.ends_with(".lock") {
+            continue;
+        }
+
+        let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
+            continue;
+        };
+
+        let _ = std::fs::remove_file(lock.get_path());
+        drop(lock);
+    }
 }
 
 fn create_backing_file(
@@ -977,9 +1081,28 @@ fn create_backing_file(
             &dest_path.display().to_string(),
         ])
         .output()
-        .map_err(|_| ())?;
+        .map_err(|e| {
+            eprintln!(
+                "{}",
+                format!(
+                    "Failed to run '{qemu_img}': {e}\n\
+                     Ensure qemu-img is installed and on PATH."
+                )
+                .red()
+            );
+        })?;
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!(
+            "{}",
+            format!(
+                "qemu-img failed for '{}':\n{}",
+                source_path.display(),
+                stderr.trim()
+            )
+            .red()
+        );
         return Err(());
     }
 
