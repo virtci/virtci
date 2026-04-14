@@ -37,3 +37,154 @@ jobs:
 
       - name: Run CI checks
         run: virtci run tests/virtci/smoke_tests.yml
+
+  virtci-llm-analysis:
+    needs: gate
+    if: always() && (needs.gate.result == 'success' || needs.gate.result == 'skipped')
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions: # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
+      contents: read # read repo
+      pull-requests: write # post comments
+    concurrency:
+      group: virtci-llm-self-hosted
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Generate diff
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            git diff origin/${{ github.base_ref }}...HEAD > diff.txt
+          else
+            git diff HEAD~1 > diff.txt
+          fi
+
+      - name: Pull opencode image
+        run: docker pull -q ghcr.io/anomalyco/opencode:latest
+
+      - name: Run opencode Review
+        id: llm_analysis
+        continue-on-error: true
+        env:
+          # https://opencode.ai/docs/config/ -- no GITHUB_TOKEN in container; diff is pre-generated at /workspace/diff.txt
+          # --network none cannot be used: Ollama requires host.docker.internal connectivity.
+          # All other available isolation is applied instead.
+          # https://github.com/anomalyco/opencode
+          OPENCODE_CONFIG_CONTENT: '{"$schema":"https://opencode.ai/config.json","provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","name":"Ollama","options":{"baseURL":"http://host.docker.internal:11434/v1"},"models":{"qwen3.5:27b":{"name":"Qwen 3.5 27B"}}}},"permission":{"read":"allow","glob":"allow","grep":"allow","list":"allow","lsp":"allow","codesearch":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","webfetch":"deny","websearch":"deny","question":"deny","external_directory":"deny","doom_loop":"deny"}}'
+          CONTAINER_NAME: virtci-opencode-review-${{ github.run_id }}
+        run: |
+          set +e
+          timeout --preserve-status --signal=TERM --kill-after=30s 1140 \
+            docker run --rm --name "$CONTAINER_NAME" \
+              --add-host=host.docker.internal:host-gateway \
+              --user 65534:65534 \
+              --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --read-only \
+              --tmpfs /tmp:rw,nosuid,size=2g,mode=1777 \
+              --pids-limit 64 \
+              --memory 4g \
+              -v "${{ github.workspace }}:/workspace:ro" \
+              -w /workspace \
+              -e HOME=/tmp \
+              -e XDG_DATA_HOME=/tmp/.local/share \
+              -e OPENCODE_CONFIG_CONTENT \
+              ghcr.io/anomalyco/opencode:latest \
+              run \
+                "You are a software development expert reviewing the VirtCI virtual machine CI/CD runner tool and storage server. VirtCI is a storage server that is implemented with rust for the backend and react and typescript for the front end. QEMU or Tart (VM runner which only runs on M series mac allows running MacOS arm64 vms) as VM backend runners, S3 compatible APIs for storage. Act as a senior developer reviewing a pull request to analyze the differeneces occurred during the between pull request and git push. Step 1. Read ./diff.txt. Step 2. Analyze the for the changes that is logged in ./diff.txt. If there is any changes made, that is deemed abnormal that is not a conventional coding practice within enterprise, adhering to good security security practices, and not wasteful of existing resources (disk spaces etc.) Step 3. Output the results in following format with clear labels and constructive analysis: ## Critical Issues, ## Potential Issues, ## Suggestions, ## Summary. Cite file:line for each finding. Write None found for empty sections." \
+              --model ollama/qwen3.5:27b \
+            2>&1 | tee llm-analysis-raw.md
+          EXIT=${PIPESTATUS[0]}
+          echo "opencode exit code: $EXIT"
+          if [ "$EXIT" = "143" ] || [ "$EXIT" = "124" ]; then
+            echo "::warning::opencode timed out (exit $EXIT)"
+          fi
+          echo "llm_exit=$EXIT" >> "$GITHUB_OUTPUT"
+
+      - name: Generate report
+        if: always()
+        run: |
+          touch llm-analysis-raw.md
+          echo "raw output size: $(wc -c < llm-analysis-raw.md) bytes"
+
+          if grep -q '^## Critical Issues' llm-analysis-raw.md; then
+            sed -n '/^## Critical Issues/,$p' llm-analysis-raw.md > llm-analysis.md
+          else
+            {
+              echo "## LLM Analysis (structured report not produced)"
+              echo ""
+              echo "The model did not output the expected sections"
+              echo ""
+              echo "- exit code: \`${{ steps.llm_analysis.outputs.llm_exit }}\`"
+              echo ""
+              echo "Raw output tail:"
+              echo ""
+              echo '```'
+              tail -c 4000 llm-analysis-raw.md
+              echo '```'
+            } > llm-analysis.md
+          fi
+
+      - name: Show raw opencode output
+        if: always()
+        run: cat llm-analysis-raw.md
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f "virtci-opencode-review-${{ github.run_id }}" 2>/dev/null || true
+
+      - name: Post PR Comment
+        if: github.event_name == 'pull_request' && steps.llm_analysis.outcome == 'success'
+        continue-on-error: true
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file llm-analysis.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Add to Job Summary
+        if: always()
+        continue-on-error: true
+        run: |
+          cat llm-analysis.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "<details><summary>Raw opencode output</summary>"
+            echo ""
+            echo '```'
+            cat llm-analysis-raw.md
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Analysis Artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: llm-analysis-${{ github.run_id }}
+          path: |
+            llm-analysis.md
+            llm-analysis-raw.md
+          if-no-files-found: ignore
+
+      - name: Post Warning on Failure
+        if: always() && steps.llm_analysis.outcome != 'success'
+        continue-on-error: true
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            gh pr comment ${{ github.event.pull_request.number }} --body "**LLM Analysis Warning**: The analysis didn't complete (timeout or Ollama unavailable). This is non-blocking and doesn't affect PR approval."
+          else
+            echo "::warning::LLM analysis didn't complete for this ${{ github.event_name }} event."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+Output exactly these sections: ## Critical Issues, ## Potential Issues, ## Suggestions, ## Summary. Cite file:line for each finding. Write None found for empty sections.
