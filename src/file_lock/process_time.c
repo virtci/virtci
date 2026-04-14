@@ -66,7 +66,9 @@ static uint64_t get_boot_time(void) {
     char line[256];
     uint64_t btime = 0;
     while (fgets(line, sizeof(line), f)) {
-        if (sscanf(line, "btime %llu", &btime) == 1) {
+        unsigned long long btime_tmp = 0;
+        if (sscanf(line, "btime %llu", &btime_tmp) == 1) {
+            btime = (uint64_t)btime_tmp;
             break;
         }
     }
@@ -98,7 +100,7 @@ bool get_process_start_time_native(uint32_t pid, uint64_t *out_start_time) {
     }
     after_comm++;
 
-    uint64_t starttime;
+    unsigned long long starttime_tmp = 0;
     int fields_parsed = sscanf(after_comm,
                                " %*c"   // state
                                " %*d"   // ppid
@@ -120,13 +122,13 @@ bool get_process_start_time_native(uint32_t pid, uint64_t *out_start_time) {
                                " %*d"   // num_threads
                                " %*d"   // itrealvalue
                                " %llu", // starttime
-                               &starttime);
+                               &starttime_tmp);
 
     if (fields_parsed != 1) {
         return false;
     }
 
-    *out_start_time = starttime;
+    *out_start_time = (uint64_t)starttime_tmp;
     return true;
 }
 

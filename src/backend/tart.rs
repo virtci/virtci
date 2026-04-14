@@ -14,7 +14,7 @@ use crate::{
 pub struct TartRunner {
     pub is_base_mode: bool,
     /// shared or exclusive `vci_image_{name}.lock`.
-    _image_lock: FileLock,
+    image_lock: FileLock,
     clone_name: String,
     slot_lock: FileLock,
     tart_process: Option<Child>,
@@ -124,7 +124,7 @@ impl TartBackend {
 
         self.runner = Some(TartRunner {
             is_base_mode: true,
-            _image_lock: image_lock,
+            image_lock,
             clone_name: vm_name,
             slot_lock,
             tart_process: None,
@@ -251,7 +251,7 @@ impl VmBackend for TartBackend {
 
         self.runner = Some(TartRunner {
             is_base_mode: false,
-            _image_lock: image_lock,
+            image_lock,
             clone_name,
             slot_lock,
             tart_process: None,
@@ -368,7 +368,7 @@ impl Drop for TartBackend {
             }
 
             let slot_lock_path = runner.slot_lock.get_path().clone();
-            let image_lock_path = runner._image_lock.get_path().clone();
+            let image_lock_path = runner.image_lock.get_path().clone();
             drop(runner);
             let _ = std::fs::remove_file(&image_lock_path);
             let _ = std::fs::remove_file(&slot_lock_path);

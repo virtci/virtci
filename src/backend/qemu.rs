@@ -17,7 +17,7 @@ use crate::{
 pub struct QemuRunner {
     pub is_base_mode: bool,
     /// shared or exclusive `vci_image_{name}.lock`.
-    _image_lock: FileLock,
+    image_lock: FileLock,
     pub host_port: (FileLock, u16),
     temp_image: PathBuf,
     temp_uefi_vars: Option<PathBuf>,
@@ -195,7 +195,7 @@ impl QemuBackend {
 
         let runner = QemuRunner {
             is_base_mode: true,
-            _image_lock: image_lock,
+            image_lock,
             host_port: host_port_flock,
             temp_image: base_image_path,
             temp_uefi_vars: temp_vars,
@@ -522,7 +522,7 @@ impl VmBackend for QemuBackend {
 
         let runner = QemuRunner {
             is_base_mode: false,
-            _image_lock: image_lock,
+            image_lock,
             host_port: host_port_flock,
             temp_image,
             temp_uefi_vars: temp_vars,
@@ -730,7 +730,7 @@ impl Drop for QemuBackend {
             #[cfg(target_os = "windows")]
             let tpm_port_lock_path = runner.tpm_port.as_ref().map(|p| p.0.get_path().clone());
             let tpm_state_dir = runner.tpm_state_dir.clone();
-            let image_lock_path = runner._image_lock.get_path().clone();
+            let image_lock_path = runner.image_lock.get_path().clone();
 
             // release flocks before deleting their files
             drop(runner);
