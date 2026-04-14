@@ -187,4 +187,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-Output exactly these sections: ## Critical Issues, ## Potential Issues, ## Suggestions, ## Summary. Cite file:line for each finding. Write None found for empty sections.
