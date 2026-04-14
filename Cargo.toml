@@ -10,7 +10,9 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
 serde_json = "1.0.149"
 serde_with = "3.17.0"
-russh = { version = "0.56", default-features = false, features = ["aws-lc-rs"] }
+russh = { version = "0.60.0", default-features = false, features = [
+  "aws-lc-rs",
+] }
 russh-sftp = "2.0"
 tokio = { version = "1", features = [
   "rt",
@@ -23,7 +25,7 @@ tokio = { version = "1", features = [
   "signal",
 ] }
 colored = "3"
-tar = "0.4"
+tar = "0.4.45"
 rust-embed = "8"
 mime_guess = "2"
 tiny_http = "0.12"
