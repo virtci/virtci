@@ -79,7 +79,7 @@ jobs:
           # --network none cannot be used: Ollama requires host.docker.internal connectivity.
           # All other available isolation is applied instead.
           # https://github.com/anomalyco/opencode
-          OPENCODE_CONFIG_CONTENT: '{"$schema":"https://opencode.ai/config.json","provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","name":"Ollama","options":{"baseURL":"http://host.docker.internal:11434/v1"},"models":{"qwen3.5:27b":{"name":"Qwen 3.5 27B"}}}},"permission":{"read":"allow","glob":"allow","grep":"allow","list":"allow","lsp":"allow","codesearch":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","webfetch":"deny","websearch":"deny","question":"deny","external_directory":"deny","doom_loop":"deny"}}'
+          OPENCODE_CONFIG_CONTENT: '{"$schema":"https://opencode.ai/config.json","provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","name":"Ollama","options":{"baseURL":"http://host.docker.internal:11434/v1"},"models":{"qwen3.6:27b":{"name":"Qwen 3.6 27B"}}}},"permission":{"read":"allow","glob":"allow","grep":"allow","list":"allow","lsp":"allow","codesearch":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","webfetch":"deny","websearch":"deny","question":"deny","external_directory":"deny","doom_loop":"deny"}}'
           CONTAINER_NAME: virtci-opencode-review-${{ github.run_id }}
         run: |
           set +e
@@ -101,7 +101,7 @@ jobs:
               ghcr.io/anomalyco/opencode:latest \
               run \
                 "You are a software development expert reviewing the VirtCI virtual machine CI/CD runner tool and storage server. VirtCI is a storage server that is implemented with rust for the backend and react and typescript for the front end. QEMU or Tart (VM runner which only runs on M series mac allows running MacOS arm64 vms) as VM backend runners, S3 compatible APIs for storage. Act as a senior developer reviewing a pull request to analyze the differeneces occurred during the between pull request and git push. Step 1. Read ./diff.txt. Step 2. Analyze the for the changes that is logged in ./diff.txt. If there is any changes made, that is deemed abnormal that is not a conventional coding practice within enterprise, adhering to good security security practices, and not wasteful of existing resources (disk spaces etc.) Step 3. Output the results in following format with clear labels and constructive analysis: ## Critical Issues, ## Potential Issues, ## Suggestions, ## Summary. Cite file:line for each finding. Write None found for empty sections." \
-              --model ollama/qwen3.5:27b \
+              --model ollama/qwen3.6:27b \
             2>&1 | tee llm-analysis-raw.md
           EXIT=${PIPESTATUS[0]}
           echo "opencode exit code: $EXIT"
@@ -186,4 +186,3 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
-
