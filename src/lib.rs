@@ -100,7 +100,13 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                 config.s3 = serve_args.s3_url;
             }
 
-            let server = server::Server::new(config).expect("Failed to start server");
+            if !serve_args.db_path.is_empty() {
+                config.db_path = Some(PathBuf::from(serve_args.db_path));
+            } else {
+                config.db_path = Some(paths.home.clone());
+            }
+
+            let server = server::Server::new(config, &paths).expect("Failed to start server");
             server.wait();
         }
         cli::Command::Push(push_args) => {

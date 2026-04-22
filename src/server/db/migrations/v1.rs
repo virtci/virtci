@@ -12,6 +12,8 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             email TEXT NOT NULL UNIQUE COLLATE NOCASE,
             password_hash TEXT,
             username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            avatar_s3_url TEXT,
+            public_personal_info JSONB NOT NULL DEFAULT '{}',
             mfa_required BOOLEAN NOT NULL DEFAULT 0,
             failed_login_count INTEGER NOT NULL DEFAULT 0,
             locked_until INTEGER,
@@ -76,6 +78,9 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             storage_used_bytes INTEGER NOT NULL DEFAULT 0,
             created_by_user_id INTEGER NOT NULL,
             display_name TEXT,
+            avatar_s3_url TEXT,
+            public_personal_info JSONB NOT NULL DEFAULT '{}',
+            is_verified BOOLEAN NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             deleted_at INTEGER,
             purge_after INTEGER,
@@ -121,6 +126,7 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             scope INTEGER,
             created_at INTEGER NOT NULL,
             last_used_at INTEGER,
+            last_used_ip TEXT,
             expires_at INTEGER,
             revoked_at INTEGER,
             FOREIGN KEY (user_id) REFERENCES users(id),
@@ -139,6 +145,7 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             is_private BOOLEAN NOT NULL DEFAULT 0,
             versioned BOOLEAN NOT NULL DEFAULT 0,
             description TEXT,
+            star_count INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
             deleted_at INTEGER,
             purge_after INTEGER,
@@ -155,6 +162,7 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             content_digest TEXT NOT NULL,
             total_bytes INTEGER NOT NULL,
             image_desc JSONB NOT NULL,
+            release_notes TEXT,
             created_by_token_id INTEGER NOT NULL,
             state TEXT NOT NULL CHECK (state IN ('uploading', 'ready', 'failed', 'deleting')),
             pull_count INTEGER NOT NULL DEFAULT 0,
@@ -181,12 +189,24 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             image_id INTEGER NOT NULL,
             image_version_id INTEGER NOT NULL,
             alias TEXT NOT NULL CHECK (alias != 'latest'),
+            description TEXT,
             FOREIGN KEY (image_id) REFERENCES images(id),
             FOREIGN KEY (image_version_id) REFERENCES image_versions(id),
             PRIMARY KEY (image_id, alias)
         );
 
         CREATE INDEX idx_image_aliases_version ON image_aliases(image_version_id);
+
+        CREATE TABLE image_stars (
+            user_id INTEGER NOT NULL,
+            image_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (image_id) REFERENCES images(id),
+            PRIMARY KEY (user_id, image_id)
+        );
+
+        CREATE INDEX idx_image_stars_image ON image_stars(image_id);
 
         CREATE TABLE image_files (
             id INTEGER PRIMARY KEY,

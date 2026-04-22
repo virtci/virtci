@@ -189,6 +189,10 @@ pub struct ServeArgs {
     /// but writing to both.
     #[argh(option)]
     pub s3_url: Vec<String>,
+    /// the path to store the database SQLite file, as the directory to store it in.
+    /// This is NOT the db file name, just the directory.
+    #[argh(positional)]
+    pub db_path: String,
 }
 
 /// (TODO) Push a local VM to remote storage

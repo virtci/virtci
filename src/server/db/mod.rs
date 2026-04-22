@@ -12,7 +12,7 @@ use rusqlite::{Connection, Transaction};
 mod migrations;
 
 pub struct SQLiteDBOpenFile {
-    path: PathBuf,
+    pub path: PathBuf,
 }
 
 pub enum SQLiteDBOpenParams {
@@ -25,7 +25,7 @@ pub struct SQLiteDB {
 }
 
 impl SQLiteDB {
-    fn new(open_params: &SQLiteDBOpenParams) -> anyhow::Result<Arc<RwLock<SQLiteDB>>> {
+    pub fn new(open_params: &SQLiteDBOpenParams) -> anyhow::Result<Arc<RwLock<SQLiteDB>>> {
         let mut conn = match open_params {
             SQLiteDBOpenParams::Memory => {
                 Connection::open_in_memory().expect("Failed to create SQLite DB in memory")

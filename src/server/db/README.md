@@ -112,6 +112,8 @@ Humans who log in via the web dashboard.
 | `email` | TEXT NOT NULL UNIQUE COLLATE NOCASE | Stored with user provided casing, but uniqueness and lookups are case-insensitive. |
 | `password_hash` | TEXT | Argon2id PHC-format string (includes salt). Null for OAuth. |
 | `username` | TEXT NOT NULL UNIQUE COLLATE NOCASE | Must be URL-safe and CLI-safe, cause it's used in S3 paths and CLI commands. Immutable for the user. |
+| `avatar_s3_url` | TEXT | Full S3 URL to an avatar image file. Null = no avatar set; UI falls back to a generated identicon seeded by `username`. |
+| `public_personal_info` | JSONB NOT NULL DEFAULT '{}' | Freeform public profile fields (bio, website, donation url, pronouns, etc). |
 | `mfa_required` | BOOLEAN NOT NULL DEFAULT false | True if the user has completed MFA enrollment. |
 | `failed_login_count` | INTEGER NOT NULL DEFAULT 0 | Reset to 0 on successful login. |
 | `locked_until` | INTEGER | Set after N failed attempts. Null = not locked. |
@@ -195,6 +197,9 @@ Each namespace is a user / organization. The namespace slug maps to an S3 path p
 | `storage_used_bytes` | INTEGER NOT NULL DEFAULT 0 | Counter, updated with any modifications to namespace images. |
 | `created_by_user_id` | INTEGER NOT NULL | FK to `users.id`. May be different than `owner_user_id` as ownership could be transferred. |
 | `display_name` | TEXT | Display name for the namespace. All operations will still use `slug`, but when viewing the page, `display_name` will also be shown. |
+| `avatar_s3_url` | TEXT | Full S3 URL to an avatar image file. Null = no avatar set; UI falls back to a generated identicon seeded by `slug`. |
+| `public_personal_info` | JSONB NOT NULL DEFAULT '{}' | Freeform public namespace info (description, readme/about markdown, website url, etc). |
+| `is_verified` | BOOLEAN NOT NULL DEFAULT false | Admin-set flag for official/verified namespaces. Only modifiable by server operators, not namespace owners. |
 | `created_at` | INTEGER NOT NULL | |
 | `deleted_at` | INTEGER | Null = active |
 | `purge_after` | INTEGER | When the server should begin sweeping hard-deletes, removing S3 objects. If NULL, don't delete. |
@@ -257,6 +262,7 @@ Authentication tokens for CLI and CI use.
 | `scope` | INTEGER | NOT NULL if `is_provisioned = true`. 0=ReadOnly, 1=ReadWrite, 2=Maintain, 3=Admin. |
 | `created_at` | INTEGER NOT NULL | |
 | `last_used_at` | INTEGER | Updated on each successful auth resolution |
+| `last_used_ip` | TEXT | IP address of the most recent successful auth resolution. Helps users recognize which token is which in the dashboard. |
 | `expires_at` | INTEGER | Default to created_at + 90 days. Nullable for non-expiring (should be discouraged). |
 | `revoked_at` | INTEGER | Non-null = revoked, cannot be un-revoked |
 | CHECK | | See constraint below |
@@ -293,6 +299,7 @@ A logical VM image. The actual bytes live in S3; this table tracks metadata.
 | `is_private` | BOOLEAN NOT NULL DEFAULT false | |
 | `versioned` | BOOLEAN NOT NULL DEFAULT false | |
 | `description` | TEXT | |
+| `star_count` | INTEGER NOT NULL DEFAULT 0 | Denormalized count of `image_stars` rows. Updated in the same transaction as any star/unstar. |
 | `created_at` | INTEGER NOT NULL | |
 | `deleted_at` | INTEGER | |
 | `purge_after` | INTEGER | |
@@ -317,6 +324,7 @@ An immutable snapshot of a VM image's contents at a point in time.
 | `content_digest` | TEXT NOT NULL | blake3 hash of canonical manifest (sorted file paths + sha256 + sizes). |
 | `total_bytes` | INTEGER NOT NULL | |
 | `image_desc` | JSONB NOT NULL | Maps to a serialized `ImageDescription` entry. |
+| `release_notes` | TEXT | Optional markdown (?) release notes authored at push time. Shown on the version detail page. |
 | `created_by_token_id` | INTEGER NOT NULL | FK to `api_tokens.id`. |
 | `state` | TEXT NOT NULL CHECK (state IN ('uploading','ready','failed','deleting')) | Tracks upload lifecycle. If `uploading`, its not visible to pulls or web management yet. `failed` means it must be cleaned up. `deleting` is set to indicate it's being deleted from S3. |
 | `pull_count` | INTEGER NOT NULL DEFAULT 0 | The amount of times this specific version has been pulled. |
@@ -350,7 +358,21 @@ Allow assigning an alias to an image. Example `my-org/ubuntu:stable` would allow
 | `image_id` | INTEGER NOT NULL | FK to `images.id`. Stored to ensure no duplicate aliases across versions. |
 | `image_version_id` | INTEGER NOT NULL | FK to `image_versions.id`. The actual relevant data. |
 | `alias` | TEXT NOT NULL | e.g. `stable`, `production`, `nightly`. `latest` is not permitted. |
+| `description` | TEXT | Optional human description of what the alias means, like "production-ready release". Shown alongside the alias in the dashboard on hover most likely. |
 | PRIMARY KEY | `(image_id, alias)` | |
+
+### `image_stars`
+
+A user starring an image. Used for discovery, sorting by popularity, and personal bookmarks.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `user_id` | INTEGER NOT NULL | FK to `users.id`. |
+| `image_id` | INTEGER NOT NULL | FK to `images.id`. |
+| `created_at` | INTEGER NOT NULL | |
+| PRIMARY KEY | `(user_id, image_id)` | |
+
+`images.star_count` must be kept in sync in the same transaction as insert/delete. Stars on private images from users who lose namespace access are allowed to remain, they just can't see the image itself until re-added.
 
 ### `image_files`
 
@@ -390,7 +412,7 @@ Append-only log of significant actions.
 | `actor_user_id` | INTEGER | Null if action was by a provisioned token with no user. |
 | `actor_token_id` | INTEGER | Null if action was via web session. |
 | `namespace_id` | INTEGER | Null for user-level actions. |
-| `action` | TEXT NOT NULL | e.g. `image.push`, `token.create`, `member.add`, `billing.update`. |
+| `action` | TEXT NOT NULL | e.g. `image.push`, `token.create`, `member.add`, `billing.update`, `user.login`, `user.login_failed`, `session.active`. |
 | `target` | TEXT | Human-readable target, e.g. `namespace/ubuntu-node:latest`. |
 | `ip` | TEXT | |
 | `user_agent` | TEXT | |
@@ -401,6 +423,8 @@ Doesn't use FKs so that any deleted entries in other tables will preserve the au
 Old audit logs can be deleted. Pull operations are not recorded in the audit log as those will account for the overwhelming majority of operations.
 
 If `actor_user_id` is not null, but `namespace_id` is null, that's a user action that doesn't pertain to their VMs itself, such as billing info, MFA update, password setting, etc.
+
+Login events are also captured here.
 
 ### `user_notifications`
 

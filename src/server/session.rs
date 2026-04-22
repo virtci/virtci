@@ -150,7 +150,8 @@ impl Sessions {
     }
 
     pub fn remove_stale_sessions(self: &mut Self, timeout_secs: u64) {
-        let mut indices_to_remove = Vec::<usize>::new();
+        // pre-allocate some amount. Most CLI sessions probably won't timeout unless someone CTRL + C.
+        let mut indices_to_remove = Vec::<usize>::with_capacity(8);
 
         let now = RemoteInfo::now_secs();
         for (index, timestamp) in self.timeout_timestamps.iter().enumerate() {
