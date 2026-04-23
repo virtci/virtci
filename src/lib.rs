@@ -450,11 +450,13 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
 pub struct VciGlobalPaths {
     pub home: PathBuf,
     pub temp: PathBuf,
+    /// Directory storing the cached remote VM images. Should be accessible by any user on the system for reading.
+    pub cache: PathBuf,
 }
 
 impl VciGlobalPaths {
     fn default_home_path() -> PathBuf {
-        if let Some(vci_home) = std::env::var_os("VCI_HOME") {
+        if let Some(vci_home) = std::env::var_os("VIRTCI_HOME_DIR") {
             return PathBuf::from(vci_home);
         }
 
@@ -496,6 +498,76 @@ impl VciGlobalPaths {
             )
         });
     }
+
+    fn default_cache_dir() -> PathBuf {
+        if let Some(vci_cache) = std::env::var_os("VIRTCI_CACHE_DIR") {
+            return PathBuf::from(vci_cache);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return PathBuf::from("/Users/Shared/virtci_cache");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // even if the cache is evicted, thats fine, cause it can be re-pulled.
+            // furthermore, if a vm image is evicted mid run, the fd will stay valid while the process runs.
+            return PathBuf::from("/var/tmp/virtci_cache");
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(public) = std::env::var_os("PUBLIC") {
+                return PathBuf::from(public).join("virtci_cache");
+            }
+            return PathBuf::from("C:\\Users\\Public\\virtci_cache"); // default assuming C drive
+        }
+    }
+
+    pub fn create_cache_dir(&self) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        std::fs::create_dir_all(&self.cache).with_context(|| {
+            format!(
+                "Failed to create cache directory at '{}'",
+                self.cache.display()
+            )
+        })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            const DESIRED_MODE: u32 = 0o1777;
+
+            let current_mode = std::fs::metadata(&self.cache)
+                .with_context(|| {
+                    format!(
+                        "Failed to stat cache directory at '{}'",
+                        self.cache.display()
+                    )
+                })?
+                .permissions()
+                .mode()
+                & 0o7777;
+
+            if current_mode != DESIRED_MODE {
+                let perms = std::fs::Permissions::from_mode(DESIRED_MODE);
+                if let Err(e) = std::fs::set_permissions(&self.cache, perms) {
+                    if current_mode & 0o1777 != 0o1777 {
+                        return Err(anyhow::Error::new(e).context(format!(
+                            "Cache directory at '{}' has mode {:o}, expected 1777, and cannot be chmod'd",
+                            self.cache.display(),
+                            current_mode
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for VciGlobalPaths {
@@ -503,6 +575,7 @@ impl Default for VciGlobalPaths {
         Self {
             home: Self::default_home_path(),
             temp: std::env::temp_dir().join("vci"),
+            cache: Self::default_cache_dir(),
         }
     }
 }

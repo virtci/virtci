@@ -11,8 +11,10 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
 serde_json = "1.0.149"
 serde_with = "3.17.0"
-russh = { version = "0.56", default-features = false, features = ["aws-lc-rs"] }
-russh-sftp = "2.0"
+russh = { version = "0.60.1", default-features = false, features = [
+  "aws-lc-rs",
+] }
+russh-sftp = "2.1"
 tokio = { version = "1", features = [
   "rt",
   "net",

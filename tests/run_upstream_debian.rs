@@ -11,6 +11,7 @@ fn run_debian_upstream_x64() {
     let paths = virtci::VciGlobalPaths {
         home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/home")),
         temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/temp")),
+        cache: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/cache")),
     };
 
     {
@@ -64,6 +65,7 @@ fn run_debian_upstream_arm64() {
     let paths = virtci::VciGlobalPaths {
         home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/home")),
         temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/temp")),
+        cache: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/cache")),
     };
 
     {
