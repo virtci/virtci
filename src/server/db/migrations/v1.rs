@@ -81,6 +81,7 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             avatar_s3_url TEXT,
             public_personal_info JSONB NOT NULL DEFAULT '{}',
             is_verified BOOLEAN NOT NULL DEFAULT 0,
+            personal BOOLEAN NOT NULL,
             created_at INTEGER NOT NULL,
             deleted_at INTEGER,
             purge_after INTEGER,
@@ -123,7 +124,7 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             name TEXT NOT NULL,
             user_id INTEGER,
             namespace_id INTEGER,
-            scope INTEGER,
+            scope INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
             last_used_at INTEGER,
             last_used_ip TEXT,
@@ -132,8 +133,8 @@ pub fn create_tables(tx: &Transaction) -> anyhow::Result<()> {
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (namespace_id) REFERENCES namespaces(id),
             CHECK (
-                (is_provisioned = 0 AND user_id IS NOT NULL AND namespace_id IS NULL AND scope IS NULL) OR
-                (is_provisioned = 1 AND namespace_id IS NOT NULL AND scope IS NOT NULL)
+                (is_provisioned = 0 AND user_id IS NOT NULL AND namespace_id IS NULL) OR
+                (is_provisioned = 1 AND namespace_id IS NOT NULL)
             )
         );
 

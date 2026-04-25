@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::thread::{self};
 
 use tiny_http::{Response, StatusCode};
@@ -12,6 +12,7 @@ mod api;
 mod auth;
 mod db;
 mod namespace;
+mod s3;
 mod session;
 mod web_assets;
 
@@ -30,7 +31,7 @@ pub struct Server {
     http_server_thread: Option<thread::JoinHandle<()>>,
     /// Does periodic cleanup sweeping
     cleanup_thread: Option<thread::JoinHandle<()>>,
-    db: Arc<RwLock<SQLiteDB>>,
+    db: Arc<Mutex<SQLiteDB>>,
     pub sessions: Arc<Mutex<Sessions>>,
 }
 
@@ -45,24 +46,6 @@ impl Server {
         let should_stop = Arc::new(AtomicBool::new(false));
         let sessions = Arc::new(Mutex::new(Sessions::default()));
 
-        let http_server_thread = {
-            let should_stop_clone = should_stop.clone();
-            let sessions_clone = sessions.clone();
-            thread::spawn(move || {
-                serve_web(
-                    http_server_clone.as_ref(),
-                    should_stop_clone.as_ref(),
-                    &sessions_clone,
-                )
-            })
-        };
-
-        let cleanup_thread = {
-            let should_stop_clone = should_stop.clone();
-            let sessions_clone = sessions.clone();
-            thread::spawn(move || run_periodic_cleanup(should_stop_clone.as_ref(), &sessions_clone))
-        };
-
         let db_open_params = if let Some(db_path) = &config.db_path {
             if !db_path.is_dir() {
                 return Err(anyhow::anyhow!(
@@ -76,6 +59,26 @@ impl Server {
             SQLiteDBOpenParams::Memory
         };
         let db = SQLiteDB::new(&db_open_params)?;
+
+        let http_server_thread = {
+            let should_stop_clone = should_stop.clone();
+            let sessions_clone = sessions.clone();
+            let db_clone = db.clone();
+            thread::spawn(move || {
+                serve_web(
+                    http_server_clone.as_ref(),
+                    should_stop_clone.as_ref(),
+                    &sessions_clone,
+                    &db_clone,
+                )
+            })
+        };
+
+        let cleanup_thread = {
+            let should_stop_clone = should_stop.clone();
+            let sessions_clone = sessions.clone();
+            thread::spawn(move || run_periodic_cleanup(should_stop_clone.as_ref(), &sessions_clone))
+        };
 
         println!("listening on port {}", config.port);
 
@@ -124,6 +127,7 @@ fn serve_web(
     http_server: &tiny_http::Server,
     should_stop: &AtomicBool,
     sessions: &Arc<Mutex<Sessions>>,
+    db: &Arc<Mutex<SQLiteDB>>,
 ) {
     for request in http_server.incoming_requests() {
         let mut request = request;
@@ -147,6 +151,7 @@ fn serve_web(
                 str::from_utf8(&path_buf[..path.len()]).expect("HUH"),
                 &mut request,
                 sessions,
+                db,
             )
         } else {
             web_assets::serve_static(path)

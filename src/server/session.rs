@@ -78,8 +78,8 @@ impl PushFile {
 
 #[derive(Debug)]
 pub struct PushSession {
-    /// Namespace that owns the VM. If `None`, a VM is considered "globally accessible".
-    pub namespace: Option<String>,
+    /// Namespace that owns the VM.
+    pub namespace: String,
     /// Actual VM name. Duplicate `name` is not allowed per `namespace`.
     /// TODO override existing VM?
     pub image_name: String,

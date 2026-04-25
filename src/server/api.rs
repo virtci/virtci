@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock, Mutex};
 use tiny_http::{Request, Response, StatusCode};
 
+use crate::server::db::{ApiTokenProvision, SQLiteDB};
+use crate::vm_image::RemoteInfo;
+
 use super::auth;
 use super::session::{SessionId, Sessions};
 
@@ -14,12 +17,16 @@ pub fn handle_api(
     path: &str,
     request: &mut Request,
     sessions: &Arc<Mutex<Sessions>>,
+    db: &Arc<Mutex<SQLiteDB>>,
 ) -> ApiResponse {
     match path {
         "api/health" => endpoint::health(request),
         "api/auth/info" => endpoint::auth_info(request),
         "api/session/heartbeat" => endpoint::session_heartbeat(request, sessions),
-        "api/vm/push/begin" => endpoint::vm_push_begin(request, sessions),
+        "api/vm/push/begin" => endpoint::vm_push_begin(request, sessions, db),
+        "api/vm/push/end" => endpoint::vm_push_end(request, sessions, db),
+        "api/vm/pull/begin" => endpoint::vm_pull_begin(request, sessions, db),
+        // pull doesn't need an end as it's stateless
         _ => Response::from_data(b"not found".to_vec()).with_status_code(StatusCode(404)),
     }
 }
@@ -165,6 +172,8 @@ mod endpoint {
 
     #[derive(Debug, Serialize, Deserialize)]
     pub struct VmPushBeginRequest {
+        /// Slug of the target namespace.
+        namespace: String,
         /// VM name itself
         name: String,
         files: Vec<VmPushRequestFileInfo>,
@@ -186,7 +195,11 @@ mod endpoint {
         uploads: Vec<VmPushResponseFileInfo>,
     }
 
-    pub fn vm_push_begin(request: &mut Request, sessions: &Arc<Mutex<Sessions>>) -> ApiResponse {
+    pub fn vm_push_begin(
+        request: &mut Request,
+        sessions: &Arc<Mutex<Sessions>>,
+        db: &Arc<Mutex<SQLiteDB>>,
+    ) -> ApiResponse {
         if request.method() != &Method::Post {
             return api_err_response!("endpoint 'api/vm/push/begin' only supports POST", 405);
         }
@@ -206,12 +219,74 @@ mod endpoint {
                 return api_err_response!("failed to parse vm push begin request", 400);
             }
             Ok(push) => {
-                let namespace: Option<String> = None; // TODO get from sqlite based on `auth_token`
+                // Single db lock spans token + namespace lookup, released before
+                // `sessions.lock()`. No nesting, consistent lock ordering.
+                let (auth, namespace) = if auth::auth_required() {
+                    let token = auth_token
+                        .as_ref()
+                        .expect("check was earlier in the function");
+                    if !token.starts_with("vci_") {
+                        return api_json_str_response(
+                            SessionAuthErr::Prefix.json_api_response(),
+                            401,
+                        );
+                    }
+                    let token_hash = auth::hash_auth_token(token);
 
-                let prefix = match &namespace {
-                    Some(ns) => format!("{ns}/{}", push.name),
-                    None => push.name.clone(),
+                    let db_lock = db.lock().expect("db lock poisoned");
+                    let info = match db_lock.api_token_info(token_hash.as_bytes()) {
+                        Ok(info) => info,
+                        Err(_) => return api_err_response!("auth token not recognized", 401),
+                    };
+
+                    if info.revoked_at.is_some() {
+                        return api_err_response!("auth token has been revoked", 401);
+                    }
+                    if let Some(exp) = info.expires_at {
+                        if RemoteInfo::now_secs() as i64 >= exp {
+                            return api_err_response!("auth token has expired", 401);
+                        }
+                    }
+
+                    let ns_info = match db_lock.namespace_by_slug(&push.namespace) {
+                        Ok(info) => info,
+                        Err(_) => return api_err_response!("namespace not found", 404),
+                    };
+                    drop(db_lock);
+
+                    if ns_info.deleted_at.is_some() {
+                        return api_err_response!("namespace has been deleted", 410);
+                    }
+
+                    if !info.scope.has_readwrite() {
+                        return api_err_response!("token scope insufficient to push", 403);
+                    }
+
+                    match info.provision {
+                        ApiTokenProvision::Namespace(token_ns_id) => {
+                            if token_ns_id != ns_info.id {
+                                return api_err_response!(
+                                    "token is not scoped to the target namespace",
+                                    403
+                                );
+                            }
+                        }
+                        ApiTokenProvision::User(token_uid) => {
+                            if !(ns_info.personal && ns_info.owner_user_id == token_uid) {
+                                return api_err_response!(
+                                    "personal tokens can only push to their owner's personal namespace",
+                                    403
+                                );
+                            }
+                        }
+                    }
+
+                    (AuthContext::Authenticated { token_hash }, ns_info.slug)
+                } else {
+                    (AuthContext::Anonymous, push.namespace.clone())
                 };
+
+                let prefix = format!("{namespace}/{}", push.name);
 
                 let files: Vec<PushFile> = push
                     .files
@@ -233,54 +308,13 @@ mod endpoint {
                     .collect();
 
                 let push_session = PushSession {
-                    namespace: namespace.clone(),
+                    namespace,
                     image_name: push.name,
                     files,
                 };
 
                 let session_id = {
-                    let auth = if auth::auth_required() {
-                        let token = auth_token
-                            .as_ref()
-                            .expect("check was earlier in the function");
-                        if !token.starts_with("vci_") {
-                            return api_json_str_response(
-                                SessionAuthErr::Prefix.json_api_response(),
-                                401,
-                            );
-                        }
-                        if let Some(namespace) = &namespace {
-                            let perms =
-                                auth::TokenPermissions::token_namespace_perms(&token, &namespace);
-                            if perms.namespace_vm.has_readwrite() {
-                                AuthContext::Authenticated {
-                                    token_hash: auth::hash_auth_token(&token),
-                                }
-                            } else {
-                                return api_err_response!(
-                                    "token does not have write permissions for namespace",
-                                    403
-                                );
-                            }
-                        } else {
-                            let perms = auth::TokenPermissions::token_global_perms(&token);
-                            if perms.global_vm.has_readwrite() {
-                                AuthContext::Authenticated {
-                                    token_hash: auth::hash_auth_token(&token),
-                                }
-                            } else {
-                                return api_err_response!(
-                                    "token does not have write permissions for global",
-                                    403
-                                );
-                            }
-                        }
-                    } else {
-                        AuthContext::Anonymous
-                    };
-
                     let mut lock = sessions.lock().expect("Failed to acquire mutex");
-
                     (*lock).add_session(auth, SessionType::Push(push_session))
                 };
 
@@ -295,5 +329,34 @@ mod endpoint {
                 );
             }
         }
+    }
+
+    pub fn vm_push_end(
+        request: &mut Request,
+        sessions: &Arc<Mutex<Sessions>>,
+        db: &Arc<Mutex<SQLiteDB>>,
+    ) -> ApiResponse {
+        if request.method() != &Method::Post {
+            return api_err_response!("endpoint 'api/vm/push/end' only supports POST", 405);
+        }
+
+        todo!()
+    }
+
+    pub fn vm_pull_begin(
+        request: &mut Request,
+        sessions: &Arc<Mutex<Sessions>>,
+        db: &Arc<Mutex<SQLiteDB>>,
+    ) -> ApiResponse {
+        if request.method() != &Method::Get {
+            return api_err_response!("endpoint 'api/vm/pull/begin' only supports GET", 405);
+        }
+
+        // validate, but allow for public image no matter any token, even a missing token
+        // get signed s3 urls
+        // update pull count, fine if failure
+        // use non-egress fee providers, cause these files are MASSIVE
+
+        todo!()
     }
 }

@@ -200,6 +200,7 @@ Each namespace is a user / organization. The namespace slug maps to an S3 path p
 | `avatar_s3_url` | TEXT | Full S3 URL to an avatar image file. Null = no avatar set; UI falls back to a generated identicon seeded by `slug`. |
 | `public_personal_info` | JSONB NOT NULL DEFAULT '{}' | Freeform public namespace info (description, readme/about markdown, website url, etc). |
 | `is_verified` | BOOLEAN NOT NULL DEFAULT false | Admin-set flag for official/verified namespaces. Only modifiable by server operators, not namespace owners. |
+| `personal` | BOOLEAN NOT NULL | True if this namespace is a user's personal namespace. Personal API tokens can only push to a namespace with `personal = true` whose `owner_user_id` matches the token's user. |
 | `created_at` | INTEGER NOT NULL | |
 | `deleted_at` | INTEGER | Null = active |
 | `purge_after` | INTEGER | When the server should begin sweeping hard-deletes, removing S3 objects. If NULL, don't delete. |
@@ -259,7 +260,7 @@ Authentication tokens for CLI and CI use.
 | `name` | TEXT NOT NULL | Human label, e.g. "GitHub Actions" or "laptop" |
 | `user_id` | INTEGER | NULL if `is_provisioned = true`. |
 | `namespace_id` | INTEGER | NOT NULL if `is_provisioned = true`. |
-| `scope` | INTEGER | NOT NULL if `is_provisioned = true`. 0=ReadOnly, 1=ReadWrite, 2=Maintain, 3=Admin. |
+| `scope` | INTEGER NOT NULL | 0=ReadOnly, 1=ReadWrite, 2=Maintain, 3=Admin. |
 | `created_at` | INTEGER NOT NULL | |
 | `last_used_at` | INTEGER | Updated on each successful auth resolution |
 | `last_used_ip` | TEXT | IP address of the most recent successful auth resolution. Helps users recognize which token is which in the dashboard. |
