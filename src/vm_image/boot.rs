@@ -1,8 +1,6 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::path::Path;
-
 use colored::Colorize;
 
 use crate::{
@@ -13,7 +11,7 @@ use crate::{
 };
 
 pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) {
-    let image_desc = load_image(&args.name, &paths.home).unwrap_or_else(|e| {
+    let image_desc = load_image(&args.name, paths).unwrap_or_else(|e| {
         eprintln!(
             "{}",
             format!("Failed to load image '{}': {e}", args.name).red()
@@ -126,15 +124,18 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
     }
 }
 
-fn load_image(name: &str, home_path: &Path) -> Result<ImageDescription, String> {
-    let vci_path = home_path.join(format!("{name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
+fn load_image(name: &str, paths: &VciGlobalPaths) -> Result<ImageDescription, String> {
+    let home = paths.resolve_image_home(name).ok_or_else(|| {
         format!(
-            "image '{}' not found (looked at {})",
+            "image '{}' not found (looked at {} and {})",
             name,
-            vci_path.display()
+            paths.user_home.display(),
+            paths.system_home.display()
         )
     })?;
+    let vci_path = home.join(format!("{name}.vci"));
+    let contents = std::fs::read_to_string(&vci_path)
+        .map_err(|e| format!("Failed to read {}: {e}", vci_path.display()))?;
     let mut desc: ImageDescription = serde_json::from_str(&contents)
         .map_err(|e| format!("Failed to parse image description '{name}': {e}"))?;
     desc.name = name.to_string();

@@ -9,12 +9,15 @@ const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 fn run_debian_upstream_x64() {
     const VM_IMAGE_NAME: &str = "TEST_run_debian_upstream_x64";
     let paths = virtci::VciGlobalPaths {
-        home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/home")),
+        user_home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/home")),
+        system_home: PathBuf::from(format!(
+            "{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/system_home"
+        )),
         temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/temp")),
     };
 
     {
-        let all_images = load_all_images(&paths.home);
+        let all_images = load_all_images(&paths);
         let contains_image = all_images.iter().any(|img| img.name == VM_IMAGE_NAME);
         if contains_image {
             run_virtci_with_args(&paths, &["remove", VM_IMAGE_NAME, "--force"]);
@@ -34,7 +37,7 @@ fn run_debian_upstream_x64() {
     );
 
     {
-        let all_images = load_all_images(&paths.home);
+        let all_images = load_all_images(&paths);
         let contains_image = all_images.iter().any(|img| img.name == VM_IMAGE_NAME);
         assert!(contains_image);
     }
@@ -51,7 +54,7 @@ fn run_debian_upstream_x64() {
 
     {
         run_virtci_with_args(&paths, &["remove", VM_IMAGE_NAME, "--force"]);
-        let all_images = load_all_images(&paths.home);
+        let all_images = load_all_images(&paths);
         let contains_image = all_images.iter().any(|img| img.name == VM_IMAGE_NAME);
         assert!(!contains_image);
     }
@@ -62,12 +65,15 @@ fn run_debian_upstream_x64() {
 fn run_debian_upstream_arm64() {
     const VM_IMAGE_NAME: &str = "TEST_run_debian_upstream_arm64";
     let paths = virtci::VciGlobalPaths {
-        home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/home")),
+        user_home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/home")),
+        system_home: PathBuf::from(format!(
+            "{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/system_home"
+        )),
         temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/{VM_IMAGE_NAME}/temp")),
     };
 
     {
-        let all_images = load_all_images(&paths.home);
+        let all_images = load_all_images(&paths);
         let contains_image = all_images.iter().any(|img| img.name == VM_IMAGE_NAME);
         if contains_image {
             run_virtci_with_args(&paths, &["remove", VM_IMAGE_NAME, "--force"]);
@@ -87,7 +93,7 @@ fn run_debian_upstream_arm64() {
     );
 
     {
-        let all_images = load_all_images(&paths.home);
+        let all_images = load_all_images(&paths);
         let contains_image = all_images.iter().any(|img| img.name == VM_IMAGE_NAME);
         assert!(contains_image);
     }
@@ -104,7 +110,7 @@ fn run_debian_upstream_arm64() {
 
     {
         run_virtci_with_args(&paths, &["remove", VM_IMAGE_NAME, "--force"]);
-        let all_images = load_all_images(&paths.home);
+        let all_images = load_all_images(&paths);
         let contains_image = all_images.iter().any(|img| img.name == VM_IMAGE_NAME);
         assert!(!contains_image);
     }

@@ -1,12 +1,13 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, save_config, validate_image_name, Arch,
     BackendConfig, GuestOs, ImageDescription, SshConfig, TartConfig,
 };
+use crate::VciGlobalPaths;
 
 /// Interactive Tart image setup (macOS ARM64 only)
 /// 1. Image name (what to call it)
@@ -15,13 +16,19 @@ use crate::vm_image::{
 /// 4. SSH credentials
 /// 5. Summary + confirmation
 /// 6. Save .vci file
-pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
+pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(), String> {
     println!("VCI Tart Image Setup");
     println!("====================\n");
 
     verify_tart_installed()?;
 
-    let name = prompt_image_name(home_path)?;
+    let dest_home: PathBuf = if system {
+        paths.system_home.clone()
+    } else {
+        paths.user_home.clone()
+    };
+
+    let name = prompt_image_name(paths)?;
     let vm_name = prompt_tart_vm_name()?;
     let guest_os = prompt_guest_os()?;
     let ssh = prompt_ssh_config()?;
@@ -39,8 +46,8 @@ pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
     print_summary(&config);
 
     if prompt_yes_no("Save this configuration?", true)? {
-        save_config(&config, home_path)?;
-        println!("\nSaved to {}/{}.vci", home_path.display(), config.name);
+        save_config(&config, &dest_home, system)?;
+        println!("\nSaved to {}/{}.vci", dest_home.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);
     } else {
         println!("Setup cancelled.");
@@ -62,14 +69,14 @@ fn verify_tart_installed() -> Result<(), String> {
 }
 
 /// Step 1
-fn prompt_image_name(home_path: &Path) -> Result<String, String> {
+fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
     println!("Step 1: Image Name");
     println!("  This name will be used in workflow files (e.g., image: macos-sequoia)");
 
     loop {
         let name = read_line("Image name: ")?;
 
-        match validate_image_name(&name, home_path) {
+        match validate_image_name(&name, paths) {
             Ok(()) => {
                 println!();
                 return Ok(name);

@@ -2,6 +2,16 @@
 
 VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
+## Version 0.1.0
+
+### Added
+
+#### System-wide VM Storage
+
+Support importing a VM into system-wide storage, accessible by all users using `virtci import some_file.tar --system`. Runs will check the user-local directory first, then check the system-wide one.
+
+Does not work for Tart backends.
+
 ## Version 0.0.0 - 2026-03-03
 
 Initial public release of VirtCI. Tested and ran in production environments.

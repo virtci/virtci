@@ -1,15 +1,21 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::Path;
 
 use crate::vm_image::{BackendConfig, ImageDescription};
+use crate::VciGlobalPaths;
 
-pub fn run_list(verbose: bool, home_path: &PathBuf) {
-    let mut images = load_all_images(home_path);
+pub fn run_list(verbose: bool, paths: &VciGlobalPaths) {
+    let mut images = load_all_images(paths);
 
     if images.is_empty() {
-        println!("No VM images found in {}", home_path.display());
+        println!(
+            "No VM images found in {} or {}",
+            paths.user_home.display(),
+            paths.system_home.display()
+        );
         return;
     }
 
@@ -29,7 +35,22 @@ pub fn run_list(verbose: bool, home_path: &PathBuf) {
     }
 }
 
-pub fn load_all_images(home_path: &PathBuf) -> Vec<ImageDescription> {
+pub fn load_all_images(paths: &VciGlobalPaths) -> Vec<ImageDescription> {
+    let mut images = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for home in paths.image_homes() {
+        for img in load_images_in(home) {
+            if seen.insert(img.name.clone()) {
+                images.push(img);
+            }
+        }
+    }
+
+    images
+}
+
+fn load_images_in(home_path: &Path) -> Vec<ImageDescription> {
     let Ok(entries) = std::fs::read_dir(home_path) else {
         return Vec::new();
     };
