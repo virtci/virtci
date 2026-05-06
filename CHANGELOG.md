@@ -12,6 +12,10 @@ Support importing a VM into system-wide storage, accessible by all users using `
 
 Does not work for Tart backends.
 
+#### Run Copy Step Make Directories
+
+The `copy` step in the yaml workflows will, by default, create the directories on the target that is necessary in order to copy the files / directories. The `no_mkdir` boolean option can be set to `true` to disable this functionality, causing a failure if the directories do not exist, in which the copy would fail.
+
 ## Version 0.0.0 - 2026-03-03
 
 Initial public release of VirtCI. Tested and ran in production environments.

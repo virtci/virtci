@@ -52,7 +52,7 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
                     .arg("delete")
                     .arg(&tart.vm_name)
                     .output()
-                    .map_err(|e| format!("Failed to run tart import: {e}"));
+                    .map_err(|e| format!("Failed to run tart remove: {e}"));
                 match output {
                     Ok(proc) => {
                         if !proc.status.success() {
