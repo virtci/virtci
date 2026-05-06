@@ -45,7 +45,7 @@ jobs:
       - self-hosted
       - Linux
       - X64
-    timeout-minutes: 20
+    timeout-minutes: 35
     continue-on-error: true
     permissions: # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
       contents: read # read repo
@@ -79,11 +79,57 @@ jobs:
           # --network none cannot be used: Ollama requires host.docker.internal connectivity.
           # All other available isolation is applied instead.
           # https://github.com/anomalyco/opencode
-          OPENCODE_CONFIG_CONTENT: '{"$schema":"https://opencode.ai/config.json","provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","name":"Ollama","options":{"baseURL":"http://host.docker.internal:11434/v1"},"models":{"qwen3.6:27b":{"name":"Qwen 3.6 27B"}}}},"permission":{"read":"allow","glob":"allow","grep":"allow","list":"allow","lsp":"allow","codesearch":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","webfetch":"deny","websearch":"deny","question":"deny","external_directory":"deny","doom_loop":"deny"}}'
+          OPENCODE_CONFIG_CONTENT: '{"$schema":"https://opencode.ai/config.json","provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","name":"Ollama","options":{"baseURL":"http://host.docker.internal:11434/v1","timeout":900000,"chunkTimeout":180000},"models":{"qwen3.6:27b":{"name":"Qwen 3.6 27B"}}}},"compaction":{"auto":true,"prune":true,"reserved":15000},"permission":{"read":"allow","glob":"allow","grep":"allow","list":"deny","lsp":"deny","codesearch":"deny","edit":"deny","bash":"deny","task":"deny","skill":"deny","webfetch":"deny","websearch":"deny","question":"deny","external_directory":"deny","doom_loop":"deny"}}'
           CONTAINER_NAME: virtci-opencode-review-${{ github.run_id }}
         run: |
           set +e
-          timeout --preserve-status --signal=TERM --kill-after=30s 1140 \
+
+          PROMPT=$(cat <<'PROMPT_END'
+          You are reviewing a diff for VirtCI: a self-hosted CI/CD runner that orchestrates real OS VMs across multiple CPU architectures. The Rust backend drives QEMU and Tart (macOS arm64 only) VM lifecycles, exposes S3-compatible storage APIs, and is paired with a React/TypeScript frontend. Targets Linux, macOS, and Windows hosts.
+
+          The diff to review is in the attached file diff.txt. Treat it as the complete change set.
+
+          This is a one-shot review. There is no user to respond to. Your final message must contain exactly these four sections and nothing else:
+
+          ## Critical Issues
+          ## Potential Issues
+          ## Suggestions
+          ## Summary
+
+          Cite file:line for each finding. Write "None found" for empty sections. Any other output is a failure. Do not ask questions. Do not request approval. Do not request next steps. Do not propose to apply the diff.
+
+          You may use Read, Glob, or Grep to look up source files referenced by the diff if you need additional context, BUT you have a hard budget of at most 5 tool calls total across the entire review. After 5 tool calls (or sooner) you must immediately write the four sections, do not exceed this budget under any circumstances. Do not create todo lists, multi-step plans, or staged work. Do not attempt to Read or page through diff.txt, its contents are already attached.
+
+          Constraints (do not flag these as issues):
+          - Spawning QEMU, Tart, swtpm, or other VM-backend processes is by design
+          - Platform-conditional code (cfg(target_os = ...), powershell scripts for Windows) is expected
+          - unwrap()/expect() in tests, build scripts, and example workflows is acceptable
+          - unsafe blocks for FFI or low-level VM/process control are acceptable when contained
+
+          Focus on:
+          - Rust correctness: panics on untrusted input, unsoundness in unsafe, lifetime/borrow bugs, Send/Sync violations
+          - Async issues: blocking calls inside async (std::fs, std::process, sync Mutex held across .await), tokio task leaks, deadlocks
+          - VM and process lifecycle: leaked child processes (QEMU/Tart/swtpm), missing cleanup on error paths, orphaned VM clones, zombie pids
+          - Command injection when building QEMU/Tart/shell argv from user-controlled input
+          - Path traversal in workflow file copies (vm:~/ steps), workspace handling, or storage layer
+          - Secret handling: host_env opt-in leakage, secrets logged or persisted to disk, secrets in error messages
+          - S3 API surface: auth/signature checks, request validation, multipart upload state, range request bounds
+          - Cross-platform breakage: hardcoded path separators, POSIX-only syscalls used on Windows paths, symlink/permission assumptions
+          - React/TypeScript: XSS via dangerouslySetInnerHTML or unescaped backend strings, missing auth on API calls, unsafe deserialization
+          - Resource exhaustion not bounded: unbounded channels, unbounded VM clones, missing disk-quota checks
+
+          Do not report:
+          - Naming, formatting, or rustfmt/clippy-style nits
+          - Suggestions to add abstraction layers, traits, or generics
+          - Missing doc comments
+          - Test coverage gaps unless the change clearly breaks an existing tested invariant
+          - Generic "consider using crate X instead" suggestions
+
+          Output the four sections now and stop.
+          PROMPT_END
+          )
+
+          timeout --preserve-status --signal=TERM --kill-after=30s 1980 \
             docker run --rm --name "$CONTAINER_NAME" \
               --add-host=host.docker.internal:host-gateway \
               --user 65534:65534 \
@@ -92,7 +138,7 @@ jobs:
               --read-only \
               --tmpfs /tmp:rw,nosuid,size=2g,mode=1777 \
               --pids-limit 64 \
-              --memory 4g \
+              --memory 8g \
               -v "${{ github.workspace }}:/workspace:ro" \
               -w /workspace \
               -e HOME=/tmp \
@@ -100,8 +146,9 @@ jobs:
               -e OPENCODE_CONFIG_CONTENT \
               ghcr.io/anomalyco/opencode:latest \
               run \
-                "You are a software development expert reviewing the VirtCI virtual machine CI/CD runner tool and storage server. VirtCI is a storage server that is implemented with rust for the backend and react and typescript for the front end. QEMU or Tart (VM runner which only runs on M series mac allows running MacOS arm64 vms) as VM backend runners, S3 compatible APIs for storage. Act as a senior developer reviewing a pull request to analyze the differeneces occurred during the between pull request and git push. Step 1. Read ./diff.txt. Step 2. Analyze the for the changes that is logged in ./diff.txt. If there is any changes made, that is deemed abnormal that is not a conventional coding practice within enterprise, adhering to good security security practices, and not wasteful of existing resources (disk spaces etc.) Step 3. Output the results in following format with clear labels and constructive analysis: ## Critical Issues, ## Potential Issues, ## Suggestions, ## Summary. Cite file:line for each finding. Write None found for empty sections." \
-              --model ollama/qwen3.6:27b \
+                "$PROMPT" \
+                --file /workspace/diff.txt \
+                --model ollama/qwen3.6:27b \
             2>&1 | tee llm-analysis-raw.md
           EXIT=${PIPESTATUS[0]}
           echo "opencode exit code: $EXIT"
