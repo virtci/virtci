@@ -19,6 +19,7 @@ pub async fn copy_files_tar(
     ignore: &[String],
     os: GuestOs,
     timeout: Option<Duration>,
+    no_mkdir: bool,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
     let poll_interval = Duration::from_secs(5);
@@ -47,11 +48,50 @@ pub async fn copy_files_tar(
     let remote_path = expand_remote_tilde(remote_path, &ssh.cred.user, os);
 
     match direction {
-        CopyDirection::HostToVm => copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore).await,
+        CopyDirection::HostToVm => {
+            if !no_mkdir {
+                ensure_remote_dir(ssh, &remote_path, os).await?;
+            }
+            copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore).await
+        }
         CopyDirection::VmToHost => {
-            copy_vm_to_host_tar(ssh, &remote_path, local_path, ignore, os).await
+            copy_vm_to_host_tar(ssh, &remote_path, local_path, ignore, os, no_mkdir).await
         }
     }
+}
+
+/// In the workflow copy step, if `no_mkdir` is NOT set, it will create the directories necessary
+/// in the VM.
+async fn ensure_remote_dir(ssh: &SshTarget, remote_path: &str, os: GuestOs) -> Result<(), String> {
+    let path_clean = remote_path.trim_end_matches(['\\', '/']);
+    if path_clean.is_empty() {
+        return Ok(());
+    }
+
+    let mkdir_cmd = match os {
+        GuestOs::Windows => {
+            format!("New-Item -ItemType Directory -Force -Path \"{path_clean}\" | Out-Null")
+        }
+        _ => format!("mkdir -p \"{path_clean}\""),
+    };
+
+    let result = crate::run::command::run_command(
+        ssh,
+        &mkdir_cmd,
+        None,
+        &std::collections::HashMap::new(),
+        os,
+    )
+    .await?;
+
+    if result.exit_code != 0 {
+        return Err(format!(
+            "Failed to create remote directory {path_clean} (exit {}): {}",
+            result.exit_code, result.stderr
+        ));
+    }
+
+    Ok(())
 }
 
 async fn copy_host_to_vm_tar(
@@ -217,6 +257,7 @@ async fn copy_vm_to_host_tar(
     local_path: &str,
     ignore: &[String],
     os: GuestOs,
+    no_mkdir: bool,
 ) -> Result<(), String> {
     const CHUNK_SIZE: usize = 32 * 1024; // 32KB good size same as copy host to vm
 
@@ -325,8 +366,10 @@ async fn copy_vm_to_host_tar(
                 .ok_or_else(|| format!("Invalid local path: {local_path}"))?;
             let parent = if parent.is_empty() { "." } else { parent };
 
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create local directory {parent}: {e}"))?;
+            if !no_mkdir {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create local directory {parent}: {e}"))?;
+            }
 
             let remote_filename = std::path::Path::new(remote_path)
                 .file_name()
@@ -349,8 +392,10 @@ async fn copy_vm_to_host_tar(
 
     eprintln!("[TAR] Extracting to: {extract_dir}");
 
-    std::fs::create_dir_all(&extract_dir)
-        .map_err(|e| format!("Failed to create extraction directory {extract_dir}: {e}"))?;
+    if !no_mkdir {
+        std::fs::create_dir_all(&extract_dir)
+            .map_err(|e| format!("Failed to create extraction directory {extract_dir}: {e}"))?;
+    }
 
     // archive should starts with gzip magic bytes
     if result.stdout.len() < 2 || result.stdout[0] != 0x1f || result.stdout[1] != 0x8b {

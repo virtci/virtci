@@ -39,6 +39,8 @@ pub struct CopySpec {
     pub exclude: Vec<String>,
     #[serde(default)]
     pub crlf: bool,
+    #[serde(default)]
+    pub no_mkdir: bool,
 }
 
 impl Step {

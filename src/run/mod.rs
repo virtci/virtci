@@ -213,6 +213,7 @@ impl Job {
                     &copy_spec.exclude,
                     self.backend.os(),
                     Some(timeout_duration),
+                    copy_spec.no_mkdir,
                 );
 
                 tokio::time::timeout(timeout_duration, copy_future)
