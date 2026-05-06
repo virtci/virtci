@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::vm_image::{BackendConfig, ImageDescription, QemuConfig, TartConfig};
+use crate::VciGlobalPaths;
 
 struct ProgressReader<R> {
     inner: R,
@@ -75,8 +76,20 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-pub fn run_export(name: &str, output: Option<PathBuf>, home_path: &Path) -> Result<(), String> {
-    let desc = load_image(name, home_path)?;
+pub fn run_export(
+    name: &str,
+    output: Option<PathBuf>,
+    paths: &VciGlobalPaths,
+) -> Result<(), String> {
+    let home = paths.resolve_image_home(name).ok_or_else(|| {
+        format!(
+            "Image '{}' not found (looked at {} and {})",
+            name,
+            paths.user_home.display(),
+            paths.system_home.display()
+        )
+    })?;
+    let desc = load_image(name, home)?;
     let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.tar")));
 
     println!("Exporting '{}' to {}", name, output_path.display());

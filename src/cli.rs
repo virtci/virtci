@@ -91,6 +91,10 @@ pub struct SetupArgs {
     /// image name to use when registering with --from (defaults to the filename stem)
     #[argh(option)]
     pub name: Option<String>,
+
+    /// register into the system-wide image directory (requires elevated privileges)
+    #[argh(switch)]
+    pub system: bool,
 }
 
 /// Clean up leftover temporary VM images
@@ -135,6 +139,10 @@ pub struct ImportArgs {
     /// path to the .tar archive to import
     #[argh(positional)]
     pub archive: PathBuf,
+
+    /// import into the system-wide image directory (requires elevated privileges)
+    #[argh(switch)]
+    pub system: bool,
 }
 
 /// List all currently running VirtCI jobs
@@ -146,7 +154,7 @@ pub struct ActiveArgs {}
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "remove")]
 pub struct RemoveArgs {
-    /// name of the VM image to export
+    /// name of the VM image to remove
     #[argh(positional)]
     pub name: String,
 

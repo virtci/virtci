@@ -50,24 +50,26 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             run_jobs(jobs, paths);
         }
         cli::Command::Setup(setup_args) => {
-            run_setup(&setup_args, &paths.home);
+            run_setup(&setup_args, paths);
         }
         cli::Command::Cleanup(cleanup_args) => {
             run_cleanup(cleanup_args, paths);
         }
         cli::Command::List(list_args) => {
-            vm_image::list::run_list(list_args.verbose, &paths.home);
+            vm_image::list::run_list(list_args.verbose, paths);
         }
         cli::Command::Export(export_args) => {
             if let Err(e) =
-                vm_image::export::run_export(&export_args.name, export_args.output, &paths.home)
+                vm_image::export::run_export(&export_args.name, export_args.output, paths)
             {
                 eprintln!("Export failed: {e}");
                 std::process::exit(1);
             }
         }
         cli::Command::Import(import_args) => {
-            if let Err(e) = vm_image::import::run_import(&import_args.archive, &paths.home) {
+            if let Err(e) =
+                vm_image::import::run_import(&import_args.archive, paths, import_args.system)
+            {
                 eprintln!("Import failed: {e}");
                 std::process::exit(1);
             }
@@ -76,7 +78,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             run_state::run_active(&paths.temp);
         }
         cli::Command::Remove(remove_args) => {
-            vm_image::remove::run_remove(&remove_args, &paths.home);
+            vm_image::remove::run_remove(&remove_args, paths);
         }
         cli::Command::Boot(boot_args) => {
             vm_image::boot::run_boot(&boot_args, paths);
@@ -99,9 +101,10 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     }
 }
 
-fn run_setup(args: &cli::SetupArgs, home_path: &PathBuf) {
+fn run_setup(args: &cli::SetupArgs, paths: &VciGlobalPaths) {
     if let Some(ref from_path) = args.from {
-        if let Err(e) = vm_image::run_from_file(from_path, home_path, args.name.as_deref()) {
+        if let Err(e) = vm_image::run_from_file(from_path, paths, args.name.as_deref(), args.system)
+        {
             eprintln!("Setup failed: {e}");
             std::process::exit(1);
         }
@@ -118,8 +121,15 @@ fn run_setup(args: &cli::SetupArgs, home_path: &PathBuf) {
         "Error: specify a backend with --qemu or --tart, and optionally provide --from <config.json>."
     );
 
+    if args.tart && args.system {
+        eprintln!(
+            "Error: --system is not supported for Tart-backed images. Tart stores VM data in per-user storage (~/.tart/vms/), so a system-wide config would point at data that other users cannot access."
+        );
+        std::process::exit(1);
+    }
+
     if args.qemu {
-        if let Err(e) = vm_image::setup_qemu::run_interactive_setup(home_path) {
+        if let Err(e) = vm_image::setup_qemu::run_interactive_setup(paths, args.system) {
             panic!("Setup failed: {e}");
         }
     }
@@ -127,7 +137,7 @@ fn run_setup(args: &cli::SetupArgs, home_path: &PathBuf) {
     #[cfg(target_os = "macos")]
     {
         if args.tart {
-            if let Err(e) = vm_image::setup_tart::run_interactive_setup(home_path) {
+            if let Err(e) = vm_image::setup_tart::run_interactive_setup(paths, args.system) {
                 panic!("Setup failed: {e}");
             }
         }
@@ -317,12 +327,19 @@ async fn signal_handler() {
     }
 }
 
-fn load_image_description(image_name: &str, home_path: &Path) -> vm_image::ImageDescription {
-    let vci_path = home_path.join(format!("{image_name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|_| {
+fn load_image_description(image_name: &str, paths: &VciGlobalPaths) -> vm_image::ImageDescription {
+    let home = paths.resolve_image_home(image_name).unwrap_or_else(|| {
         panic!(
-            "Failed to load image description '{}' (looked at {})",
+            "Failed to load image description '{}' (looked at {} and {})",
             image_name,
+            paths.user_home.display(),
+            paths.system_home.display()
+        )
+    });
+    let vci_path = home.join(format!("{image_name}.vci"));
+    let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read image description at {}: {e}",
             vci_path.display()
         )
     });
@@ -354,7 +371,7 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
             &yaml_job.image
         };
 
-        let image_desc = load_image_description(image_name, &paths.home);
+        let image_desc = load_image_description(image_name, paths);
 
         // let cpus: u32 = match cli::resolve_for_job(&cpus_overrides, &name) {
         //     Some(s) => s.parse::<u32>().expect("Expected number for --cpus"),
@@ -448,13 +465,14 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
 /// Tests need to be able to control where they're writing to. Using
 /// `VciGlobalPaths::default()` works for normal use.
 pub struct VciGlobalPaths {
-    pub home: PathBuf,
+    pub user_home: PathBuf,
+    pub system_home: PathBuf,
     pub temp: PathBuf,
 }
 
 impl VciGlobalPaths {
-    fn default_home_path() -> PathBuf {
-        if let Some(vci_home) = std::env::var_os("VCI_HOME") {
+    fn default_user_home_path() -> PathBuf {
+        if let Some(vci_home) = std::env::var_os("VCI_USER_HOME") {
             return PathBuf::from(vci_home);
         }
 
@@ -485,14 +503,61 @@ impl VciGlobalPaths {
             }
         }
 
+        #[allow(unreachable_code)]
         PathBuf::from(".vci")
+    }
+
+    pub fn resolve_image_home(&self, name: &str) -> Option<&Path> {
+        let filename = format!("{name}.vci");
+        if self.user_home.join(&filename).exists() {
+            Some(&self.user_home)
+        } else if self.system_home.join(&filename).exists() {
+            Some(&self.system_home)
+        } else {
+            None
+        }
+    }
+
+    pub fn image_homes(&self) -> [&Path; 2] {
+        [&self.user_home, &self.system_home]
+    }
+
+    fn default_system_home_path() -> PathBuf {
+        if let Some(vci_system_home) = std::env::var_os("VCI_SYSTEM_HOME") {
+            return PathBuf::from(vci_system_home);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // /Library/Application Support/vci/
+            return PathBuf::from("/Library/Application Support/vci");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // /var/lib/vci/ (FHS variable state, not subject to tmpfiles cleanup)
+            return PathBuf::from("/var/lib/vci");
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // %PROGRAMDATA%\vci\ (typically C:\ProgramData\vci)
+            if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
+                return PathBuf::from(program_data).join("vci");
+            }
+            return PathBuf::from(r"C:\ProgramData\vci");
+        }
+
+        #[allow(unreachable_code)]
+        PathBuf::from(".vci-system")
     }
 }
 
 impl Default for VciGlobalPaths {
     fn default() -> Self {
         Self {
-            home: Self::default_home_path(),
+            user_home: Self::default_user_home_path(),
+            system_home: Self::default_system_home_path(),
             temp: std::env::temp_dir().join("vci"),
         }
     }

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 // https://stackoverflow.com/questions/75527167/serde-deserialize-string-into-u64
 use serde_with::{serde_as, DisplayFromStr};
 
+use crate::VciGlobalPaths;
+
 /// TTL for remote images if 24 hours by default
 pub const DEFAULT_REMOTE_TTL_SECS: u32 = 86400;
 
@@ -180,11 +182,44 @@ pub fn read_line_with_default(prompt: &str, default: &str) -> Result<String, Str
     }
 }
 
+/// If `e` is a permission-denied error, get a space-lead hint string giving the user
+/// a useful hint on how to fix it.
+pub fn permission_hint(e: &io::Error) -> &'static str {
+    if e.kind() != io::ErrorKind::PermissionDenied {
+        return "";
+    }
+    if cfg!(target_os = "windows") {
+        " (try running from an elevated shell)"
+    } else {
+        " (try running with sudo)"
+    }
+}
+
+#[cfg(unix)]
+pub fn ensure_world_readable_dir(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+}
+#[cfg(not(unix))]
+pub fn ensure_world_readable_dir(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+pub fn ensure_world_readable_file(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
+}
+#[cfg(not(unix))]
+pub fn ensure_world_readable_file(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 /// Characters that are invalid in VM image names across platforms.
 const INVALID_NAME_CHARS: [char; 12] =
     ['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' ', '.', '\t'];
 
-pub fn validate_image_name(name: &str, home_path: &Path) -> Result<(), String> {
+pub fn validate_image_name(name: &str, paths: &VciGlobalPaths) -> Result<(), String> {
     if name.is_empty() {
         return Err("Name cannot be empty".to_string());
     }
@@ -193,8 +228,8 @@ pub fn validate_image_name(name: &str, home_path: &Path) -> Result<(), String> {
         return Err(format!("Name contains invalid character: '{c}'"));
     }
 
-    let vci_path = home_path.join(format!("{name}.vci"));
-    if vci_path.exists() {
+    if let Some(home) = paths.resolve_image_home(name) {
+        let vci_path = home.join(format!("{name}.vci"));
         return Err(format!(
             "VCI image '{}' already exists at {}",
             name,
@@ -205,10 +240,25 @@ pub fn validate_image_name(name: &str, home_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn save_config(config: &ImageDescription, home_path: &PathBuf) -> Result<(), String> {
-    if !home_path.exists() {
-        std::fs::create_dir_all(home_path)
-            .map_err(|e| format!("Failed to create VCI home directory: {e}"))?;
+pub fn save_config(
+    config: &ImageDescription,
+    home_path: &PathBuf,
+    system: bool,
+) -> Result<(), String> {
+    let needs_create = !home_path.exists();
+    if needs_create {
+        std::fs::create_dir_all(home_path).map_err(|e| {
+            format!(
+                "Failed to create VCI home directory {}: {e}{}",
+                home_path.display(),
+                permission_hint(&e)
+            )
+        })?;
+        if system {
+            ensure_world_readable_dir(home_path).map_err(|e| {
+                format!("Failed to set permissions on {}: {e}", home_path.display())
+            })?;
+        }
     }
 
     let file_path = home_path.join(format!("{}.vci", config.name));
@@ -216,12 +266,27 @@ pub fn save_config(config: &ImageDescription, home_path: &PathBuf) -> Result<(),
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
-    std::fs::write(&file_path, json).map_err(|e| format!("Failed to write config file: {e}"))?;
+    std::fs::write(&file_path, json).map_err(|e| {
+        format!(
+            "Failed to write config file {}: {e}{}",
+            file_path.display(),
+            permission_hint(&e)
+        )
+    })?;
+    if system {
+        ensure_world_readable_file(&file_path)
+            .map_err(|e| format!("Failed to set permissions on {}: {e}", file_path.display()))?;
+    }
 
     Ok(())
 }
 
-pub fn run_from_file(path: &Path, home_path: &PathBuf, name: Option<&str>) -> Result<(), String> {
+pub fn run_from_file(
+    path: &Path,
+    paths: &VciGlobalPaths,
+    name: Option<&str>,
+    system: bool,
+) -> Result<(), String> {
     let json =
         std::fs::read_to_string(path).map_err(|e| format!("Cannot read config file: {e}"))?;
 
@@ -237,9 +302,18 @@ pub fn run_from_file(path: &Path, home_path: &PathBuf, name: Option<&str>) -> Re
             .to_string()
     };
 
-    validate_image_name(&config.name, home_path)?;
+    if system && matches!(config.backend, BackendConfig::Tart(_)) {
+        return Err("--system is not supported for Tart-backed images. Tart stores VM data in per-user storage (~/.tart/vms/), so the system-wide config would point at data that other users cannot access.".to_string());
+    }
+
+    validate_image_name(&config.name, paths)?;
     resolve_config_paths(&mut config)?;
-    save_config(&config, home_path)?;
+    let dest_home = if system {
+        paths.system_home.clone()
+    } else {
+        paths.user_home.clone()
+    };
+    save_config(&config, &dest_home, system)?;
 
     println!("Registered '{}'.", config.name);
     println!("Use in workflows with: image: {}", config.name);

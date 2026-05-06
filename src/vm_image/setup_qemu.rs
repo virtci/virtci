@@ -1,12 +1,13 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, save_config, validate_image_name, Arch,
     BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig, UefiSplit,
 };
+use crate::VciGlobalPaths;
 
 /// Interactive QEMU image setup
 /// 1. Image name (what to call it)
@@ -18,11 +19,17 @@ use crate::vm_image::{
 /// 7. Advanced options (tpm, nvme, cpu model, extra drives/devices)
 /// 8. Summary + confirmation
 /// 9. Save .vci file
-pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
+pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(), String> {
     println!("VCI QEMU Image Setup");
     println!("====================\n");
 
-    let name = prompt_image_name(home_path)?;
+    let dest_home: PathBuf = if system {
+        paths.system_home.clone()
+    } else {
+        paths.user_home.clone()
+    };
+
+    let name = prompt_image_name(paths)?;
     let guest_os = prompt_guest_os()?;
     let arch = prompt_architecture()?;
     let image_path = prompt_image_path()?;
@@ -53,8 +60,8 @@ pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
     print_summary(&config);
 
     if prompt_yes_no("Save this configuration?", true)? {
-        save_config(&config, home_path)?;
-        println!("\nSaved to {}/{}.vci", home_path.display(), config.name);
+        save_config(&config, &dest_home, system)?;
+        println!("\nSaved to {}/{}.vci", dest_home.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);
     } else {
         println!("Setup cancelled.");
@@ -64,14 +71,14 @@ pub fn run_interactive_setup(home_path: &PathBuf) -> Result<(), String> {
 }
 
 /// Step 1
-fn prompt_image_name(home_path: &Path) -> Result<String, String> {
+fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
     println!("Step 1: Image Name");
     println!("  This name will be used in workflow files (e.g., image: win-11-arm64)");
 
     loop {
         let name = read_line("Image name: ")?;
 
-        match validate_image_name(&name, home_path) {
+        match validate_image_name(&name, paths) {
             Ok(()) => {
                 println!();
                 return Ok(name);

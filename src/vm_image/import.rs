@@ -1,15 +1,25 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+use std::io::Read;
 use std::path::Path;
-use std::{io::Read, path::PathBuf};
 
-use crate::vm_image::{BackendConfig, ImageDescription};
+use crate::vm_image::{
+    ensure_world_readable_dir, ensure_world_readable_file, permission_hint, BackendConfig,
+    ImageDescription,
+};
+use crate::VciGlobalPaths;
 
-pub fn run_import(archive_path: &Path, home_path: &PathBuf) -> Result<(), String> {
+pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> Result<(), String> {
     if !archive_path.exists() {
         return Err(format!("File not found: {}", archive_path.display()));
     }
+
+    let home_path = if system {
+        paths.system_home.clone()
+    } else {
+        paths.user_home.clone()
+    };
 
     println!("Importing from {}", archive_path.display());
 
@@ -58,18 +68,43 @@ pub fn run_import(archive_path: &Path, home_path: &PathBuf) -> Result<(), String
         .map_err(|e| format!("Failed to parse .vci from archive: {e}"))?;
     desc.name.clone_from(&name);
 
-    let dest_vci = home_path.join(format!("{}.vci", &name));
-    if dest_vci.exists() {
+    if system && matches!(desc.backend, BackendConfig::Tart(_)) {
+        return Err("--system is not supported for Tart-backed images. Tart stores VM data in per-user storage (~/.tart/vms/), so the system-wide config would point at data that other users cannot access.".to_string());
+    }
+
+    if let Some(existing_home) = paths.resolve_image_home(&name) {
+        let existing_vci = existing_home.join(format!("{name}.vci"));
         return Err(format!(
             "Image '{}' already exists at {}",
             name,
-            dest_vci.display()
+            existing_vci.display()
         ));
     }
 
+    let dest_vci = home_path.join(format!("{}.vci", &name));
+
+    let home_existed = home_path.exists();
     let managed_dir = home_path.join(&name);
-    std::fs::create_dir_all(&managed_dir)
-        .map_err(|e| format!("Failed to create {}: {}", managed_dir.display(), e))?;
+    std::fs::create_dir_all(&managed_dir).map_err(|e| {
+        format!(
+            "Failed to create {}: {e}{}",
+            managed_dir.display(),
+            permission_hint(&e)
+        )
+    })?;
+    if system {
+        if !home_existed {
+            ensure_world_readable_dir(&home_path).map_err(|e| {
+                format!("Failed to set permissions on {}: {e}", home_path.display())
+            })?;
+        }
+        ensure_world_readable_dir(&managed_dir).map_err(|e| {
+            format!(
+                "Failed to set permissions on {}: {e}",
+                managed_dir.display()
+            )
+        })?;
+    }
 
     let file = std::fs::File::open(archive_path)
         .map_err(|e| format!("Failed to reopen {}: {}", archive_path.display(), e))?;
@@ -107,10 +142,19 @@ pub fn run_import(archive_path: &Path, home_path: &PathBuf) -> Result<(), String
                 .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
         }
 
-        let mut out_file = std::fs::File::create(&dest)
-            .map_err(|e| format!("Failed to create {}: {}", dest.display(), e))?;
+        let mut out_file = std::fs::File::create(&dest).map_err(|e| {
+            format!(
+                "Failed to create {}: {e}{}",
+                dest.display(),
+                permission_hint(&e)
+            )
+        })?;
         std::io::copy(&mut entry, &mut out_file)
             .map_err(|e| format!("Failed to extract {filename}: {e}"))?;
+        if system {
+            ensure_world_readable_file(&dest)
+                .map_err(|e| format!("Failed to set permissions on {}: {e}", dest.display()))?;
+        }
 
         extracted_files.push(filename.to_string());
     }
@@ -153,10 +197,24 @@ pub fn run_import(archive_path: &Path, home_path: &PathBuf) -> Result<(), String
     let vci_out = serde_json::to_string_pretty(&desc)
         .map_err(|e| format!("Failed to serialize config: {e}"))?;
 
-    std::fs::create_dir_all(home_path)
-        .map_err(|e| format!("Failed to create {}: {}", home_path.display(), e))?;
-    std::fs::write(&dest_vci, vci_out)
-        .map_err(|e| format!("Failed to write {}: {}", dest_vci.display(), e))?;
+    std::fs::create_dir_all(&home_path).map_err(|e| {
+        format!(
+            "Failed to create {}: {e}{}",
+            home_path.display(),
+            permission_hint(&e)
+        )
+    })?;
+    std::fs::write(&dest_vci, vci_out).map_err(|e| {
+        format!(
+            "Failed to write {}: {e}{}",
+            dest_vci.display(),
+            permission_hint(&e)
+        )
+    })?;
+    if system {
+        ensure_world_readable_file(&dest_vci)
+            .map_err(|e| format!("Failed to set permissions on {}: {e}", dest_vci.display()))?;
+    }
 
     println!("Import complete: {name}");
     println!("  Config: {}", dest_vci.display());

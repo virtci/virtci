@@ -3,12 +3,24 @@ use std::path::Path;
 use crate::{
     cli::RemoveArgs,
     vm_image::{
-        list::print_verbose, setup_qemu::prompt_yes_no, BackendConfig, ImageDescription, QemuConfig,
+        list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig,
+        ImageDescription, QemuConfig,
     },
+    VciGlobalPaths,
 };
 
-pub fn run_remove(remove_args: &RemoveArgs, home_path: &Path) {
-    let desc = load_image(&remove_args.name, home_path).expect("Failed to load image");
+pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
+    let home = paths
+        .resolve_image_home(&remove_args.name)
+        .unwrap_or_else(|| {
+            panic!(
+                "Failed to load image '{}' (looked at {} and {})",
+                remove_args.name,
+                paths.user_home.display(),
+                paths.system_home.display()
+            )
+        });
+    let desc = load_image(&remove_args.name, home).expect("Failed to load image");
     let name = &desc.name;
 
     println!("[VirtCI] Removing VM image:");
@@ -27,10 +39,11 @@ pub fn run_remove(remove_args: &RemoveArgs, home_path: &Path) {
     if desc.managed.is_some() && *desc.managed.as_ref().unwrap() {
         match &desc.backend {
             BackendConfig::Qemu(ref qemu) => {
-                let res = delete_qemu_managed_files(home_path, &desc.name, qemu)
-                    .map_err(|e| format!("Failed to delete QEMU backend files: {e}"));
-                if let Err(e) = res {
-                    println!("{e}");
+                if let Err(e) = delete_qemu_managed_files(home, &desc.name, qemu) {
+                    println!(
+                        "Failed to delete QEMU backend files: {e}{}",
+                        permission_hint(&e)
+                    );
                     return;
                 }
             }
@@ -55,15 +68,21 @@ pub fn run_remove(remove_args: &RemoveArgs, home_path: &Path) {
             }
         }
 
-        let vci_image_folder_path = home_path.join(name);
+        let vci_image_folder_path = home.join(name);
         if let Err(e) = std::fs::remove_dir_all(vci_image_folder_path) {
-            println!("Failed to delete VirtCI VM folder: {e}");
+            println!(
+                "Failed to delete VirtCI VM folder: {e}{}",
+                permission_hint(&e)
+            );
         }
     }
 
-    let vci_image_description_path = home_path.join(format!("{name}.vci"));
+    let vci_image_description_path = home.join(format!("{name}.vci"));
     if let Err(e) = std::fs::remove_file(vci_image_description_path) {
-        println!("Failed to delete VirtCI VM metadata file: {e}");
+        println!(
+            "Failed to delete VirtCI VM metadata file: {e}{}",
+            permission_hint(&e)
+        );
     }
 }
 
