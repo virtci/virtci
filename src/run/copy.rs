@@ -224,7 +224,8 @@ async fn copy_host_to_vm_glob(
                 .and_then(|r| r.to_str())
                 .map(|s| s.replace('\\', "/"))
         })
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && !s.contains(['\n', '\r']))
+        .map(|s| format!("./{s}"))
         .collect();
 
     eprintln!("[GLOB] Matched {} file(s)", rel_paths.len());
@@ -481,7 +482,8 @@ async fn copy_vm_to_host_glob(
 
     let matches: Vec<String> = all_files
         .into_iter()
-        .filter(|f| pat.matches_with(f, match_opts))
+        .filter(|f| !f.contains(['\n', '\r']) && pat.matches_with(f, match_opts))
+        .map(|f| format!("./{f}"))
         .collect();
 
     if matches.is_empty() {
