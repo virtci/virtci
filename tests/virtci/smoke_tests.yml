@@ -1,7 +1,7 @@
 ubuntu-server-x64:
   image: ubuntu-server-x64
-  cpus: 4
-  memory: 12G
+  cpus: 2
+  memory: 6G
   steps:
     - name: Copy Files
       copy:
@@ -43,6 +43,7 @@ ubuntu-server-x64:
     - name: Go Offline
       restart:
         offline: true
+        memory_mb: 10240
 
     - name: Check Formatting (Rust)
       run: . "$HOME/.cargo/env" && cargo fmt --check
