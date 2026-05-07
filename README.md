@@ -13,6 +13,10 @@
 
 Currently supports [QEMU](https://www.qemu.org/) and [Tart](https://tart.run/) as backends (*for tart, please read its [license conditions](https://github.com/cirruslabs/tart/blob/main/LICENSE)*).
 
+Documentation can be found in [docs](/docs/)
+
+Full CI/CD YAML syntax reference can be found in [docs/workflow_yaml_syntax.md](/docs/workflow_yaml_syntax.md).
+
 ## Getting Started
 
 ### Install
@@ -55,19 +59,7 @@ You may also choose to install [UTM](https://mac.getutm.app/) to easily get star
 
 #### Windows
 
-Install QEMU
-
-```sh
-choco install qemu
-```
-
-Add chocolatey qemu to your PATH. The location is `C:\Program Files\qemu`
-
-[Build from source](/docs/build_from_source.md), then run the `install_swtpm_win.ps1` powershell script. WSL2 is required, along with a linux distro within.
-
-```sh
-./scripts/install_swtpm_win.ps1
-```
+See [docs/windows_host_setup.md](/docs/windows_host_setup.md)
 
 ### Setup VM
 

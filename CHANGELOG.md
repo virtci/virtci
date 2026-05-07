@@ -16,6 +16,10 @@ Does not work for Tart backends.
 
 The `copy` step in the yaml workflows will, by default, create the directories on the target that is necessary in order to copy the files / directories. The `no_mkdir` boolean option can be set to `true` to disable this functionality, causing a failure if the directories do not exist, in which the copy would fail.
 
+#### Run Copy Step Globbing
+
+The `copy` step in the yaml workflows now supports file globbing. If the glob returns zero files, this is a hard error, unless `allow_empty` boolean option is set to `true`.
+
 ## Version 0.0.0 - 2026-03-03
 
 Initial public release of VirtCI. Tested and ran in production environments.
