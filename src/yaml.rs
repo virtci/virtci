@@ -41,6 +41,8 @@ pub struct CopySpec {
     pub crlf: bool,
     #[serde(default)]
     pub no_mkdir: bool,
+    #[serde(default)]
+    pub allow_empty: bool,
 }
 
 impl Step {
