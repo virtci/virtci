@@ -6,7 +6,7 @@ use std::{path::Path, process::Child};
 use colored::Colorize;
 
 use crate::{
-    backend::VmBackend,
+    backend::{VmBackend, VmStartConfig},
     file_lock::FileLock,
     vm_image::{GuestOs, ImageDescription},
 };
@@ -28,6 +28,7 @@ pub struct TartBackend {
     pub cpus: u32,
     /// Megabytes
     pub memory_mb: u64,
+    pub offline: bool,
     pub graphics: bool,
     pub runner: Option<TartRunner>,
 }
@@ -45,6 +46,7 @@ impl TartBackend {
             base_image,
             cpus,
             memory_mb,
+            offline: false,
             graphics: false,
             runner: None,
         };
@@ -68,6 +70,7 @@ impl TartBackend {
             base_image,
             cpus,
             memory_mb,
+            offline: false,
             graphics: !nographics,
             runner: None,
         };
@@ -97,6 +100,26 @@ impl TartBackend {
         let vm_name = tart_config.vm_name.clone();
         let (slot_lock, _slot) =
             get_slot_flock(temp_path).expect("Failed to acquire tart slot lock");
+
+        let output = std::process::Command::new("tart")
+            .args([
+                "set",
+                &vm_name,
+                "--cpu",
+                &self.cpus.to_string(),
+                "--memory",
+                &self.memory_mb.to_string(),
+            ])
+            .output()
+            .map_err(|e| {
+                eprintln!("{}", format!("Failed to run tart set: {e}").red());
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("{}", format!("tart set failed: {}", stderr.trim()).red());
+            return Err(());
+        }
 
         // Brief headless boot to resolve DHCP IP (SHOULD be stable for 24h lease).
         let mut boot_process = std::process::Command::new("tart")
@@ -272,8 +295,41 @@ impl VmBackend for TartBackend {
         Ok(())
     }
 
-    fn start_vm(&mut self, _offline: bool) -> Result<(), ()> {
+    fn start_vm(&mut self, cfg: VmStartConfig) -> Result<(), ()> {
+        if let Some(o) = cfg.offline {
+            self.offline = o;
+        }
+        let resize = cfg.cpus.is_some() || cfg.memory_mb.is_some();
+        if let Some(c) = cfg.cpus {
+            self.cpus = c;
+        }
+        if let Some(m) = cfg.memory_mb {
+            self.memory_mb = m;
+        }
+
         let runner = self.runner.as_mut().unwrap();
+
+        if resize {
+            let output = std::process::Command::new("tart")
+                .args([
+                    "set",
+                    &runner.clone_name,
+                    "--cpu",
+                    &self.cpus.to_string(),
+                    "--memory",
+                    &self.memory_mb.to_string(),
+                ])
+                .output()
+                .map_err(|e| {
+                    eprintln!("{}", format!("Failed to run tart set: {e}").red());
+                })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("{}", format!("tart set failed: {}", stderr.trim()).red());
+                return Err(());
+            }
+        }
 
         let mut cmd = std::process::Command::new("tart");
 
@@ -332,6 +388,10 @@ impl VmBackend for TartBackend {
 
     fn os(&self) -> GuestOs {
         self.base_image.os
+    }
+
+    fn is_offline(&self) -> bool {
+        self.offline
     }
 
     fn run_name(&self) -> String {

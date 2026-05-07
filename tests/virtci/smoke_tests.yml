@@ -41,7 +41,8 @@ ubuntu-server-x64:
       run: . "$HOME/.cargo/env" && cargo deny check
 
     - name: Go Offline
-      offline: true
+      restart:
+        offline: true
 
     - name: Check Formatting (Rust)
       run: . "$HOME/.cargo/env" && cargo fmt --check

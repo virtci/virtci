@@ -42,7 +42,7 @@ pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) {
 
 fn boot_qemu(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPaths) {
     use crate::{
-        backend::qemu::QemuBackend,
+        backend::{qemu::QemuBackend, VmStartConfig},
         cli::{default_cpus, DEFAULT_MEM_MB},
     };
 
@@ -59,10 +59,12 @@ fn boot_qemu(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
         std::process::exit(1);
     });
 
-    backend.start_vm(false).unwrap_or_else(|()| {
-        eprintln!("{}", "Failed to start VM".red());
-        std::process::exit(1);
-    });
+    backend
+        .start_vm(VmStartConfig::default())
+        .unwrap_or_else(|()| {
+            eprintln!("{}", "Failed to start VM".red());
+            std::process::exit(1);
+        });
 
     println!(
         "{}",
@@ -81,7 +83,7 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
     #[cfg(target_os = "macos")]
     {
         use crate::{
-            backend::tart::TartBackend,
+            backend::{tart::TartBackend, VmStartConfig},
             cli::{default_cpus, DEFAULT_MEM_MB},
         };
 
@@ -98,10 +100,12 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
             std::process::exit(1);
         });
 
-        backend.start_vm(false).unwrap_or_else(|()| {
-            eprintln!("{}", "Failed to start VM".red());
-            std::process::exit(1);
-        });
+        backend
+            .start_vm(VmStartConfig::default())
+            .unwrap_or_else(|()| {
+                eprintln!("{}", "Failed to start VM".red());
+                std::process::exit(1);
+            });
 
         println!(
             "{}",

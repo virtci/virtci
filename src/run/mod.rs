@@ -16,7 +16,7 @@ use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
 
 use crate::{
-    backend::VmBackend,
+    backend::{VmBackend, VmStartConfig},
     vm_image::{GuestOs, SshTarget},
     yaml, VciGlobalPaths,
 };
@@ -53,7 +53,7 @@ pub struct Step {
 pub enum StepKind {
     Run(String),
     Copy(yaml::CopySpec),
-    Offline(bool),
+    Restart(yaml::ResolvedRestart),
 }
 
 impl Job {
@@ -62,9 +62,19 @@ impl Job {
 
         let ssh_target = self.backend.ssh_target();
 
-        let start_offline = matches!(self.steps[0].kind, StepKind::Offline(true));
+        let (initial_cfg, skip_first) = match &self.steps[0].kind {
+            StepKind::Restart(r) => (
+                VmStartConfig {
+                    offline: r.offline,
+                    cpus: r.cpus,
+                    memory_mb: r.memory_mb,
+                },
+                true,
+            ),
+            _ => (VmStartConfig::default(), false),
+        };
         self.backend
-            .start_vm(start_offline)
+            .start_vm(initial_cfg)
             .map_err(|()| format!("Failed to start VM: {}", &self.name))?;
 
         match wait_for_ssh(&ssh_target.ip, ssh_target.port, SSH_WAIT_TIMEOUT) {
@@ -75,6 +85,23 @@ impl Job {
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+        if self.backend.is_offline() {
+            if let Some(cmd) = self.backend.offline_enforce_cmd() {
+                let empty_env = std::collections::HashMap::new();
+                let enforce_future =
+                    command::run_command(&ssh_target, cmd, None, &empty_env, self.backend.os());
+                match tokio::time::timeout(tokio::time::Duration::from_secs(30), enforce_future)
+                    .await
+                {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => return Err(format!("offline enforcement failed: {e}")),
+                    Err(_) => {
+                        return Err("offline enforcement timed out after 30s".to_string());
+                    }
+                }
+            }
+        }
 
         // Normalize Windows clock to UTC. QEMU's RTC presents UTC, but Windows
         // interprets the RTC as local time by default, corrupting its internal clock.
@@ -117,6 +144,9 @@ impl Job {
         );
 
         for i in 0..self.steps.len() {
+            if i == 0 && skip_first {
+                continue;
+            }
             let step_name = self.steps[i]
                 .name
                 .clone()
@@ -228,7 +258,7 @@ impl Job {
                     copy::convert_windows_line_endings(&ssh, &copy_spec.to).await;
                 }
             }
-            StepKind::Offline(offline) => {
+            StepKind::Restart(restart) => {
                 println!(
                     "{}",
                     "  Syncing filesystem before restart..."
@@ -268,14 +298,37 @@ impl Job {
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
                 {
-                    println!(
-                        "{}",
-                        format!("  Restarting VM (offline={offline})...").dimmed()
-                    );
+                    use std::fmt::Write;
+                    let mut details = String::new();
+                    if let Some(o) = restart.offline {
+                        let _ = write!(details, "offline={o}");
+                    }
+                    if let Some(c) = restart.cpus {
+                        if !details.is_empty() {
+                            details.push_str(", ");
+                        }
+                        let _ = write!(details, "cpus={c}");
+                    }
+                    if let Some(m) = restart.memory_mb {
+                        if !details.is_empty() {
+                            details.push_str(", ");
+                        }
+                        let _ = write!(details, "memory_mb={m}");
+                    }
+                    if details.is_empty() {
+                        details.push_str("no changes");
+                    }
+                    println!("{}", format!("  Restarting VM ({details})...").dimmed());
+
+                    let cfg = VmStartConfig {
+                        offline: restart.offline,
+                        cpus: restart.cpus,
+                        memory_mb: restart.memory_mb,
+                    };
 
                     self.backend.stop_vm();
                     self.backend
-                        .start_vm(*offline)
+                        .start_vm(cfg)
                         .map_err(|()| "Failed to restart VM")?;
 
                     let ssh = self.backend.ssh_target();
@@ -286,7 +339,7 @@ impl Job {
                         None => return Err("SSH not available after restart".to_string()),
                     }
 
-                    if *offline {
+                    if self.backend.is_offline() {
                         if let Some(cmd) = self.backend.offline_enforce_cmd() {
                             let empty_env = std::collections::HashMap::new();
                             let enforce_future = command::run_command(

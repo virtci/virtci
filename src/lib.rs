@@ -407,7 +407,18 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
                     Ok(sk) => match sk {
                         yaml::StepKind::Run(s) => run::StepKind::Run(s),
                         yaml::StepKind::Copy(c) => run::StepKind::Copy(c),
-                        yaml::StepKind::Offline(b) => run::StepKind::Offline(b),
+                        yaml::StepKind::Restart(r) => {
+                            let memory_mb = r.memory.as_deref().map(|s| {
+                                cli::parse_mem_mb(s).unwrap_or_else(|| {
+                                    panic!("Failed to parse restart memory: {s}")
+                                })
+                            });
+                            run::StepKind::Restart(yaml::ResolvedRestart {
+                                offline: r.offline,
+                                cpus: r.cpus,
+                                memory_mb,
+                            })
+                        }
                     },
                     Err(e) => panic!("{}", e),
                 };

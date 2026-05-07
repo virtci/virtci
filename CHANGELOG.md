@@ -20,6 +20,10 @@ The `copy` step in the yaml workflows will, by default, create the directories o
 
 The `copy` step in the yaml workflows now supports file globbing. If the glob returns zero files, this is a hard error, unless `allow_empty` boolean option is set to `true`.
 
+#### Offline -> Restart Step
+
+Rather than just disabling networking, the `offline` step has been changed to `restart`, which now includes   `offline`, `cpus`, and `memory` fields, each being optional. This allows changing resource usage at runtime.
+
 ## Version 0.0.0 - 2026-03-03
 
 Initial public release of VirtCI. Tested and ran in production environments.

@@ -9,7 +9,7 @@ use std::{
 use colored::Colorize;
 
 use crate::{
-    backend::{expand_path, expand_path_in_string, VmBackend},
+    backend::{expand_path, expand_path_in_string, VmBackend, VmStartConfig},
     file_lock::FileLock,
     vm_image::{Arch, GuestOs, ImageDescription},
 };
@@ -37,6 +37,7 @@ pub struct QemuBackend {
     pub cpus: u32,
     /// Megabytes
     pub memory_mb: u64,
+    pub offline: bool,
     /// Port within the VM that SSH accesses.
     pub inside_vm_port: u16,
     pub graphics: bool,
@@ -56,6 +57,7 @@ impl QemuBackend {
             base_image,
             cpus,
             memory_mb,
+            offline: false,
             inside_vm_port: 22,
             graphics: false,
             runner: None,
@@ -81,6 +83,7 @@ impl QemuBackend {
             base_image,
             cpus,
             memory_mb,
+            offline: false,
             inside_vm_port: 22,
             graphics: !nographics,
             runner: None,
@@ -553,7 +556,16 @@ impl VmBackend for QemuBackend {
         Ok(())
     }
 
-    fn start_vm(&mut self, offline: bool) -> Result<(), ()> {
+    fn start_vm(&mut self, cfg: VmStartConfig) -> Result<(), ()> {
+        if let Some(o) = cfg.offline {
+            self.offline = o;
+        }
+        if let Some(c) = cfg.cpus {
+            self.cpus = c;
+        }
+        if let Some(m) = cfg.memory_mb {
+            self.memory_mb = m;
+        }
         {
             let runner = self.runner.as_mut().unwrap();
 
@@ -636,7 +648,7 @@ impl VmBackend for QemuBackend {
             }
         }
 
-        let mut cmd = self.build_qemu_cmd(offline);
+        let mut cmd = self.build_qemu_cmd(self.offline);
         let fancy_cmd = format!("{cmd:?}").replace('"', "");
         println!("{}", (&fancy_cmd as &str).dimmed());
         self.runner.as_mut().unwrap().qemu_process = Some(cmd.spawn().map_err(|e| {
@@ -679,6 +691,10 @@ impl VmBackend for QemuBackend {
 
     fn os(&self) -> GuestOs {
         self.base_image.os
+    }
+
+    fn is_offline(&self) -> bool {
+        self.offline
     }
 
     fn run_name(&self) -> String {

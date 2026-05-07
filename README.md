@@ -109,10 +109,12 @@ ubuntu-x64:
         - name: Install CMake
           run: sudo apt install cmake
 
-        # Any steps after this one will be run without networking
-        # Networking can be reenabled by doing `offline: false`.
+        # Any steps after this one will be run without networking.
+        # `restart` reboots the VM; omit `offline` (or set false) to keep networking.
+        # `cpus`/`memory` may also be set to resize the VM for the remaining steps.
         - name: Run Subsequent Steps Offline
-          offline: true
+          restart:
+            offline: true
 
         - name: Configure CMake
           run: cmake -S . -B build

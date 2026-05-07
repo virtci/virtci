@@ -22,7 +22,7 @@ pub struct Step {
     pub name: Option<String>,
     pub run: Option<String>,
     pub copy: Option<CopySpec>,
-    pub offline: Option<bool>,
+    pub restart: Option<RestartSpec>,
     pub workdir: Option<String>,
     pub timeout: Option<String>,
     #[serde(default)]
@@ -45,14 +45,29 @@ pub struct CopySpec {
     pub allow_empty: bool,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RestartSpec {
+    /// `None` preserves the VM's current offline state.
+    pub offline: Option<bool>,
+    pub cpus: Option<u32>,
+    pub memory: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedRestart {
+    pub offline: Option<bool>,
+    pub cpus: Option<u32>,
+    pub memory_mb: Option<u64>,
+}
+
 impl Step {
     pub fn validate(&self) -> Result<StepKind, &'static str> {
-        match (&self.run, &self.copy, &self.offline) {
+        match (&self.run, &self.copy, &self.restart) {
             (Some(cmd), None, None) => Ok(StepKind::Run(cmd.clone())),
             (None, Some(copy), None) => Ok(StepKind::Copy(copy.clone())),
-            (None, None, Some(offline)) => Ok(StepKind::Offline(*offline)),
-            (None, None, None) => Err("step must have one of: run, copy, offline"),
-            _ => Err("step must have only one of: run, copy, offline"),
+            (None, None, Some(restart)) => Ok(StepKind::Restart(restart.clone())),
+            (None, None, None) => Err("step must have one of: run, copy, restart"),
+            _ => Err("step must have only one of: run, copy, restart"),
         }
     }
 }
@@ -61,7 +76,7 @@ impl Step {
 pub enum StepKind {
     Run(String),
     Copy(CopySpec),
-    Offline(bool),
+    Restart(RestartSpec),
 }
 
 pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yaml_ng::Error> {

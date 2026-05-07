@@ -11,10 +11,25 @@ pub mod tart;
 
 use crate::vm_image::{Arch, GuestOs, SshTarget};
 
+#[derive(Debug, Clone, Default)]
+pub struct VmStartConfig {
+    /// `None` leaves the backend's current offline state unchanged. The first
+    /// boot defaults to online (network enabled).
+    pub offline: Option<bool>,
+    /// `None` leaves the backend's current cpu count unchanged.
+    pub cpus: Option<u32>,
+    /// `None` leaves the backend's current memory unchanged.
+    pub memory_mb: Option<u64>,
+}
+
 pub trait VmBackend {
     fn setup_clone(&mut self, temp_path: &Path) -> Result<(), ()>;
 
-    fn start_vm(&mut self, offline: bool) -> Result<(), ()>;
+    fn start_vm(&mut self, cfg: VmStartConfig) -> Result<(), ()>;
+
+    fn is_offline(&self) -> bool {
+        false
+    }
 
     fn stop_vm(&mut self);
 
