@@ -13,9 +13,7 @@
 
 Currently supports [QEMU](https://www.qemu.org/) and [Tart](https://tart.run/) as backends (*for tart, please read its [license conditions](https://github.com/cirruslabs/tart/blob/main/LICENSE)*).
 
-Documentation can be found in [docs](/docs/)
-
-Full CI/CD YAML syntax reference can be found in [docs/workflow_yaml_syntax.md](/docs/workflow_yaml_syntax.md).
+Documentation can be found in [docs](/docs/). Full CI/CD YAML syntax reference can be found in [docs/workflow_yaml_syntax.md](/docs/workflow_yaml_syntax.md).
 
 ## Getting Started
 
@@ -41,9 +39,7 @@ sudo apt install ./virtci-linux-arm64.deb
 
 VirtCI depends on qemu and swtpm on linux.
 
-*Useful:*
-
-You may also choose to use [quickemu](https://github.com/quickemu-project/quickemu) to easily get started with pre-setup QEMU VM images.
+*You may also choose to use [quickemu](https://github.com/quickemu-project/quickemu) to easily get started with pre-setup QEMU VM images.*
 
 #### MacOS
 
@@ -53,13 +49,11 @@ Install QEMU and Tart.
 brew install virtci/virtci/virtci # Yes it's actually that command
 ```
 
-*Useful:*
-
-You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs. It is highly recommended.
+*You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs. It is highly recommended.*
 
 #### Windows
 
-See [docs/windows_host_setup.md](/docs/windows_host_setup.md)
+See [docs/windows_host_setup.md](/docs/windows_host_setup.md).
 
 ### Setup VM
 
