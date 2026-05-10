@@ -176,6 +176,16 @@ pub struct BootArgs {
     /// boot a throwaway clone instead of the base image so changes are discarded on exit
     #[argh(switch)]
     pub clone: bool,
+    /// amount of cpu cores to allocate to the booted VM
+    #[argh(option)]
+    pub cpus: Option<u32>,
+    /// amount of memory to allocate to the booted VM, measured in megabytes by default,
+    /// unless you specify a 'G' or 'g' postfix, then measured in gigabytes
+    #[argh(option)]
+    pub mem: Option<String>,
+    #[argh(switch)]
+    /// disable networking in the booted VM
+    pub offline: bool,
 }
 
 /// SSH into a running VM by job name
