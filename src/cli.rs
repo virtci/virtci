@@ -173,6 +173,9 @@ pub struct BootArgs {
     /// disable graphics
     #[argh(switch)]
     pub nographics: bool,
+    /// boot a throwaway clone instead of the base image so changes are discarded on exit
+    #[argh(switch)]
+    pub clone: bool,
 }
 
 /// SSH into a running VM by job name
