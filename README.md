@@ -4,7 +4,7 @@
     </a>
 </div>
 
-*VirtCI* is a CI/CD tool for running real OS images across multiple CPU architectures on self-hosted hardware.
+VirtCI is a CI/CD tool for running real OS images across multiple CPU architectures on self-hosted hardware.
 
 - Configure CPU core count and Memory availability to emulate production environments.
 - Toggle networking on the fly for true sandboxing.
@@ -19,9 +19,9 @@ Documentation can be found in [docs](/docs/). Full CI/CD YAML syntax reference c
 
 ### Install
 
-#### Linux
+#### Linux / Windows Subsystem for Linux
 
-**Debian / Ubuntu / Mint / Debian-based:**
+##### Debian / Ubuntu / Mint / Debian-based
 
 ```sh
 sudo apt update
@@ -33,7 +33,7 @@ curl -LO https://github.com/virtci/virtci/releases/latest/download/virtci-linux-
 sudo apt install ./virtci-linux-arm64.deb
 ```
 
-**Other:**
+##### Other Linux
 
 [Build from source](/docs/build_from_source.md).
 
@@ -53,7 +53,9 @@ brew install virtci/virtci/virtci # Yes it's actually that command
 
 #### Windows
 
-See [docs/windows_host_setup.md](/docs/windows_host_setup.md).
+Currently, any VM that requires TPM (such as a Windows 11 VM), will not run on a Windows host directly, but should work in the Windows Subsystem for Linux. See [GitHub Issue #30](https://github.com/virtci/virtci/issues/30).
+
+For any other VM, everything works as expected. Build VirtCI from source. See [docs/build_from_source.md](/docs/build_from_source.md).
 
 ### Setup VM
 
