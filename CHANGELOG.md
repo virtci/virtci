@@ -24,6 +24,14 @@ The `copy` step in the yaml workflows now supports file globbing. If the glob re
 
 Rather than just disabling networking, the `offline` step has been changed to `restart`, which now includes   `offline`, `cpus`, and `memory` fields, each being optional. This allows changing resource usage at runtime.
 
+#### Boot Clone
+
+Boot a VM from a clone of the base VM. Use `virtci boot <name> --clone`.
+
+#### Boot With Config
+
+Boot a VM or clone with a specified number of cpu cores, memory, and if the VM should have networking disabled. Done with `virtci boot <name> --cpus 10 --mem 16G --offline` for example. The `--cpus`, `--mem`, and `--offline` fields are all optional.
+
 ## Version 0.0.0 - 2026-03-03
 
 Initial public release of VirtCI. Tested and ran in production environments.

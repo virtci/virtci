@@ -93,6 +93,12 @@ fn boot_qemu(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
             std::process::exit(1);
         });
 
+    if !args.clone {
+        if let Some(pid) = backend.qemu_pid() {
+            let _ = crate::QEMU_BOOT_GRACEFUL_PID.set(pid);
+        }
+    }
+
     spawn_ssh_announcer(
         backend.ssh_target(),
         backend.run_name(),

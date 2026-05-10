@@ -12,8 +12,12 @@ pub mod web;
 pub mod yaml;
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use argh::FromArgs;
+
+/// PID of the QEMU process running the qcow2 for `virtci boot` (no --clone).
+pub static QEMU_BOOT_GRACEFUL_PID: OnceLock<u32> = OnceLock::new();
 
 /// `args` should not contain the command/executable name.
 ///
@@ -297,18 +301,40 @@ async fn signal_handler() {
         let mut sighup = signal(SignalKind::hangup()).unwrap();
         let mut sigquit = signal(SignalKind::quit()).unwrap();
 
-        tokio::select! {
-            _ = sigint.recv() => {},
-            _ = sigterm.recv() => {},
-            _ = sighup.recv() => {},
-            _ = sigquit.recv() => {},
-        }
+        let mut graceful_attempted = false;
+        loop {
+            tokio::select! {
+                _ = sigint.recv() => {},
+                _ = sigterm.recv() => {},
+                _ = sighup.recv() => {},
+                _ = sigquit.recv() => {},
+            }
 
-        std::process::exit(1);
+            if !graceful_attempted {
+                if let Some(&pid) = QEMU_BOOT_GRACEFUL_PID.get() {
+                    let sent = std::process::Command::new("kill")
+                        .arg("-TERM")
+                        .arg(pid.to_string())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    if sent {
+                        eprintln!(
+                            "\n[VirtCI] SIGTERM sent to QEMU; waiting for clean qcow2 close. Press CTRL+C again to force-exit."
+                        );
+                        graceful_attempted = true;
+                        continue;
+                    }
+                }
+            }
+
+            std::process::exit(1);
+        }
     }
 
     #[cfg(windows)]
     {
+        // TODO Some WSL chicanery
         use tokio::signal::windows;
 
         let mut ctrl_c = windows::ctrl_c().unwrap();

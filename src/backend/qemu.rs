@@ -424,6 +424,14 @@ impl QemuBackend {
 
         cmd
     }
+
+    /// PID of the running QEMU process, if any. Used by the boot path so the
+    /// signal handler can send SIGTERM for a clean qcow2 close on CTRL+C.
+    pub fn qemu_pid(&self) -> Option<u32> {
+        self.runner
+            .as_ref()
+            .and_then(|r| r.qemu_process.as_ref().map(std::process::Child::id))
+    }
 }
 
 impl VmBackend for QemuBackend {
