@@ -12,8 +12,12 @@ pub mod web;
 pub mod yaml;
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use argh::FromArgs;
+
+/// PID of the QEMU process running the qcow2 for `virtci boot` (no --clone).
+pub static QEMU_BOOT_GRACEFUL_PID: OnceLock<u32> = OnceLock::new();
 
 /// `args` should not contain the command/executable name.
 ///
@@ -261,7 +265,7 @@ fn find_vci_temp_files(temp_dir: &std::path::Path) -> Vec<PathBuf> {
                     .to_ascii_lowercase();
 
                 let is_vci_file = (name.starts_with("vci-") || name.starts_with("vci_"))
-                    && matches!(ext.as_str(), "qcow2" | "lock" | "fd");
+                    && matches!(ext.as_str(), "qcow2" | "lock" | "fd" | "log");
 
                 if is_vci_file {
                     files.push(path);
@@ -292,23 +296,61 @@ async fn signal_handler() {
     {
         use tokio::signal::unix::{signal, SignalKind};
 
+        const GRACEFUL_TIMEOUT_SECS: u64 = 30;
+
         let mut sigint = signal(SignalKind::interrupt()).unwrap();
         let mut sigterm = signal(SignalKind::terminate()).unwrap();
         let mut sighup = signal(SignalKind::hangup()).unwrap();
         let mut sigquit = signal(SignalKind::quit()).unwrap();
 
-        tokio::select! {
-            _ = sigint.recv() => {},
-            _ = sigterm.recv() => {},
-            _ = sighup.recv() => {},
-            _ = sigquit.recv() => {},
-        }
+        let mut graceful_attempted = false;
+        loop {
+            let timed_out = tokio::select! {
+                _ = sigint.recv() => false,
+                _ = sigterm.recv() => false,
+                _ = sighup.recv() => false,
+                _ = sigquit.recv() => false,
+                () = tokio::time::sleep(std::time::Duration::from_secs(GRACEFUL_TIMEOUT_SECS)),
+                    if graceful_attempted => true,
+            };
 
-        std::process::exit(1);
+            if timed_out {
+                if let Some(&pid) = QEMU_BOOT_GRACEFUL_PID.get() {
+                    eprintln!(
+                        "\n[VirtCI] QEMU did not exit within {GRACEFUL_TIMEOUT_SECS}s after SIGTERM. Sending SIGKILL so qcow2 may be left with the in-use bit set."
+                    );
+                    let _ = std::process::Command::new("kill")
+                        .arg("-KILL")
+                        .arg(pid.to_string())
+                        .status();
+                }
+                std::process::exit(1);
+            }
+
+            if !graceful_attempted {
+                if let Some(&pid) = QEMU_BOOT_GRACEFUL_PID.get() {
+                    let sent = std::process::Command::new("kill")
+                        .arg("-TERM")
+                        .arg(pid.to_string())
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if sent {
+                        eprintln!(
+                            "\n[VirtCI] SIGTERM sent to QEMU; waiting for clean qcow2 close (up to {GRACEFUL_TIMEOUT_SECS}s). Press CTRL+C again to force-exit."
+                        );
+                        graceful_attempted = true;
+                        continue;
+                    }
+                }
+            }
+
+            std::process::exit(1);
+        }
     }
 
     #[cfg(windows)]
     {
+        // TODO Some WSL chicanery
         use tokio::signal::windows;
 
         let mut ctrl_c = windows::ctrl_c().unwrap();

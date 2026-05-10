@@ -47,6 +47,10 @@ pub trait VmBackend {
 
     /// With `virtci boot` the user needs to shut down the VM internally.
     fn wait_for_exit(&mut self) {}
+
+    fn serial_log_path(&self) -> Option<&Path> {
+        None
+    }
 }
 
 impl FromStr for Arch {

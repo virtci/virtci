@@ -27,6 +27,8 @@ pub struct QemuRunner {
     #[cfg(target_os = "windows")]
     tpm_port: Option<(FileLock, u16)>,
     tpm_flock: Option<FileLock>,
+    /// Temporary serial log file.
+    serial_log: PathBuf,
     qemu_process: Option<Child>,
     tpm_process: Option<Child>,
 }
@@ -41,6 +43,9 @@ pub struct QemuBackend {
     /// Port within the VM that SSH accesses.
     pub inside_vm_port: u16,
     pub graphics: bool,
+    /// Whether to get the guest serial into the host termina's stdin/stdout.
+    /// Always false in `virtci run`, and true in `virtci boot`.
+    pub serial_stdio: bool,
     pub runner: Option<QemuRunner>,
 }
 
@@ -60,6 +65,7 @@ impl QemuBackend {
             offline: false,
             inside_vm_port: 22,
             graphics: false,
+            serial_stdio: false,
             runner: None,
         };
 
@@ -86,6 +92,7 @@ impl QemuBackend {
             offline: false,
             inside_vm_port: 22,
             graphics: !nographics,
+            serial_stdio: true,
             runner: None,
         };
         backend.setup_base(temp_path)?;
@@ -196,6 +203,11 @@ impl QemuBackend {
             None
         };
 
+        let serial_log = temp_path.join(format!(
+            "vci-{}-{}-serial.log",
+            self.name, host_port_flock.1
+        ));
+
         let runner = QemuRunner {
             is_base_mode: true,
             image_lock,
@@ -208,6 +220,7 @@ impl QemuBackend {
             #[cfg(target_os = "windows")]
             tpm_port,
             tpm_flock,
+            serial_log,
             qemu_process: None,
             tpm_process: None,
         };
@@ -315,12 +328,18 @@ impl QemuBackend {
             }
         }
 
+        // TODO arm64 VMs (probably RISCV64 too) have funky behaviour with the display
+        // unlike x86_64. Need to find a way to get desktops working in them similar
+        // to UTM.
         if !self.graphics {
             cmd.arg("-display").arg("none");
         }
 
-        if let Some(ref r) = self.runner {
-            if r.is_base_mode {
+        if self.serial_stdio {
+            if self.graphics {
+                let log = &self.runner.as_ref().unwrap().serial_log;
+                cmd.arg("-serial").arg(format!("file:{}", log.display()));
+            } else {
                 cmd.arg("-serial").arg("stdio");
             }
         }
@@ -404,6 +423,14 @@ impl QemuBackend {
         // }
 
         cmd
+    }
+
+    /// PID of the running QEMU process, if any. Used by the boot path so the
+    /// signal handler can send SIGTERM for a clean qcow2 close on CTRL+C.
+    pub fn qemu_pid(&self) -> Option<u32> {
+        self.runner
+            .as_ref()
+            .and_then(|r| r.qemu_process.as_ref().map(std::process::Child::id))
     }
 }
 
@@ -523,6 +550,11 @@ impl VmBackend for QemuBackend {
             None
         };
 
+        let serial_log = temp_path.join(format!(
+            "vci-{}-{}-serial.log",
+            self.name, host_port_flock.1
+        ));
+
         let runner = QemuRunner {
             is_base_mode: false,
             image_lock,
@@ -535,6 +567,7 @@ impl VmBackend for QemuBackend {
             #[cfg(target_os = "windows")]
             tpm_port,
             tpm_flock,
+            serial_log,
             qemu_process: None,
             tpm_process: None,
         };
@@ -713,6 +746,14 @@ impl VmBackend for QemuBackend {
             runner.qemu_process = None;
         }
     }
+
+    fn serial_log_path(&self) -> Option<&Path> {
+        if self.graphics && self.serial_stdio {
+            self.runner.as_ref().map(|r| r.serial_log.as_path())
+        } else {
+            None
+        }
+    }
 }
 
 impl Drop for QemuBackend {
@@ -741,6 +782,7 @@ impl Drop for QemuBackend {
             for (_, ref path) in &runner.temp_additional_drives {
                 paths_to_delete.push(path.clone());
             }
+            paths_to_delete.push(runner.serial_log.clone());
             let port_lock_path = runner.host_port.0.get_path().clone();
             let tpm_lock_path = runner.tpm_flock.as_ref().map(|f| f.get_path().clone());
             #[cfg(target_os = "windows")]
@@ -977,6 +1019,7 @@ pub fn cleanup_stale_qemu_files(temp_path: &Path) {
         let vars_suffix = format!("-{port_str}-VARS.fd");
         let tpm_lock_suffix = format!("-{port_str}-tpm.lock");
         let tpm_dir_suffix = format!("-{port_str}-tpm");
+        let serial_log_suffix = format!("-{port_str}-serial.log");
 
         if let Ok(assoc_entries) = std::fs::read_dir(temp_path) {
             for assoc in assoc_entries.flatten() {
@@ -991,7 +1034,8 @@ pub fn cleanup_stale_qemu_files(temp_path: &Path) {
                     && (aname_str.ends_with(&qcow2_suffix)
                         || aname_str.ends_with(&vars_suffix)
                         || aname_str.ends_with(&tpm_lock_suffix)
-                        || aname_str.ends_with(&tpm_dir_suffix))
+                        || aname_str.ends_with(&tpm_dir_suffix)
+                        || aname_str.ends_with(&serial_log_suffix))
                 {
                     let path = assoc.path();
                     if path.is_dir() {
