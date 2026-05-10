@@ -316,8 +316,7 @@ async fn signal_handler() {
                         .arg("-TERM")
                         .arg(pid.to_string())
                         .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false);
+                        .is_ok_and(|s| s.success());
                     if sent {
                         eprintln!(
                             "\n[VirtCI] SIGTERM sent to QEMU; waiting for clean qcow2 close. Press CTRL+C again to force-exit."
