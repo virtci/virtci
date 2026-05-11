@@ -19,43 +19,13 @@ Documentation can be found in [docs](/docs/). Full CI/CD YAML syntax reference c
 
 ### Install
 
-#### Linux / Windows Subsystem for Linux
-
-##### Debian / Ubuntu / Mint / Debian-based
-
 ```sh
-sudo apt update
-# For x64
-curl -LO https://github.com/virtci/virtci/releases/latest/download/virtci-linux-x64.deb
-sudo apt install ./virtci-linux-x64.deb
-# For arm64
-curl -LO https://github.com/virtci/virtci/releases/latest/download/virtci-linux-arm64.deb
-sudo apt install ./virtci-linux-arm64.deb
+# With Install Script for Linux / MacOS / WSL
+curl --proto '=https' --tlsv1.2 -fsSL https://virtci.com/install.sh | sh
+
+# For Windows
+irm https://virtci.com/install.ps1 | iex
 ```
-
-##### Other Linux
-
-[Build from source](/docs/build_from_source.md).
-
-VirtCI depends on qemu and swtpm on linux.
-
-*You may also choose to use [quickemu](https://github.com/quickemu-project/quickemu) to easily get started with pre-setup QEMU VM images.*
-
-#### MacOS
-
-Install QEMU and Tart.
-
-```sh
-brew install virtci/virtci/virtci # Yes it's actually that command
-```
-
-*You may also choose to install [UTM](https://mac.getutm.app/) to easily get started with QEMU VMs. It is highly recommended.*
-
-#### Windows
-
-Currently, any VM that requires TPM (such as a Windows 11 VM), will not run on a Windows host directly, but should work in the Windows Subsystem for Linux. See [GitHub Issue #30](https://github.com/virtci/virtci/issues/30).
-
-For any other VM, everything works as expected. Build VirtCI from source. See [docs/build_from_source.md](/docs/build_from_source.md).
 
 ### Setup VM
 

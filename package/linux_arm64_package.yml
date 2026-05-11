@@ -43,6 +43,41 @@ ubuntu-arm64:
           "${VERSION}" > "${PKGDIR}/DEBIAN/control"
         dpkg-deb --build "${PKGDIR}" virtci-linux-arm64.deb
 
+    - name: Build .rpm
+      run: |
+        sudo apt install -y -qq rpm
+        VERSION=$(./target/release/virtci version | sed 's/VirtCI version: //')
+        TOPDIR="$(pwd)/rpmbuild"
+        mkdir -p "${TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
+        cat > "${TOPDIR}/SPECS/virtci.spec" <<SPEC
+        %global debug_package %{nil}
+        %global __strip /bin/true
+        %define _build_id_links none
+        Name:        virtci
+        Version:     ${VERSION}
+        Release:     1
+        Summary:     Virtual machine CI runner
+        License:     GPL-2.0-only
+        URL:         https://github.com/virtci/virtci
+        BuildArch:   aarch64
+        Requires:    qemu-kvm
+        Requires:    qemu-img
+        Requires:    swtpm
+        AutoReqProv: no
+
+        %description
+        Virtual machine CI runner.
+
+        %install
+        mkdir -p %{buildroot}/usr/bin
+        install -m 755 ${PWD}/target/release/virtci %{buildroot}/usr/bin/virtci
+
+        %files
+        /usr/bin/virtci
+        SPEC
+        rpmbuild --define "_topdir ${TOPDIR}" -bb "${TOPDIR}/SPECS/virtci.spec"
+        cp "${TOPDIR}"/RPMS/aarch64/virtci-*.rpm virtci-linux-arm64.rpm
+
     - name: Copy Files
       copy:
         from: vm:~/virtci-linux-arm64.tar.gz
@@ -51,4 +86,9 @@ ubuntu-arm64:
     - name: Copy .deb
       copy:
         from: vm:~/virtci-linux-arm64.deb
+        to: ./
+
+    - name: Copy .rpm
+      copy:
+        from: vm:~/virtci-linux-arm64.rpm
         to: ./

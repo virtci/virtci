@@ -26,12 +26,13 @@ jobs:
         run: virtci run package/linux_x64_package.yml
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: virtci-linux-x64
           path: |
             virtci-linux-x64.tar.gz
             virtci-linux-x64.deb
+            virtci-linux-x64.rpm
 
   build-linux-arm64-bootstrap:
     needs: [run-tests]
@@ -46,12 +47,13 @@ jobs:
         run: virtci run package/linux_arm64_package.yml
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: virtci-linux-arm64
           path: |
             virtci-linux-arm64.tar.gz
             virtci-linux-arm64.deb
+            virtci-linux-arm64.rpm
 
   build-macos-bootstrap:
     needs: [run-tests]
@@ -66,7 +68,7 @@ jobs:
         run: virtci run package/mac_package.yml
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: virtci-macos-multiarch
           path: virtci-macos-multiarch.tar.gz
@@ -84,7 +86,7 @@ jobs:
         run: virtci run package/windows_x64_package.yml
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: virtci-windows-x64
           path: virtci-windows-x64.tar.gz
@@ -102,7 +104,7 @@ jobs:
         run: virtci run package/windows_arm64_package.yml
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: virtci-windows-arm64
           path: virtci-windows-arm64.tar.gz
@@ -119,7 +121,7 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           path: artifacts
           merge-multiple: true
@@ -131,8 +133,10 @@ jobs:
           files: |
             artifacts/virtci-linux-x64.tar.gz
             artifacts/virtci-linux-x64.deb
+            artifacts/virtci-linux-x64.rpm
             artifacts/virtci-linux-arm64.tar.gz
             artifacts/virtci-linux-arm64.deb
+            artifacts/virtci-linux-arm64.rpm
             artifacts/virtci-macos-multiarch.tar.gz
             artifacts/virtci-windows-x64.tar.gz
             artifacts/virtci-windows-arm64.tar.gz
@@ -143,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download macOS artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: virtci-macos-multiarch
 
@@ -199,7 +203,7 @@ jobs:
   #       run: tar czf virtci-apple-darwin.tar.gz virtci
 
   #     - name: Upload artifact
-  #       uses: actions/upload-artifact@v4
+  #       uses: actions/upload-artifact@v6
   #       with:
   #         name: virtci-apple-darwin
   #         path: virtci-apple-darwin.tar.gz
@@ -222,7 +226,7 @@ jobs:
   #         tar czf virtci-linux-x86_64.tar.gz virtci
 
   #     - name: Upload artifact
-  #       uses: actions/upload-artifact@v4
+  #       uses: actions/upload-artifact@v6
   #       with:
   #         name: virtci-linux-x86_64
   #         path: virtci-linux-x86_64.tar.gz
