@@ -884,6 +884,7 @@ fn qemu_machine(arch: Arch) -> &'static str {
     }
 }
 
+#[allow(clippy::match_same_arms)]
 pub fn qemu_cpu(arch: Arch) -> &'static str {
     match arch {
         Arch::X64 => {
