@@ -2,7 +2,7 @@
 
 VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
-## Version 0.1.0
+## Version 0.1.0 - 2026-05-11
 
 ### Added
 
@@ -16,19 +16,22 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Run `copy` step supports file globbing.
   - If the glob returns zero files, this is a step error.
   - Set the `allow_empty` boolean option to `true` to not fail on empty glob.
-- `offline` step changed to `restart` step, supporting custom resource modifications.
-  - Use the `offline` boolean option within the `restart` step to set networking capabilities like before.
-  - Use the `cpus` field to set the new amount of cpu cores for the VM, persisting across restarts until modified.
-  - Use the `memory` field to set the new memory capacity for the VM, persisting across restarts until modified.
-- `boot` now supports `--clone` to boot a clone of the VM.
+- CLI sub-command `boot` now supports `--clone` to boot a clone of the VM.
   - Ran with `virtci boot <name> --clone`.
   - Compatible with `--cpus`, `--mem`, and `--offline`.
-- `boot` now supports `--cpus`, `--mem`, and `--offline` for resource constraining.
+- CLI sub-command `boot` now supports `--cpus`, `--mem`, and `--offline` for resource constraining.
   - Ran with `virtci boot <name> --cpus 10 --mem 16G --offline`.
   - `--cpus` has the same requirements as the top-level job `cpus` field.
   - `--mem` has the same requirements as the top-level job `memory` field.
   - `--offline` if present, disabled networking for the boot.
   - Compatible with `--clone`.
+
+### Changed
+
+- Run `offline` step changed to `restart` step, supporting custom resource modifications.
+  - Use the `offline` boolean option within the `restart` step to set networking capabilities like before.
+  - Use the `cpus` field to set the new amount of cpu cores for the VM, persisting across restarts until modified.
+  - Use the `memory` field to set the new memory capacity for the VM, persisting across restarts until modified.
 
 ### Fixed
 
