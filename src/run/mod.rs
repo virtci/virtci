@@ -23,6 +23,7 @@ use crate::{
 
 pub const SSH_WAIT_TIMEOUT: u64 = 300;
 pub const SSH_POLL_INTERVAL: u64 = 2;
+pub const SSH_AUTH_RETRY_WINDOW: u64 = 30;
 /// I don't see why something would take longer than 2 hours realistically.
 /// I have definitely compiled gRPC for over an hour, but 2 hours is some lunacy.
 /// If it does, the user can specify it themselves.
@@ -77,7 +78,7 @@ impl Job {
             .start_vm(initial_cfg)
             .map_err(|()| format!("Failed to start VM: {}", &self.name))?;
 
-        match wait_for_ssh(&ssh_target.ip, ssh_target.port, SSH_WAIT_TIMEOUT) {
+        match wait_for_ssh(&ssh_target, SSH_WAIT_TIMEOUT).await {
             Some(secs) => println!("{}", format!("SSH ready after {secs}s").dimmed()),
             None => {
                 return Err(format!("SSH not available after {SSH_WAIT_TIMEOUT}s"));
@@ -332,7 +333,7 @@ impl Job {
                         .map_err(|()| "Failed to restart VM")?;
 
                     let ssh = self.backend.ssh_target();
-                    match wait_for_ssh(&ssh.ip, ssh.port, SSH_WAIT_TIMEOUT) {
+                    match wait_for_ssh(&ssh, SSH_WAIT_TIMEOUT).await {
                         Some(secs) => {
                             println!("{}", format!("  SSH ready after {secs}s").dimmed());
                         }
@@ -376,40 +377,48 @@ impl Job {
     }
 }
 
-pub fn wait_for_ssh(ip: &str, port: u16, timeout_secs: u64) -> Option<u64> {
+pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
     use std::io::{BufRead, BufReader};
 
     let timeout = Duration::from_secs(timeout_secs);
     let poll_interval = Duration::from_secs(SSH_POLL_INTERVAL);
     let connect_timeout = Duration::from_secs(5);
     let start = Instant::now();
+    let addr: std::net::SocketAddr = format!("{}:{}", ssh.ip, ssh.port).parse().unwrap();
 
     loop {
-        let elapsed = start.elapsed();
-        if elapsed >= timeout {
+        if start.elapsed() >= timeout {
             return None;
         }
-
-        let addr = format!("{ip}:{port}");
-        match TcpStream::connect_timeout(&addr.parse().unwrap(), connect_timeout) {
+        match TcpStream::connect_timeout(&addr, connect_timeout) {
             Ok(stream) => {
-                // QEMU can make the SSH "available" even while the VM is still booting.
-                // So must check for a "banner" thingy such as "SSH-2.0-OpenSSH_8.9"
                 stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
                 let mut reader = BufReader::new(stream);
                 let mut banner = String::new();
-                match reader.read_line(&mut banner) {
-                    Ok(_n) => {
-                        if banner.starts_with("SSH-") {
-                            return Some(elapsed.as_secs());
-                        }
-                    }
-                    Err(_e) => {}
+                if reader.read_line(&mut banner).is_ok() && banner.starts_with("SSH-") {
+                    break;
                 }
-                std::thread::sleep(poll_interval);
+                tokio::time::sleep(poll_interval).await;
             }
-            Err(_e) => {
-                std::thread::sleep(poll_interval);
+            Err(_) => {
+                tokio::time::sleep(poll_interval).await;
+            }
+        }
+    }
+
+    let auth_deadline = Instant::now() + Duration::from_secs(SSH_AUTH_RETRY_WINDOW);
+    loop {
+        let attempt = tokio::time::timeout(Duration::from_secs(5), connect(ssh)).await;
+        match attempt {
+            Ok(Ok(handle)) => {
+                drop(handle);
+                return Some(start.elapsed().as_secs());
+            }
+            _ => {
+                if Instant::now() >= auth_deadline {
+                    return None;
+                }
+                tokio::time::sleep(poll_interval).await;
             }
         }
     }
