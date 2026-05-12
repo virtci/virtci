@@ -409,18 +409,14 @@ pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
     let auth_deadline = Instant::now() + Duration::from_secs(SSH_AUTH_RETRY_WINDOW);
     loop {
         let attempt = tokio::time::timeout(Duration::from_secs(5), connect(ssh)).await;
-        match attempt {
-            Ok(Ok(handle)) => {
-                drop(handle);
-                return Some(start.elapsed().as_secs());
-            }
-            _ => {
-                if Instant::now() >= auth_deadline {
-                    return None;
-                }
-                tokio::time::sleep(poll_interval).await;
-            }
+        if let Ok(Ok(handle)) = attempt {
+            drop(handle);
+            return Some(start.elapsed().as_secs());
         }
+        if Instant::now() >= auth_deadline {
+            return None;
+        }
+        tokio::time::sleep(poll_interval).await;
     }
 }
 

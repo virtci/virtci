@@ -192,12 +192,11 @@ fn resolve_cpus_and_memory(args: &BootArgs) -> (u32, u64) {
 
 fn spawn_ssh_announcer(ssh: SshTarget, run_name: String, serial_log: Option<std::path::PathBuf>) {
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread()
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-        {
-            Ok(rt) => rt,
-            Err(_) => return,
+        else {
+            return;
         };
         let Some(secs) = rt.block_on(wait_for_ssh(&ssh, SSH_WAIT_TIMEOUT)) else {
             return;

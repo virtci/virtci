@@ -6,31 +6,40 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-#### System-wide VM Storage
+- System-wide VM storage.
+  - Accessible by all users for workflow usage and clone boot.
+  - Import new VMs with `virtci import some_file.tar --system`
+  - Workflow runs will check the user-local directory first, then check the system-wide one.
+  - Does not work for Tart backends.
+- Run `copy` step will create the necessary directory hiearchy on the target by default.
+  - Set the `no_mkdir` boolean option to `true` to disable this functionality, causing a failure if the directories do not exist on the target.
+- Run `copy` step supports file globbing.
+  - If the glob returns zero files, this is a step error.
+  - Set the `allow_empty` boolean option to `true` to not fail on empty glob.
+- `offline` step changed to `restart` step, supporting custom resource modifications.
+  - Use the `offline` boolean option within the `restart` step to set networking capabilities like before.
+  - Use the `cpus` field to set the new amount of cpu cores for the VM, persisting across restarts until modified.
+  - Use the `memory` field to set the new memory capacity for the VM, persisting across restarts until modified.
+- `boot` now supports `--clone` to boot a clone of the VM.
+  - Ran with `virtci boot <name> --clone`.
+  - Compatible with `--cpus`, `--mem`, and `--offline`.
+- `boot` now supports `--cpus`, `--mem`, and `--offline` for resource constraining.
+  - Ran with `virtci boot <name> --cpus 10 --mem 16G --offline`.
+  - `--cpus` has the same requirements as the top-level job `cpus` field.
+  - `--mem` has the same requirements as the top-level job `memory` field.
+  - `--offline` if present, disabled networking for the boot.
+  - Compatible with `--clone`.
 
-Support importing a VM into system-wide storage, accessible by all users using `virtci import some_file.tar --system`. Runs will check the user-local directory first, then check the system-wide one.
+### Fixed
 
-Does not work for Tart backends.
+- Incorrect description in `virtci remove`.
+- Edge-case for incorrect SSH detection with a slow enough VM (emulated).
+- Send SIGTERM to QEMU properly to prevent qcow2 file corruption.
 
-#### Run Copy Step Make Directories
+### Known Issues
 
-The `copy` step in the yaml workflows will, by default, create the directories on the target that is necessary in order to copy the files / directories. The `no_mkdir` boolean option can be set to `true` to disable this functionality, causing a failure if the directories do not exist, in which the copy would fail.
-
-#### Run Copy Step Globbing
-
-The `copy` step in the yaml workflows now supports file globbing. If the glob returns zero files, this is a hard error, unless `allow_empty` boolean option is set to `true`.
-
-#### Offline -> Restart Step
-
-Rather than just disabling networking, the `offline` step has been changed to `restart`, which now includes   `offline`, `cpus`, and `memory` fields, each being optional. This allows changing resource usage at runtime.
-
-#### Boot Clone
-
-Boot a VM from a clone of the base VM. Use `virtci boot <name> --clone`.
-
-#### Boot With Config
-
-Boot a VM or clone with a specified number of cpu cores, memory, and if the VM should have networking disabled. Done with `virtci boot <name> --cpus 10 --mem 16G --offline` for example. The `--cpus`, `--mem`, and `--offline` fields are all optional.
+- Windows hosts does not support VMs that use TPM ([see #30](https://github.com/virtci/virtci/issues/30)).
+  - Use WSL instead, and enable nested virtualization (only works in Windows 11).
 
 ## Version 0.0.0 - 2026-03-03
 
@@ -38,14 +47,14 @@ Initial public release of VirtCI. Tested and ran in production environments.
 
 ### Added
 
-- `version` Get the VirtCI version
-- `run` Run a workflow file
-- `setup` Interactive setup for a new VM image description
-- `cleanup` Clean up leftover temporary VM images
-- `list` List all configured VM images
-- `export` Export a VM image and its files to a .tar archive
-- `import` Import a VM image from a .tar archive
-- `active` List all currently running VirtCI jobs
-- `remove` Remove a VirtCI VM image
-- `boot` Boot a base VM image to modify it, found using `virtci list`
-- `shell` SSH into a running VM by job name
+- `version` Get the VirtCI version.
+- `run` Run a workflow file.
+- `setup` Interactive setup for a new VM image description.
+- `cleanup` Clean up leftover temporary VM images.
+- `list` List all configured VM images.
+- `export` Export a VM image and its files to a .tar archive.
+- `import` Import a VM image from a .tar archive.
+- `active` List all currently running VirtCI jobs.
+- `remove` Remove a VirtCI VM image.
+- `boot` Boot a base VM image to modify it, found using `virtci list`.
+- `shell` SSH into a running VM by job name.
