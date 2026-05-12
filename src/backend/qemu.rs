@@ -895,11 +895,18 @@ pub fn qemu_cpu(arch: Arch) -> &'static str {
             // no host-derived values, which WHPX initializes correctly.
             #[cfg(target_os = "windows")]
             return "qemu64";
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(all(not(target_os = "windows"), target_arch = "x86_64"))]
             return "max";
+            #[cfg(all(not(target_os = "windows"), not(target_arch = "x86_64")))]
+            return "qemu64";
         }
         Arch::RISCV64 => "max",
-        Arch::ARM64 => "host",
+        Arch::ARM64 => {
+            #[cfg(target_arch = "aarch64")]
+            return "host";
+            #[cfg(not(target_arch = "aarch64"))]
+            return "max";
+        }
     }
 }
 
