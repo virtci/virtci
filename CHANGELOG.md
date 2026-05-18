@@ -2,6 +2,16 @@
 
 VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Provide setup guide for a RISC-V64 Linux VM in [riscv64_linux_setup.md](/docs/riscv64_linux_setup.md).
+
+### Fixed
+
+- RISC-V64 QEMU Setup has more accurate defaults.
+
 ## Version 0.1.0 - 2026-05-11
 
 ### Added

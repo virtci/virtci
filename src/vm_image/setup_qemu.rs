@@ -316,14 +316,15 @@ fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, Stri
     if matches!(os, GuestOs::Windows) {
         println!("  WARNING: Windows 11 requires UEFI. Only skip if using an older version.");
     }
-    if matches!(arch, Arch::ARM64) {
-        println!("  NOTE: ARM64 VMs typically require UEFI firmware.");
+    if matches!(arch, Arch::ARM64 | Arch::RISCV64) {
+        println!("  NOTE: {arch:?} VMs typically require UEFI firmware.");
     }
 
     println!("  1) No UEFI (legacy BIOS)");
     println!("  2) UEFI (code + vars files)");
 
-    let default_uefi = matches!(os, GuestOs::Windows) || matches!(arch, Arch::ARM64);
+    let default_uefi =
+        matches!(os, GuestOs::Windows) || matches!(arch, Arch::ARM64 | Arch::RISCV64);
 
     let choice = loop {
         let default_str = if default_uefi { "2" } else { "1" };
@@ -447,10 +448,23 @@ pub fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
                 "C:\\Program Files\\qemu\\share\\edk2-i386-vars.fd",
             ),
         ],
-        Arch::RISCV64 => vec![(
-            "/usr/share/qemu/opensbi-riscv64-generic-fw_dynamic.bin",
-            "/usr/share/qemu/opensbi-riscv64-generic-fw_dynamic.bin",
-        )],
+        Arch::RISCV64 => vec![
+            // Linux Ubuntu/Debian (qemu-efi-riscv64 package)
+            (
+                "/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd",
+                "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd",
+            ),
+            // Linux Fedora / Arch (edk2-riscv64)
+            (
+                "/usr/share/edk2/riscv64/RISCV_VIRT_CODE.fd",
+                "/usr/share/edk2/riscv64/RISCV_VIRT_VARS.fd",
+            ),
+            // macOS Homebrew
+            (
+                "/opt/homebrew/share/qemu/edk2-riscv-code.fd",
+                "/opt/homebrew/share/qemu/edk2-riscv-vars.fd",
+            ),
+        ],
     };
 
     for (code, vars) in candidates {
