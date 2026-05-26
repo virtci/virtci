@@ -116,7 +116,7 @@ pub fn qemu_cpu(arch: Arch, exec_target: HostExecTarget) -> &'static str {
 }
 
 fn resolve_system_binary(arch: Arch, exec_target: HostExecTarget) -> String {
-    if let Ok(custom) = std::env::var("VCI_QEMU_BINARY") {
+    if let Ok(custom) = std::env::var("VIRTCI_QEMU_BINARY") {
         return custom;
     }
 
@@ -148,7 +148,7 @@ fn resolve_system_binary(arch: Arch, exec_target: HostExecTarget) -> String {
 }
 
 fn resolve_img_binary(exec_target: HostExecTarget) -> String {
-    if let Ok(custom) = std::env::var("VCI_QEMU_IMG_BINARY") {
+    if let Ok(custom) = std::env::var("VIRTCI_QEMU_IMG_BINARY") {
         return custom;
     }
 

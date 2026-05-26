@@ -150,10 +150,10 @@ pub struct WslPaths {
 #[cfg(target_os = "windows")]
 impl WslPaths {
     pub fn new() -> anyhow::Result<Self> {
-        let distro: String = if let Some(distro) = std::env::var_os("VCI_WSL_DISTRO") {
+        let distro: String = if let Some(distro) = std::env::var_os("VIRTCI_WSL_DISTRO") {
             distro
                 .into_string()
-                .map_err(|os| anyhow::anyhow!("Invalid unicode in VCI_WSL_DISTRO: {os:?}"))?
+                .map_err(|os| anyhow::anyhow!("Invalid unicode in VIRTCI_WSL_DISTRO: {os:?}"))?
         } else {
             default_wsl_distro()?
         };
@@ -189,7 +189,7 @@ pub struct ImageHome {
 }
 
 fn default_user_home_path() -> PathBuf {
-    if let Some(vci_home) = std::env::var_os("VCI_USER_HOME") {
+    if let Some(vci_home) = std::env::var_os("VIRTCI_USER_HOME") {
         return PathBuf::from(vci_home);
     }
 
@@ -225,7 +225,7 @@ fn default_user_home_path() -> PathBuf {
 }
 
 fn default_system_home_path() -> PathBuf {
-    if let Some(vci_system_home) = std::env::var_os("VCI_SYSTEM_HOME") {
+    if let Some(vci_system_home) = std::env::var_os("VIRTCI_SYSTEM_HOME") {
         return PathBuf::from(vci_system_home);
     }
 
@@ -320,7 +320,7 @@ fn wsl_actual_user_home(distro: &str) -> anyhow::Result<String> {
 
 #[cfg(target_os = "windows")]
 fn wsl_user_home(wsl_home: &str) -> String {
-    if let Some(over) = std::env::var_os("VCI_WSL_USER_HOME") {
+    if let Some(over) = std::env::var_os("VIRTCI_WSL_USER_HOME") {
         return over.to_string_lossy().into_owned();
     }
     format!("{wsl_home}/.local/share/vci")
@@ -328,7 +328,7 @@ fn wsl_user_home(wsl_home: &str) -> String {
 
 #[cfg(target_os = "windows")]
 fn wsl_system_home() -> String {
-    if let Some(over) = std::env::var_os("VCI_WSL_SYSTEM_HOME") {
+    if let Some(over) = std::env::var_os("VIRTCI_WSL_SYSTEM_HOME") {
         return over.to_string_lossy().into_owned();
     }
     "/var/lib/vci".to_string()
@@ -336,7 +336,7 @@ fn wsl_system_home() -> String {
 
 #[cfg(target_os = "windows")]
 fn wsl_temp() -> String {
-    if let Some(over) = std::env::var_os("VCI_WSL_TEMP") {
+    if let Some(over) = std::env::var_os("VIRTCI_WSL_TEMP") {
         return over.to_string_lossy().into_owned();
     }
     "/tmp/vci_wsl".to_string()

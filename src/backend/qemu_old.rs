@@ -813,7 +813,7 @@ impl Drop for QemuBackend {
 }
 
 fn qemu_system_binary(arch: Arch) -> String {
-    if let Ok(custom) = std::env::var("VCI_QEMU_BINARY") {
+    if let Ok(custom) = std::env::var("VIRTCI_QEMU_BINARY") {
         return custom;
     }
 
@@ -847,7 +847,7 @@ fn qemu_system_binary(arch: Arch) -> String {
 }
 
 fn qemu_img_binary() -> String {
-    if let Ok(custom) = std::env::var("VCI_QEMU_IMG_BINARY") {
+    if let Ok(custom) = std::env::var("VIRTCI_QEMU_IMG_BINARY") {
         return custom;
     }
 
