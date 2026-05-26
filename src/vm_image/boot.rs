@@ -54,7 +54,7 @@ pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) {
 }
 
 fn boot_qemu(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPaths) {
-    use crate::backend::{qemu::QemuBackend, VmStartConfig};
+    use crate::backend::{qemu_old::QemuBackend, VmStartConfig};
 
     let (cpus, memory_mb) = resolve_cpus_and_memory(args);
 

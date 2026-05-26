@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod cli;
 pub mod file_lock;
+pub mod global_paths;
 pub mod run;
 pub mod run_state;
 pub mod transfer_lock;
@@ -11,6 +12,7 @@ pub mod vm_image;
 pub mod web;
 pub mod yaml;
 
+use global_paths::VciGlobalPaths;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -35,7 +37,7 @@ pub fn run_virtci_cli(paths: &VciGlobalPaths) {
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     setup_signal_handlers();
 
-    backend::qemu::cleanup_stale_qemu_files(&paths.temp);
+    backend::qemu_old::cleanup_stale_qemu_files(&paths.temp);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     match args.command {
@@ -185,7 +187,7 @@ fn run_jobs(jobs: Vec<run::Job>, paths: &VciGlobalPaths) {
         }
     }
 
-    backend::qemu::cleanup_stale_qemu_files(&paths.temp);
+    backend::qemu_old::cleanup_stale_qemu_files(&paths.temp);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     if failed {
@@ -483,7 +485,7 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
 
         let backend: Box<dyn backend::VmBackend> = match &image_desc.backend {
             vm_image::BackendConfig::Qemu(_) => Box::new(
-                backend::qemu::QemuBackend::new(
+                backend::qemu_old::QemuBackend::new(
                     name.clone(),
                     image_desc,
                     cpus,
@@ -513,105 +515,4 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
     }
 
     jobs
-}
-
-/// Tests need to be able to control where they're writing to. Using
-/// `VciGlobalPaths::default()` works for normal use.
-pub struct VciGlobalPaths {
-    pub user_home: PathBuf,
-    pub system_home: PathBuf,
-    pub temp: PathBuf,
-}
-
-impl VciGlobalPaths {
-    fn default_user_home_path() -> PathBuf {
-        if let Some(vci_home) = std::env::var_os("VCI_USER_HOME") {
-            return PathBuf::from(vci_home);
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            // ~/.vci/ (kinda matches tart)
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(".vci");
-            }
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // $XDG_DATA_HOME/vci or ~/.local/share/vci/
-            if let Some(xdg_data) = std::env::var_os("XDG_DATA_HOME") {
-                return PathBuf::from(xdg_data).join("vci");
-            }
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(".local/share/vci");
-            }
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            // %LOCALAPPDATA%\vci\
-            if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-                return PathBuf::from(local_app_data).join("vci");
-            }
-        }
-
-        #[allow(unreachable_code)]
-        PathBuf::from(".vci")
-    }
-
-    pub fn resolve_image_home(&self, name: &str) -> Option<&Path> {
-        let filename = format!("{name}.vci");
-        if self.user_home.join(&filename).exists() {
-            Some(&self.user_home)
-        } else if self.system_home.join(&filename).exists() {
-            Some(&self.system_home)
-        } else {
-            None
-        }
-    }
-
-    pub fn image_homes(&self) -> [&Path; 2] {
-        [&self.user_home, &self.system_home]
-    }
-
-    fn default_system_home_path() -> PathBuf {
-        if let Some(vci_system_home) = std::env::var_os("VCI_SYSTEM_HOME") {
-            return PathBuf::from(vci_system_home);
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            // /Library/Application Support/vci/
-            return PathBuf::from("/Library/Application Support/vci");
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // /var/lib/vci/ (FHS variable state, not subject to tmpfiles cleanup)
-            return PathBuf::from("/var/lib/vci");
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            // %PROGRAMDATA%\vci\ (typically C:\ProgramData\vci)
-            if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
-                return PathBuf::from(program_data).join("vci");
-            }
-            return PathBuf::from(r"C:\ProgramData\vci");
-        }
-
-        #[allow(unreachable_code)]
-        PathBuf::from(".vci-system")
-    }
-}
-
-impl Default for VciGlobalPaths {
-    fn default() -> Self {
-        Self {
-            user_home: Self::default_user_home_path(),
-            system_home: Self::default_system_home_path(),
-            temp: std::env::temp_dir().join("vci"),
-        }
-    }
 }
