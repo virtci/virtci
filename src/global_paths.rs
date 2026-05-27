@@ -59,13 +59,13 @@ impl VciGlobalPaths {
             return Some(ImageHome {
                 dir: self.user_home.clone(),
                 #[cfg(target_os = "windows")]
-                in_wsl: false,
+                wsl_distro: None,
             });
         } else if self.system_home.join(&filename).exists() {
             return Some(ImageHome {
                 dir: self.system_home.clone(),
                 #[cfg(target_os = "windows")]
-                in_wsl: false,
+                wsl_distro: None,
             });
         }
 
@@ -76,7 +76,7 @@ impl VciGlobalPaths {
                 if user_unc.join(&filename).exists() {
                     return Some(ImageHome {
                         dir: user_unc,
-                        in_wsl: true,
+                        wsl_distro: Some(wsl_paths.distro.clone()),
                     });
                 }
 
@@ -84,7 +84,7 @@ impl VciGlobalPaths {
                 if system_unc.join(&filename).exists() {
                     return Some(ImageHome {
                         dir: system_unc,
-                        in_wsl: true,
+                        wsl_distro: Some(wsl_paths.distro.clone()),
                     });
                 }
             }
@@ -103,23 +103,23 @@ impl VciGlobalPaths {
         vec.push(ImageHome {
             dir: self.user_home.clone(),
             #[cfg(target_os = "windows")]
-            in_wsl: false,
+            wsl_distro: None,
         });
         vec.push(ImageHome {
             dir: self.system_home.clone(),
             #[cfg(target_os = "windows")]
-            in_wsl: false,
+            wsl_distro: None,
         });
         #[cfg(target_os = "windows")]
         {
             if let Some(wsl_paths) = &self.wsl {
                 vec.push(ImageHome {
                     dir: wsl_paths.to_unc(&wsl_paths.user_home),
-                    in_wsl: true,
+                    wsl_distro: Some(wsl_paths.distro.clone()),
                 });
                 vec.push(ImageHome {
                     dir: wsl_paths.to_unc(&wsl_paths.system_home),
-                    in_wsl: true,
+                    wsl_distro: Some(wsl_paths.distro.clone()),
                 });
             }
         }
@@ -175,17 +175,50 @@ impl WslPaths {
     /// Render a WSL-namespace path (e.g. `/var/lib/vci`) as a Windows UNC path
     /// (`\\wsl.localhost\<distro>\...`) usable with `std::fs`.
     pub fn to_unc(&self, wsl_path: &str) -> PathBuf {
-        let rel = wsl_path.trim_start_matches('/').replace('/', "\\");
-        PathBuf::from(format!(r"\\wsl.localhost\{}\{}", self.distro, rel))
+        wsl_path_to_unc(&self.distro, wsl_path)
     }
 }
 
+/// Render a WSL-namespace path (e.g. `/var/lib/vci`) as a Windows UNC path
+/// (`\\wsl.localhost\<distro>\...`) usable with `std::fs`. The single source of the UNC
+/// prefix: [`WslPaths::to_unc`] delegates here, and [`ImageHome::native_dir`] is its inverse.
+pub fn wsl_path_to_unc(distro: &str, wsl_path: &str) -> PathBuf {
+    let rel = wsl_path.trim_start_matches('/').replace('/', "\\");
+    PathBuf::from(format!(r"\\wsl.localhost\{distro}\{rel}"))
+}
+
+#[derive(Debug)]
 pub struct ImageHome {
     /// Directory containing the ImageDescription file, `<name>.vci`.
-    /// If `in_wsl == true`, has `\\wsl.localhost\<distro>\`.
+    /// If [`ImageHome::in_wsl()`], has `\\wsl.localhost\<distro>\` prefixed.
     pub dir: PathBuf,
     #[cfg(target_os = "windows")]
-    pub in_wsl: bool,
+    pub wsl_distro: Option<String>,
+}
+
+impl ImageHome {
+    /// If [`ImageHome::in_wsl()`], strips `\\wsl.localhost\<wsl_distro>\`.
+    /// Returned as a string for handling WSL in-distro QEMU.
+    /// Uses same prefix as [`WslPaths::to_unc()`].
+    pub fn native_dir(&self) -> String {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(distro) = &self.wsl_distro {
+                let dir = self.dir.to_string_lossy();
+                let prefix = format!(r"\\wsl.localhost\{}", distro);
+                return dir
+                    .strip_prefix(prefix.as_str())
+                    .expect("Expected to strip WSL UNC path prefix")
+                    .replace('\\', "/");
+            }
+        }
+        self.dir.to_string_lossy().into_owned()
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn in_wsl(&self) -> bool {
+        self.wsl_distro.is_some()
+    }
 }
 
 fn default_user_home_path() -> PathBuf {

@@ -239,7 +239,7 @@ pub fn validate_image_name(name: &str, paths: &VciGlobalPaths) -> Result<(), Str
     }
 
     if let Some(home) = paths.resolve_image_home(name) {
-        let vci_path = home.join(format!("{name}.vci"));
+        let vci_path = home.dir.join(format!("{name}.vci"));
         return Err(format!(
             "VCI image '{}' already exists at {}",
             name,

@@ -5,12 +5,11 @@
 //!
 //!
 
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use crate::{file_lock::FileLock, vm_image::HostExecTarget};
+use crate::{file_lock::FileLock, global_paths::VciGlobalPaths, vm_image::HostExecTarget};
 
 pub mod backend;
 pub mod binaries;
@@ -124,70 +123,57 @@ pub fn create_backing_file(
 }
 
 /// Cleans up ALL unused temporary QEMU files.
-pub fn cleanup_stale_qemu_files(temp_path: &Path) {
-    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
-        Ok(e) => e.filter_map(std::result::Result::ok).collect(),
-        Err(_) => return,
-    };
+/// The .lock flocks are the true authority, always in the native system's temp dir.
+/// The relevant artifacts (qcow2 overlays, UEFI vars, serial logs, TPM dirs) however
+/// will live in the execution target, which is nearly always the host, but may include
+/// within the WSL2 system.
+pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
+    let lock_dir = paths.temp.as_path();
 
-    for entry in &entries {
+    #[cfg(target_os = "windows")]
+    let payload_dirs: Vec<PathBuf> = {
+        let mut dirs = vec![lock_dir.to_path_buf()];
+        if let Some(wsl) = &paths.wsl {
+            dirs.push(wsl.to_unc(&wsl.temp));
+        }
+        dirs
+    };
+    #[cfg(not(target_os = "windows"))]
+    let payload_dirs: Vec<PathBuf> = vec![lock_dir.to_path_buf()];
+
+    // Gate on port lock, and get rid of any artifacts in any possible directory it could live
+    for entry in dir_entries(lock_dir) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        let port_str = match name_str
+        let Some(port_str) = name_str
             .strip_prefix("vci-qemu-port-")
             .and_then(|s| s.strip_suffix(".lock"))
-        {
-            Some(p) => p.to_string(),
-            None => continue,
+        else {
+            continue;
         };
 
         let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
             continue;
         };
 
-        let qcow2_suffix = format!("-{port_str}.qcow2");
-        let vars_suffix = format!("-{port_str}-VARS.fd");
-        let tpm_lock_suffix = format!("-{port_str}-tpm.lock");
-        let tpm_dir_suffix = format!("-{port_str}-tpm");
-        let serial_log_suffix = format!("-{port_str}-serial.log");
-
-        if let Ok(assoc_entries) = std::fs::read_dir(temp_path) {
-            for assoc in assoc_entries.flatten() {
-                let aname = assoc.file_name();
-                let aname_str = aname.to_string_lossy();
-
-                if aname_str == *name_str {
-                    continue;
-                }
-
-                if aname_str.starts_with("vci-")
-                    && (aname_str.ends_with(&qcow2_suffix)
-                        || aname_str.ends_with(&vars_suffix)
-                        || aname_str.ends_with(&tpm_lock_suffix)
-                        || aname_str.ends_with(&tpm_dir_suffix)
-                        || aname_str.ends_with(&serial_log_suffix))
-                {
-                    let path = assoc.path();
-                    if path.is_dir() {
-                        let _ = std::fs::remove_dir_all(&path);
-                    } else {
-                        let _ = std::fs::remove_file(&path);
-                    }
-                }
-            }
+        let suffixes = [
+            format!("-{port_str}.qcow2"),
+            format!("-{port_str}-VARS.fd"),
+            format!("-{port_str}-tpm.lock"),
+            format!("-{port_str}-tpm"),
+            format!("-{port_str}-serial.log"),
+        ];
+        for dir in &payload_dirs {
+            remove_matching(dir, &suffixes);
         }
 
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
     }
 
-    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
-        Ok(e) => e.filter_map(std::result::Result::ok).collect(),
-        Err(_) => return,
-    };
-
-    for entry in &entries {
+    // TPM state dirs whose tpm lock is free but the port lock was already reclaimed above.
+    for entry in dir_entries(lock_dir) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
@@ -200,44 +186,19 @@ pub fn cleanup_stale_qemu_files(temp_path: &Path) {
         };
 
         let dir_name = name_str.strip_suffix(".lock").unwrap();
-        let dir_path = temp_path.join(std::path::Path::new(dir_name));
-        if dir_path.is_dir() {
-            let _ = std::fs::remove_dir_all(&dir_path);
+        for dir in &payload_dirs {
+            let dir_path = dir.join(dir_name);
+            if dir_path.is_dir() {
+                let _ = std::fs::remove_dir_all(&dir_path);
+            }
         }
 
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
     }
 
-    // windows specific TCP based TPM
-    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
-        Ok(e) => e.filter_map(std::result::Result::ok).collect(),
-        Err(_) => return,
-    };
-
-    for entry in &entries {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-
-        if !name_str.starts_with("vci-qemu-tpm-port-") || !name_str.ends_with(".lock") {
-            continue;
-        }
-
-        let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
-            continue;
-        };
-
-        let _ = std::fs::remove_file(lock.get_path());
-        drop(lock);
-    }
-
-    // stale vci_image_*.lock files from crashed or previous runs
-    let entries: Vec<_> = match std::fs::read_dir(temp_path) {
-        Ok(e) => e.filter_map(std::result::Result::ok).collect(),
-        Err(_) => return,
-    };
-
-    for entry in &entries {
+    // Stale vci_image_*.lock files from crashed or previous runs (lock only).
+    for entry in dir_entries(lock_dir) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
@@ -251,5 +212,33 @@ pub fn cleanup_stale_qemu_files(temp_path: &Path) {
 
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
+    }
+}
+
+/// Collects the directory entries of `dir`, or an empty list if it can't be read.
+fn dir_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
+    match std::fs::read_dir(dir) {
+        Ok(e) => e.filter_map(std::result::Result::ok).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Removes every `vci-` prefixed entry in `dir` that ends with one of `suffixes`.
+fn remove_matching(dir: &Path, suffixes: &[String]) {
+    for entry in dir_entries(dir) {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        if !name_str.starts_with("vci-") {
+            continue;
+        }
+        if suffixes.iter().any(|s| name_str.ends_with(s.as_str())) {
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = std::fs::remove_dir_all(&path);
+            } else {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
 }

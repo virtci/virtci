@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::vm_image::{BackendConfig, ImageDescription, QemuConfig, TartConfig};
 use crate::VciGlobalPaths;
 
+use anyhow::Context;
+
 struct ProgressReader<R> {
     inner: R,
     total: u64,
@@ -80,30 +82,37 @@ pub fn run_export(
     name: &str,
     output: Option<PathBuf>,
     paths: &VciGlobalPaths,
-) -> Result<(), String> {
-    let home = paths.resolve_image_home(name).ok_or_else(|| {
+) -> anyhow::Result<()> {
+    let home = paths.resolve_image_home(name).with_context(|| {
         format!(
-            "Image '{}' not found (looked at {} and {})",
+            "Image '{}' not found. Looked at {:?}",
             name,
-            paths.user_home.display(),
-            paths.system_home.display()
+            paths.image_homes()
         )
     })?;
-    let desc = load_image(name, home)?;
+
+    let desc = load_image(name, &home.dir)?;
     let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.tar")));
 
     println!("Exporting '{}' to {}", name, output_path.display());
 
     let file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Failed to create {}: {}", output_path.display(), e))?;
+        .with_context(|| format!("Failed to create {}", output_path.display()))?;
     let mut archive = tar::Builder::new(file);
 
     let mut exported_desc = desc.clone();
     exported_desc.managed = Some(true);
 
+    // WSL image file's all live inside of the WSL distro in ext4, so they can be streamed
+    // rather than dragging across 9P mount (very slow). Native on-host files read directly.
+    #[cfg(target_os = "windows")]
+    let wsl_distro: Option<&str> = home.wsl_distro.as_deref();
+    #[cfg(not(target_os = "windows"))]
+    let wsl_distro: Option<&str> = None;
+
     match &desc.backend {
         BackendConfig::Qemu(qemu) => {
-            export_qemu(name, qemu, &mut archive, &mut exported_desc)?;
+            export_qemu(name, qemu, &mut archive, &mut exported_desc, wsl_distro)?;
         }
         BackendConfig::Tart(tart) => {
             export_tart(name, tart, &mut archive, &mut exported_desc)?;
@@ -111,7 +120,7 @@ pub fn run_export(
     }
 
     let vci_json = serde_json::to_string_pretty(&exported_desc)
-        .map_err(|e| format!("Failed to serialize config: {e}"))?;
+        .with_context(|| format!("Failed to serialize config"))?;
     let vci_bytes = vci_json.as_bytes();
     let mut header = tar::Header::new_gnu();
     header.set_size(vci_bytes.len() as u64);
@@ -119,56 +128,111 @@ pub fn run_export(
     header.set_cksum();
     archive
         .append_data(&mut header, format!("{name}.vci"), vci_bytes)
-        .map_err(|e| format!("Failed to write .vci to archive: {e}"))?;
+        .with_context(|| format!("Failed to write .vci to archive"))?;
 
     archive
         .finish()
-        .map_err(|e| format!("Failed to finalize archive: {e}"))?;
+        .with_context(|| format!("Failed to finalize archive"))?;
 
     println!("Export complete: {}", output_path.display());
     Ok(())
 }
 
-fn load_image(name: &str, home_path: &Path) -> Result<ImageDescription, String> {
+fn load_image(name: &str, home_path: &Path) -> anyhow::Result<ImageDescription> {
     let vci_path = home_path.join(format!("{name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
+    let contents = std::fs::read_to_string(&vci_path).with_context(|| {
         format!(
             "Failed to load image description '{}' (looked at {})",
             name,
             vci_path.display()
         )
     })?;
+
     let mut desc: ImageDescription = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse image description '{name}': {e}"))?;
+        .with_context(|| format!("Failed to parse image description '{name}'"))?;
     desc.name = name.to_string();
     Ok(desc)
 }
 
+/// Append a file to the archive. WSL files are streamed through a native `wsl -- cat`
+/// (native ext4 read on one side, native NTFS write on the other) instead of being dragged over
+/// the slow `\\wsl.localhost` 9P mount. Only the size is read over 9P (metadata, no file data).
+///
+/// # Arguments
+///
+/// - `archive` The tar archive to append the file to.
+/// - `wsl_distro` Only used on Windows. If the file lives within WSL2, is the distro name.
+/// - `raw_path` The path exactly as recorded in the `.vci` image description file. Either is the
+/// host path, or the WSL-namespace path.
+/// - `archive_name` Name of the tar archive.
 fn append_file<W: std::io::Write>(
     archive: &mut tar::Builder<W>,
-    src_path: &Path,
+    wsl_distro: Option<&str>,
+    raw_path: &str,
     archive_name: &str,
-) -> Result<(), String> {
-    let file = std::fs::File::open(src_path)
-        .map_err(|e| format!("Failed to open {}: {}", src_path.display(), e))?;
-    let metadata = file
-        .metadata()
-        .map_err(|e| format!("Failed to read metadata for {}: {}", src_path.display(), e))?;
-    let size = metadata.len();
+) -> anyhow::Result<()> {
+    let label = filename_of(raw_path);
 
-    let label = filename_of(&src_path.to_string_lossy());
-    let mut reader = ProgressReader::new(file, size, label);
+    match wsl_distro {
+        None => {
+            let file = std::fs::File::open(raw_path)
+                .with_context(|| format!("Failed to open {raw_path}"))?;
+            let size = file
+                .metadata()
+                .with_context(|| format!("Failed to read metadata for {raw_path}"))?
+                .len();
+            let mut reader = ProgressReader::new(file, size, label);
+            append_reader(archive, &mut reader, size, archive_name, raw_path)
+        }
+        Some(distro) => {
+            // The tar header carries the entry size up front, so learn it before streaming.
+            // A stat over 9P moves only metadata (no file bytes), so it isn't the slow path.
+            let unc = crate::global_paths::wsl_path_to_unc(distro, raw_path);
+            let size = std::fs::metadata(&unc)
+                .with_context(|| format!("Failed to stat {} in WSL", unc.display()))?
+                .len();
 
+            let mut child = std::process::Command::new("wsl")
+                .args(["-d", distro, "--", "cat", raw_path])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .with_context(|| format!("Failed to spawn `wsl cat` for {raw_path}"))?;
+            let stdout = child
+                .stdout
+                .take()
+                .with_context(|| format!("Failed to capture `wsl cat` output for {raw_path}"))?;
+            let mut reader = ProgressReader::new(stdout, size, label);
+            append_reader(archive, &mut reader, size, archive_name, raw_path)?;
+
+            let status = child
+                .wait()
+                .with_context(|| format!("Failed to wait on `wsl cat` for {raw_path}"))?;
+            if !status.success() {
+                anyhow::bail!(format!(
+                    "`wsl cat` failed for {raw_path} ({status}); the archive may be incomplete"
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn append_reader<W: std::io::Write, R: Read>(
+    archive: &mut tar::Builder<W>,
+    reader: &mut R,
+    size: u64,
+    archive_name: &str,
+    raw_path: &str,
+) -> anyhow::Result<()> {
     let mut header = tar::Header::new_gnu();
     header.set_size(size);
     header.set_mode(0o644);
     header.set_cksum();
 
     archive
-        .append_data(&mut header, archive_name, &mut reader)
-        .map_err(|e| format!("Failed to add {} to archive: {}", src_path.display(), e))?;
-
-    Ok(())
+        .append_data(&mut header, archive_name, reader)
+        .with_context(|| format!("Failed to add {raw_path} to archive"))
 }
 
 fn filename_of(path: &str) -> String {
@@ -207,24 +271,31 @@ fn export_qemu<W: std::io::Write>(
     qemu: &QemuConfig,
     archive: &mut tar::Builder<W>,
     exported_desc: &mut ImageDescription,
-) -> Result<(), String> {
-    let image_path = Path::new(&qemu.image);
+    wsl_distro: Option<&str>,
+) -> anyhow::Result<()> {
     let image_filename = filename_of(&qemu.image);
-    append_file(archive, image_path, &format!("{name}/{image_filename}"))?;
+    append_file(
+        archive,
+        wsl_distro,
+        &qemu.image,
+        &format!("{name}/{image_filename}"),
+    )?;
 
     let mut exported_uefi = qemu.uefi.clone();
     if let Some(ref uefi) = qemu.uefi {
         let code_filename = filename_of(&uefi.code);
         append_file(
             archive,
-            Path::new(&uefi.code),
+            wsl_distro,
+            &uefi.code,
             &format!("{name}/{code_filename}"),
         )?;
 
         let vars_filename = filename_of(&uefi.vars);
         append_file(
             archive,
-            Path::new(&uefi.vars),
+            wsl_distro,
+            &uefi.vars,
             &format!("{name}/{vars_filename}"),
         )?;
 
@@ -242,7 +313,8 @@ fn export_qemu<W: std::io::Write>(
                 let file_filename = filename_of(&file_path);
                 append_file(
                     archive,
-                    Path::new(&file_path),
+                    wsl_distro,
+                    &file_path,
                     &format!("{name}/{file_filename}"),
                 )?;
                 rewritten.push(rewrite_drive_file_path(drive_str, &file_filename));
@@ -260,7 +332,8 @@ fn export_qemu<W: std::io::Write>(
             let iso_filename = filename_of(iso_path);
             append_file(
                 archive,
-                Path::new(iso_path),
+                wsl_distro,
+                iso_path,
                 &format!("{name}/{iso_filename}"),
             )?;
             rewritten.push(iso_filename);
@@ -287,7 +360,7 @@ fn export_tart<W: std::io::Write>(
     tart: &TartConfig,
     archive: &mut tar::Builder<W>,
     exported_desc: &mut ImageDescription,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let tvm_filename = format!("{}.tvm", tart.vm_name);
     let temp_dir = std::env::temp_dir();
     let tvm_temp_path = temp_dir.join(&tvm_filename);
@@ -303,16 +376,17 @@ fn export_tart<W: std::io::Write>(
         .arg(&tart.vm_name)
         .arg(&tvm_temp_path)
         .output()
-        .map_err(|e| format!("Failed to run tart export: {e}"))?;
+        .with_context(|| format!("Failed to run tart export"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Clean up temp file on failure
         let _ = std::fs::remove_file(&tvm_temp_path);
-        return Err(format!("tart export failed: {}", stderr.trim()));
+        anyhow::bail!(format!("tart export failed: {}", stderr.trim()));
     }
 
-    append_file(archive, &tvm_temp_path, &format!("{name}/{tvm_filename}"))?;
+    let tvm_raw = tvm_temp_path.to_string_lossy();
+    append_file(archive, None, &tvm_raw, &format!("{name}/{tvm_filename}"))?;
 
     let _ = std::fs::remove_file(&tvm_temp_path);
 

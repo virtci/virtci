@@ -40,7 +40,7 @@ pub fn load_all_images(paths: &VciGlobalPaths) -> Vec<ImageDescription> {
     let mut seen: HashSet<String> = HashSet::new();
 
     for home in paths.image_homes() {
-        for img in load_images_in(home) {
+        for img in load_images_in(&home.dir) {
             if seen.insert(img.name.clone()) {
                 images.push(img);
             }

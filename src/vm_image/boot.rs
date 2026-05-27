@@ -235,7 +235,7 @@ fn load_image(name: &str, paths: &VciGlobalPaths) -> Result<ImageDescription, St
             paths.system_home.display()
         )
     })?;
-    let vci_path = home.join(format!("{name}.vci"));
+    let vci_path = home.dir.join(format!("{name}.vci"));
     let contents = std::fs::read_to_string(&vci_path)
         .map_err(|e| format!("Failed to read {}: {e}", vci_path.display()))?;
     let mut desc: ImageDescription = serde_json::from_str(&contents)

@@ -8,12 +8,18 @@ const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 #[ignore = "System Test"]
 fn run_debian_upstream_x64() {
     const VM_IMAGE_NAME: &str = "TEST_run_debian_upstream_x64";
-    let paths = virtci::VciGlobalPaths {
-        user_home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/run_upstream_debian/home")),
+    let paths = virtci::global_paths::VciGlobalPaths {
+        user_home: PathBuf::from(format!(
+            "{MANIFEST_DIR}/tests/temp/run_upstream_debian/home"
+        )),
         system_home: PathBuf::from(format!(
             "{MANIFEST_DIR}/tests/temp/run_upstream_debian/system_home"
         )),
-        temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/run_upstream_debian/temp")),
+        temp: PathBuf::from(format!(
+            "{MANIFEST_DIR}/tests/temp/run_upstream_debian/temp"
+        )),
+        #[cfg(target_os = "windows")]
+        wsl: None,
     };
 
     {
@@ -64,12 +70,18 @@ fn run_debian_upstream_x64() {
 #[ignore = "System Test"]
 fn run_debian_upstream_arm64() {
     const VM_IMAGE_NAME: &str = "TEST_run_debian_upstream_arm64";
-    let paths = virtci::VciGlobalPaths {
-        user_home: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/run_upstream_debian/home")),
+    let paths = virtci::global_paths::VciGlobalPaths {
+        user_home: PathBuf::from(format!(
+            "{MANIFEST_DIR}/tests/temp/run_upstream_debian/home"
+        )),
         system_home: PathBuf::from(format!(
             "{MANIFEST_DIR}/tests/temp/run_upstream_debian/system_home"
         )),
-        temp: PathBuf::from(format!("{MANIFEST_DIR}/tests/temp/run_upstream_debian/temp")),
+        temp: PathBuf::from(format!(
+            "{MANIFEST_DIR}/tests/temp/run_upstream_debian/temp"
+        )),
+        #[cfg(target_os = "windows")]
+        wsl: None,
     };
 
     {

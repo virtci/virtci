@@ -13,7 +13,7 @@ pub mod web;
 pub mod yaml;
 
 use global_paths::VciGlobalPaths;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use argh::FromArgs;
@@ -37,7 +37,7 @@ pub fn run_virtci_cli(paths: &VciGlobalPaths) {
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     setup_signal_handlers();
 
-    backend::qemu_old::cleanup_stale_qemu_files(&paths.temp);
+    backend::qemu::cleanup_stale_qemu_files(paths);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     match args.command {
@@ -187,7 +187,7 @@ fn run_jobs(jobs: Vec<run::Job>, paths: &VciGlobalPaths) {
         }
     }
 
-    backend::qemu_old::cleanup_stale_qemu_files(&paths.temp);
+    backend::qemu::cleanup_stale_qemu_files(paths);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     if failed {
@@ -380,7 +380,7 @@ fn load_image_description(image_name: &str, paths: &VciGlobalPaths) -> vm_image:
             paths.system_home.display()
         )
     });
-    let vci_path = home.join(format!("{image_name}.vci"));
+    let vci_path = home.dir.join(format!("{image_name}.vci"));
     let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|e| {
         panic!(
             "Failed to read image description at {}: {e}",
