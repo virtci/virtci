@@ -33,12 +33,13 @@ pub struct UefiSplit {
 }
 
 /// Is the host environment that will be running the stuff. Mostly relevant for Windows / WSL2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HostExecTarget {
     Linux,
     MacOS,
     WindowsNative,
-    WSL2,
+    /// Stores the distro
+    WSL2(String),
     FreeBSD,
 }
 

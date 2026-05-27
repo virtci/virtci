@@ -16,16 +16,16 @@ use crate::vm_image::HostExecTarget;
 /// - [`HostExecTarget::Linux`] opens `/dev/kvm` read-write directly. This also
 ///   covers running *natively inside* a WSL2 distro.
 /// - [`HostExecTarget::WSL2`] (the Windows host driving QEMU through WSL2) runs
-///   the equivalent probe inside the default distro via `wsl`.
+///   the equivalent probe inside its own distro via `wsl -d <distro>`.
 ///
 /// A read-write open of `/dev/kvm` is also the nested-virtualization check.
 /// If nested virt is disabled or the WSL2 kernel lacks KVM, the device is either
 /// absent or not openable, so no separate Hyper-V/`.wslconfig` query is needed.
-pub fn check_kvm_access(exec_target: HostExecTarget) -> anyhow::Result<()> {
+pub fn check_kvm_access(exec_target: &HostExecTarget) -> anyhow::Result<()> {
     match exec_target {
         HostExecTarget::WindowsNative | HostExecTarget::FreeBSD | HostExecTarget::MacOS => Ok(()),
         HostExecTarget::Linux => check_kvm_native(),
-        HostExecTarget::WSL2 => check_kvm_through_wsl2(),
+        HostExecTarget::WSL2(distro) => check_kvm_through_wsl2(distro),
     }
 }
 
@@ -61,17 +61,17 @@ fn check_kvm_native() -> anyhow::Result<()> {
     }
 }
 
-/// Probe `/dev/kvm` inside the default WSL2 distro from the Windows host.
-fn check_kvm_through_wsl2() -> anyhow::Result<()> {
+/// Probe `/dev/kvm` inside the given WSL2 distro from the Windows host.
+fn check_kvm_through_wsl2(distro: &str) -> anyhow::Result<()> {
     // `-r`/`-w` reflect the read-write access QEMU's O_RDWR open needs. The three
     // distinct words map to actionable errors without parsing locale-dependent
-    // errno text. Runs through the default distro, matching where swtpm runs.
+    // errno text. Runs through the target distro, matching where QEMU/swtpm run.
     const PROBE: &str = "if [ ! -e /dev/kvm ]; then echo MISSING; \
                          elif [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then echo DENIED; \
                          else echo OK; fi";
 
     let output = Command::new("wsl")
-        .args(["--", "sh", "-c", PROBE])
+        .args(["-d", distro, "--", "sh", "-c", PROBE])
         .output()
         .context("failed to run `wsl` to probe /dev/kvm (is WSL installed and on PATH?)")?;
 

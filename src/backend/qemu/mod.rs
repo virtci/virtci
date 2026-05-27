@@ -90,7 +90,7 @@ impl Drop for PortFlock {
 pub fn create_backing_file(
     source_path: &std::path::Path,
     dest_path: &std::path::Path,
-    exec_target: HostExecTarget,
+    exec_target: &HostExecTarget,
 ) -> anyhow::Result<()> {
     let qemu_img = binaries::qemu_image_binary(exec_target)
         .with_context(|| format!("Unable to get qemu-img binary to create the thin overlay"))?

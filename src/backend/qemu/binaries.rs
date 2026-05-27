@@ -9,12 +9,13 @@ use anyhow::Context;
 use crate::vm_image::{Arch, HostExecTarget};
 
 /// Build a [`Command`] that runs `program` on `exec_target`, wrapping through
-/// `wsl --` (default distro) when the target is WSL2.
-pub fn target_command(exec_target: HostExecTarget, program: &str) -> Command {
+/// `wsl -d <distro> --` (the target's own distro, not necessarily the default) when the
+/// target is WSL2 — so binary probes run in the same distro the images are stored in.
+pub fn target_command(exec_target: &HostExecTarget, program: &str) -> Command {
     match exec_target {
-        HostExecTarget::WSL2 => {
+        HostExecTarget::WSL2(distro) => {
             let mut cmd = Command::new("wsl");
-            cmd.arg("--").arg(program);
+            cmd.args(["-d", distro.as_str(), "--", program]);
             cmd
         }
         _ => Command::new(program),
@@ -25,8 +26,8 @@ pub fn target_command(exec_target: HostExecTarget, program: &str) -> Command {
 /// functional (by reading its version), and optionally require TPM support.
 ///
 /// `exec_target` selects *how* the binary is invoked, not just where it lives:
-/// [`HostExecTarget::WSL2`] runs everything through `wsl --` inside the default
-/// distro, so this works from a Windows host driving QEMU in WSL2.
+/// [`HostExecTarget::WSL2`] runs everything through `wsl -d <distro> --` inside the
+/// target's distro, so this works from a Windows host driving QEMU in WSL2.
 ///
 /// # Returns
 ///
@@ -35,11 +36,11 @@ pub fn target_command(exec_target: HostExecTarget, program: &str) -> Command {
 /// and the second is the first line of its version output.
 pub fn qemu_system_binary(
     arch: Arch,
-    exec_target: HostExecTarget,
+    exec_target: &HostExecTarget,
     check_tpm: bool,
 ) -> anyhow::Result<(String, String)> {
     if check_tpm {
-        assert_ne!(exec_target, HostExecTarget::WindowsNative);
+        assert!(!matches!(exec_target, HostExecTarget::WindowsNative));
     }
 
     let binary = resolve_system_binary(arch, exec_target);
@@ -56,15 +57,15 @@ pub fn qemu_system_binary(
 /// Resolve the `qemu-img` binary for `exec_target`, and confirm it is functional.
 ///
 /// `exec_target` selects how the binary is invoked, not just where it is.
-/// [`HostExecTarget::WSL2`] runs everything through `wsl --` inside the default
-/// distro, so this works from a Windows host driving QEMU in WSL2.
+/// [`HostExecTarget::WSL2`] runs everything through `wsl -d <distro> --` inside the
+/// target's distro, so this works from a Windows host driving QEMU in WSL2.
 ///
 /// # Returns
 ///
 /// On `Ok`, the first tuple member is the binary to run (a path or bare name,
 /// without any `wsl --` prefix, so re-wrap with the same target when launching),
 /// and the second is the first line of its version output.
-pub fn qemu_image_binary(exec_target: HostExecTarget) -> anyhow::Result<(String, String)> {
+pub fn qemu_image_binary(exec_target: &HostExecTarget) -> anyhow::Result<(String, String)> {
     let binary = resolve_img_binary(exec_target);
     let version = query_version(&binary, exec_target)
         .with_context(|| format!("QEMU img binary '{binary}' is not functional"))?;
@@ -72,12 +73,12 @@ pub fn qemu_image_binary(exec_target: HostExecTarget) -> anyhow::Result<(String,
     Ok((binary, version))
 }
 
-pub fn qemu_machine(arch: Arch, exec_target: HostExecTarget) -> &'static str {
+pub fn qemu_machine(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
     match arch {
         Arch::X64 => {
             // Emulate the APIC for windows hypervisor
             #[cfg(target_os = "windows")]
-            if exec_target == HostExecTarget::WindowsNative {
+            if matches!(exec_target, HostExecTarget::WindowsNative) {
                 return "q35,kernel-irqchip=off";
             }
             return "q35";
@@ -87,7 +88,7 @@ pub fn qemu_machine(arch: Arch, exec_target: HostExecTarget) -> &'static str {
 }
 
 #[allow(clippy::match_same_arms)]
-pub fn qemu_cpu(arch: Arch, exec_target: HostExecTarget) -> &'static str {
+pub fn qemu_cpu(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
     match arch {
         Arch::X64 => {
             // WHPX is sensitive to CPUID values set during vCPU initialization.
@@ -97,7 +98,7 @@ pub fn qemu_cpu(arch: Arch, exec_target: HostExecTarget) -> &'static str {
             // single instruction. qemu64 uses a fixed minimal CPUID set with
             // no host-derived values, which WHPX initializes correctly.
             #[cfg(target_os = "windows")]
-            if exec_target == HostExecTarget::WindowsNative {
+            if matches!(exec_target, HostExecTarget::WindowsNative) {
                 return "qemu64";
             }
             #[cfg(target_arch = "x86_64")]
@@ -115,7 +116,7 @@ pub fn qemu_cpu(arch: Arch, exec_target: HostExecTarget) -> &'static str {
     }
 }
 
-fn resolve_system_binary(arch: Arch, exec_target: HostExecTarget) -> String {
+fn resolve_system_binary(arch: Arch, exec_target: &HostExecTarget) -> String {
     if let Ok(custom) = std::env::var("VIRTCI_QEMU_BINARY") {
         return custom;
     }
@@ -126,7 +127,7 @@ fn resolve_system_binary(arch: Arch, exec_target: HostExecTarget) -> String {
         Arch::RISCV64 => "qemu-system-riscv64",
     };
 
-    if exec_target == HostExecTarget::WindowsNative {
+    if matches!(exec_target, HostExecTarget::WindowsNative) {
         let exe = format!("{base}.exe");
         let candidates = [
             // MSYS2 UCRT64 (mingw-w64-ucrt-x86_64-qemu) DOES NOT INCLUDE TPM SUPPORT ITS A LIE
@@ -147,14 +148,14 @@ fn resolve_system_binary(arch: Arch, exec_target: HostExecTarget) -> String {
     base.to_string()
 }
 
-fn resolve_img_binary(exec_target: HostExecTarget) -> String {
+fn resolve_img_binary(exec_target: &HostExecTarget) -> String {
     if let Ok(custom) = std::env::var("VIRTCI_QEMU_IMG_BINARY") {
         return custom;
     }
 
     let base = "qemu-img";
 
-    if exec_target == HostExecTarget::WindowsNative {
+    if matches!(exec_target, HostExecTarget::WindowsNative) {
         let exe = "qemu-img.exe".to_string();
         let candidates = [
             format!("C:\\msys64\\ucrt64\\bin\\{exe}"),
@@ -172,7 +173,7 @@ fn resolve_img_binary(exec_target: HostExecTarget) -> String {
     return base.to_string();
 }
 
-fn query_version(binary: &str, exec_target: HostExecTarget) -> anyhow::Result<String> {
+fn query_version(binary: &str, exec_target: &HostExecTarget) -> anyhow::Result<String> {
     let output = target_command(exec_target, binary)
         .arg("--version")
         .output()
@@ -195,7 +196,7 @@ fn query_version(binary: &str, exec_target: HostExecTarget) -> anyhow::Result<St
     Ok(first_line.to_string())
 }
 
-fn ensure_tpm_support(binary: &str, exec_target: HostExecTarget) -> anyhow::Result<()> {
+fn ensure_tpm_support(binary: &str, exec_target: &HostExecTarget) -> anyhow::Result<()> {
     let output = target_command(exec_target, binary)
         .arg("-tpmdev")
         .arg("help")
