@@ -237,25 +237,33 @@ impl Job {
             }
             StepKind::Copy(copy_spec) => {
                 let ssh = self.backend.ssh_target();
+                let guest_os = self.backend.os();
+                let is_host_to_vm = copy_spec.to.starts_with("vm:");
+
+                let convert_to_lf = copy_spec.crlf
+                    && is_host_to_vm
+                    && guest_os != GuestOs::Windows
+                    && cfg!(target_os = "windows");
+
                 let copy_future = copy::copy_files_tar(
                     &ssh,
                     &copy_spec.from,
                     &copy_spec.to,
                     &copy_spec.exclude,
-                    self.backend.os(),
+                    guest_os,
                     Some(timeout_duration),
                     copy_spec.no_mkdir,
                     copy_spec.allow_empty,
+                    convert_to_lf,
                 );
 
                 tokio::time::timeout(timeout_duration, copy_future)
                     .await
                     .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
 
-                let is_host_to_vm = copy_spec.to.starts_with("vm:");
-                let should_convert_line_endings =
-                    is_host_to_vm && self.backend.os() == GuestOs::Windows && copy_spec.crlf;
-                if should_convert_line_endings {
+                let convert_to_crlf =
+                    is_host_to_vm && guest_os == GuestOs::Windows && copy_spec.crlf;
+                if convert_to_crlf {
                     copy::convert_windows_line_endings(&ssh, &copy_spec.to).await;
                 }
             }

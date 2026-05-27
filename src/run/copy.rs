@@ -12,6 +12,8 @@ enum CopyDirection {
     VmToHost,
 }
 
+/// if `convert_to_lf` Host->VM only will rewrite CRLF/CR to LF in text files within the archive
+/// before sending. Never touches the host's source files on disk.
 #[allow(clippy::too_many_arguments)]
 pub async fn copy_files_tar(
     ssh: &SshTarget,
@@ -22,6 +24,7 @@ pub async fn copy_files_tar(
     timeout: Option<Duration>,
     no_mkdir: bool,
     allow_empty: bool,
+    convert_to_lf: bool,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
     let poll_interval = Duration::from_secs(5);
@@ -54,9 +57,18 @@ pub async fn copy_files_tar(
                 ensure_remote_dir(ssh, &remote_path, os).await?;
             }
             if let Some((root, pattern)) = split_glob(local_path) {
-                copy_host_to_vm_glob(ssh, &root, &pattern, &remote_path, ignore, allow_empty).await
+                copy_host_to_vm_glob(
+                    ssh,
+                    &root,
+                    &pattern,
+                    &remote_path,
+                    ignore,
+                    allow_empty,
+                    convert_to_lf,
+                )
+                .await
             } else {
-                copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore).await
+                copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore, convert_to_lf).await
             }
         }
         CopyDirection::VmToHost => {
@@ -132,13 +144,15 @@ async fn copy_host_to_vm_tar(
     local_path: &str,
     remote_path: &str,
     ignore: &[String],
+    convert_to_lf: bool,
 ) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
     let local_metadata = std::fs::metadata(local_path)
         .map_err(|e| format!("Failed to read local path {local_path}: {e}"))?;
 
-    let mut tar_args = vec!["czf".to_string(), "-".to_string()];
+    // Uncompressed: every transfer is over loopback, so gzip only burns CPU.
+    let mut tar_args = vec!["cf".to_string(), "-".to_string()];
 
     for pattern in ignore {
         tar_args.push("--exclude".to_string());
@@ -187,9 +201,16 @@ async fn copy_host_to_vm_tar(
         );
     }
 
-    send_archive_to_remote(ssh, &tar_output.stdout, remote_path).await
+    let archive = if convert_to_lf {
+        rewrite_tar_to_lf(&tar_output.stdout)?
+    } else {
+        tar_output.stdout
+    };
+
+    send_archive_to_remote(ssh, &archive, remote_path).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn copy_host_to_vm_glob(
     ssh: &SshTarget,
     root: &str,
@@ -197,6 +218,7 @@ async fn copy_host_to_vm_glob(
     remote_path: &str,
     ignore: &[String],
     allow_empty: bool,
+    convert_to_lf: bool,
 ) -> Result<(), String> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
@@ -233,7 +255,7 @@ async fn copy_host_to_vm_glob(
     let file_list = rel_paths.join("\n");
 
     let mut tar_args: Vec<String> = vec![
-        "czf".into(),
+        "cf".into(),
         "-".into(),
         "-C".into(),
         root.to_string(),
@@ -274,7 +296,13 @@ async fn copy_host_to_vm_glob(
 
     eprintln!("[TAR] Archive created: {} bytes", tar_output.stdout.len());
 
-    send_archive_to_remote(ssh, &tar_output.stdout, remote_path).await
+    let archive = if convert_to_lf {
+        rewrite_tar_to_lf(&tar_output.stdout)?
+    } else {
+        tar_output.stdout
+    };
+
+    send_archive_to_remote(ssh, &archive, remote_path).await
 }
 
 async fn send_archive_to_remote(
@@ -292,7 +320,7 @@ async fn send_archive_to_remote(
         .map_err(|e| format!("Failed to open channel: {e}"))?;
 
     let remote_path_clean = remote_path.trim_end_matches('\\');
-    let extract_cmd = format!("tar xzf - -C \"{remote_path_clean}\"");
+    let extract_cmd = format!("tar xf - -C \"{remote_path_clean}\"");
     eprintln!("[TAR] Remote extract command: {extract_cmd}");
 
     channel
@@ -402,7 +430,7 @@ async fn copy_vm_to_host_tar(
     }
 
     let tar_cmd = if is_dir {
-        let base_cmd = format!("tar czf - -C \"{remote_path}\"{exclude_args} .");
+        let base_cmd = format!("tar cf - -C \"{remote_path}\"{exclude_args} .");
         if is_windows {
             format!("cmd /c {base_cmd}")
         } else {
@@ -410,7 +438,7 @@ async fn copy_vm_to_host_tar(
         }
     } else {
         let (parent, filename) = split_parent_filename(remote_path, is_windows);
-        let base_cmd = format!("tar czf - -C \"{parent}\"{exclude_args} \"{filename}\"");
+        let base_cmd = format!("tar cf - -C \"{parent}\"{exclude_args} \"{filename}\"");
         if is_windows {
             format!("cmd /c {base_cmd}")
         } else {
@@ -503,9 +531,9 @@ async fn copy_vm_to_host_glob(
     }
 
     let tar_cmd = if is_windows {
-        format!("cmd /c tar czf - -C \"{root}\"{exclude_args} -T -")
+        format!("cmd /c tar cf - -C \"{root}\"{exclude_args} -T -")
     } else {
-        format!("tar czf - -C \"{root}\"{exclude_args} -T -")
+        format!("tar cf - -C \"{root}\"{exclude_args} -T -")
     };
 
     eprintln!("[TAR] Remote command: {tar_cmd}");
@@ -601,11 +629,14 @@ fn extract_archive_locally(archive: &[u8], dest_dir: &str) -> Result<(), String>
     use std::io::Write as _;
     use std::process::{Command, Stdio};
 
-    if archive.len() < 2 || archive[0] != 0x1f || archive[1] != 0x8b {
+    // Uncompressed tar has the POSIX "ustar" magic lives at offset 257
+    let looks_like_tar = archive.len() >= 262 && &archive[257..262] == b"ustar";
+    let looks_empty = archive.iter().all(|&b| b == 0);
+    if !looks_like_tar && !looks_empty {
         let preview: Vec<u8> = archive.iter().take(64).copied().collect();
         let preview_str = String::from_utf8_lossy(&preview);
         return Err(format!(
-            "Remote tar output is not a valid gzip archive. First bytes: {:02x?}, as text: '{}'",
+            "Remote tar output is not a valid tar archive. First bytes: {:02x?}, as text: '{}'",
             &archive[..std::cmp::min(16, archive.len())],
             preview_str.chars().take(64).collect::<String>()
         ));
@@ -614,7 +645,7 @@ fn extract_archive_locally(archive: &[u8], dest_dir: &str) -> Result<(), String>
     eprintln!("[TAR] Extracting to: {dest_dir}");
 
     let mut tar_process = Command::new("tar")
-        .args(["xzf", "-", "-C", dest_dir])
+        .args(["xf", "-", "-C", dest_dir])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -720,6 +751,88 @@ fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a str, 
     } else {
         (CopyDirection::VmToHost, to, &from[3..])
     }
+}
+
+/// Rewrites an uncompressed tar archive in memory doing the CRLF/CR line endings,
+/// converting them to just LF in text. Binary files are untouched. Also files
+/// on disk aren't modified either.
+fn rewrite_tar_to_lf(tar_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+
+    let mut archive = tar::Archive::new(tar_bytes);
+    let mut out = Vec::with_capacity(tar_bytes.len());
+    {
+        let mut builder = tar::Builder::new(&mut out);
+        let entries = archive
+            .entries()
+            .map_err(|e| format!("Failed to read tar entries: {e}"))?;
+        for entry in entries {
+            let mut entry = entry.map_err(|e| format!("Failed to read tar entry: {e}"))?;
+            let mut header = entry.header().clone();
+            let path = entry
+                .path()
+                .map_err(|e| format!("Bad path in tar entry: {e}"))?
+                .into_owned();
+            let entry_type = header.entry_type();
+
+            if entry_type.is_file() {
+                let mut data = Vec::new();
+                entry
+                    .read_to_end(&mut data)
+                    .map_err(|e| format!("Failed to read tar entry data: {e}"))?;
+                if is_text(&data) {
+                    data = crlf_to_lf(&data);
+                }
+                header.set_size(data.len() as u64);
+                builder
+                    .append_data(&mut header, &path, data.as_slice())
+                    .map_err(|e| format!("Failed to repack tar entry: {e}"))?;
+            } else if entry_type.is_symlink() || entry_type.is_hard_link() {
+                let target = entry
+                    .link_name()
+                    .map_err(|e| format!("Bad link name in tar entry: {e}"))?
+                    .map(|c| c.into_owned());
+                match target {
+                    Some(target) => builder
+                        .append_link(&mut header, &path, &target)
+                        .map_err(|e| format!("Failed to repack tar link: {e}"))?,
+                    None => builder
+                        .append_data(&mut header, &path, std::io::empty())
+                        .map_err(|e| format!("Failed to repack tar link: {e}"))?,
+                }
+            } else {
+                // Directories, fifos, etc.: no payload.
+                builder
+                    .append_data(&mut header, &path, std::io::empty())
+                    .map_err(|e| format!("Failed to repack tar entry: {e}"))?;
+            }
+        }
+        builder
+            .finish()
+            .map_err(|e| format!("Failed to finalize tar: {e}"))?;
+    }
+    Ok(out)
+}
+
+fn is_text(data: &[u8]) -> bool {
+    !data.iter().take(8192).any(|&b| b == 0)
+}
+
+fn crlf_to_lf(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == b'\r' {
+            out.push(b'\n');
+            if i + 1 < data.len() && data[i + 1] == b'\n' {
+                i += 1;
+            }
+        } else {
+            out.push(data[i]);
+        }
+        i += 1;
+    }
+    out
 }
 
 /// PowerShell script that converts text files to CRLF line endings.

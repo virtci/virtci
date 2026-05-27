@@ -219,7 +219,12 @@ steps:
 
 Defaults to `false`.
 
-If `false`, CRLF conversion will not happen automatically. If `true`, and the copy is from host to VM, and the VM is a Windows VM, will perform CRLF conversion.
+If `false`, no line-ending conversion happens. If `true`, and the copy is from host to VM, line endings are normalized to the guest's convention:
+
+- **Windows VM copied from non Windows Host**: CRLF, converted in-guest after the files are extracted.
+- **Unix VM (Linux/macOS/etc) copied from a Windows Host**: LF, converted by rewriting the transfer archive in memory before sending. This keeps shell scripts and the like from arriving with `\r` that breaks `/bin/sh`.
+
+Binary files and source files on the host are never modified, only the in-flight copy is converted.
 
 ```yaml
 steps:
