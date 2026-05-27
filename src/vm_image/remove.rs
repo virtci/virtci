@@ -20,7 +20,12 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
                 paths.system_home.display()
             )
         });
-    let desc = load_image(&remove_args.name, &home.dir).expect("Failed to load image");
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut desc = load_image(&remove_args.name, &home.dir).expect("Failed to load image");
+    #[cfg(target_os = "windows")]
+    {
+        desc.wsl_distro = home.wsl_distro.clone();
+    }
     let name = &desc.name;
 
     println!("[VirtCI] Removing VM image:");

@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
+
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, save_config, validate_image_name, Arch,
     BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig, UefiSplit,
@@ -19,7 +21,7 @@ use crate::VciGlobalPaths;
 /// 7. Advanced options (tpm, nvme, cpu model, extra drives/devices)
 /// 8. Summary + confirmation
 /// 9. Save .vci file
-pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(), String> {
+pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Result<()> {
     println!("VCI QEMU Image Setup");
     println!("====================\n");
 
@@ -38,6 +40,16 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
     let (tpm, nvme, cpu_model, additional_drives, additional_devices, readonly_isos) =
         prompt_advanced_options(guest_os, arch)?;
 
+    #[cfg(target_os = "windows")]
+    let wsl_distro: Option<String> = if tpm {
+        match &paths.wsl {
+            None => anyhow::bail!("A WSL2 distro is required for TPM VMs on Windows"),
+            Some(wsl_paths) => Some(wsl_paths.distro.clone()),
+        }
+    } else {
+        None
+    };
+
     let config = ImageDescription {
         name,
         os: guest_os,
@@ -55,12 +67,14 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
             readonly_isos,
         }),
         remote: None,
+        #[cfg(target_os = "windows")]
+        wsl_distro,
     };
 
     print_summary(&config);
 
     if prompt_yes_no("Save this configuration?", true)? {
-        save_config(&config, &dest_home, system)?;
+        save_config(&config, &dest_home, system).map_err(anyhow::Error::msg)?;
         println!("\nSaved to {}/{}.vci", dest_home.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);
     } else {
@@ -71,7 +85,7 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
 }
 
 /// Step 1
-fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
+fn prompt_image_name(paths: &VciGlobalPaths) -> anyhow::Result<String> {
     println!("Step 1: Image Name");
     println!("  This name will be used in workflow files (e.g., image: win-11-arm64)");
 
@@ -91,7 +105,7 @@ fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
 }
 
 /// Step 2
-fn prompt_guest_os() -> Result<GuestOs, String> {
+fn prompt_guest_os() -> anyhow::Result<GuestOs> {
     println!("Step 2: Guest OS");
     println!("  1) Linux");
     println!("  2) macOS");
@@ -120,7 +134,7 @@ fn prompt_guest_os() -> Result<GuestOs, String> {
 }
 
 /// Step 3
-fn prompt_architecture() -> Result<Arch, String> {
+fn prompt_architecture() -> anyhow::Result<Arch> {
     let default = match std::env::consts::ARCH {
         "x86_64" => Arch::X64,
         "aarch64" => Arch::ARM64,
@@ -158,7 +172,7 @@ fn prompt_architecture() -> Result<Arch, String> {
 }
 
 /// Step 4
-fn prompt_image_path() -> Result<String, String> {
+fn prompt_image_path() -> anyhow::Result<String> {
     println!("Step 4: Disk Image Path");
     println!("  Path to the qcow2 disk image file.");
 
@@ -202,35 +216,33 @@ fn prompt_image_path() -> Result<String, String> {
 }
 
 /// https://www.qemu.org/docs/master/interop/qcow2.html
-fn validate_qcow2(path: &std::path::Path) -> Result<(), String> {
+fn validate_qcow2(path: &std::path::Path) -> anyhow::Result<()> {
     // Bytes 0 - 3 "QFI\xfb"
     const QCOW2_MAGIC: [u8; 4] = [0x51, 0x46, 0x49, 0xFB];
 
     use std::io::Read;
 
-    let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
+    let mut file = std::fs::File::open(path).context("Cannot open file")?;
 
     let mut header = [0u8; 8];
     file.read_exact(&mut header)
-        .map_err(|e| format!("Cannot read file header: {e}"))?;
+        .context("Cannot read file header")?;
 
     if header[0..4] != QCOW2_MAGIC {
-        return Err("Not a valid qcow2 file (invalid magic bytes)".to_string());
+        anyhow::bail!("Not a valid qcow2 file (invalid magic bytes)");
     }
 
     // Bytes 4-7 version number (2 or 3 big-endian u32)
     let version = u32::from_be_bytes([header[4], header[5], header[6], header[7]]);
     if version != 2 && version != 3 {
-        return Err(format!(
-            "Unsupported qcow2 version: {version} (expected 2 or 3)"
-        ));
+        anyhow::bail!("Unsupported qcow2 version: {version} (expected 2 or 3)");
     }
 
     Ok(())
 }
 
 /// Step 5
-fn prompt_ssh_config() -> Result<SshConfig, String> {
+fn prompt_ssh_config() -> anyhow::Result<SshConfig> {
     println!("Step 5: SSH Configuration");
     println!("  1) Password");
     println!("  2) SSH Key");
@@ -310,7 +322,7 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
 }
 
 /// Step 6
-fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, String> {
+fn prompt_uefi_config(os: GuestOs, arch: Arch) -> anyhow::Result<Option<UefiSplit>> {
     println!("Step 6: UEFI Configuration");
 
     if matches!(os, GuestOs::Windows) {
@@ -357,7 +369,7 @@ fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, Stri
     Ok(Some(UefiSplit { code, vars }))
 }
 
-fn prompt_uefi_file(label: &str, default: Option<&str>) -> Result<String, String> {
+fn prompt_uefi_file(label: &str, default: Option<&str>) -> anyhow::Result<String> {
     loop {
         let input = if let Some(def) = default {
             read_line_with_default(label, def)?
@@ -481,17 +493,14 @@ pub fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
 fn prompt_advanced_options(
     os: GuestOs,
     arch: Arch,
-) -> Result<
-    (
-        bool,
-        bool,
-        Option<String>,
-        Option<Vec<String>>,
-        Option<Vec<String>>,
-        Option<Vec<String>>,
-    ),
-    String,
-> {
+) -> anyhow::Result<(
+    bool,
+    bool,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<Vec<String>>,
+    Option<Vec<String>>,
+)> {
     println!("Step 7: Advanced Options");
 
     let default_tpm = matches!(os, GuestOs::Windows);
@@ -599,7 +608,7 @@ fn prompt_advanced_options(
     ))
 }
 
-pub fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
+pub fn prompt_yes_no(prompt: &str, default: bool) -> anyhow::Result<bool> {
     let default_str = if default { "Y/n" } else { "y/N" };
     loop {
         let input = read_line(&format!("{prompt} [{default_str}]: "))?;
@@ -615,7 +624,7 @@ pub fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
 }
 
 #[allow(clippy::type_complexity)]
-fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>), String> {
+fn prompt_macos_x64_config() -> anyhow::Result<(Option<Vec<String>>, Option<Vec<String>>)> {
     println!();
     println!("  OpenCore Bootloader");
     println!("    macOS on QEMU x64 requires an OpenCore bootloader image.");
@@ -669,7 +678,7 @@ fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>
     Ok((Some(additional_drives), Some(additional_devices)))
 }
 
-fn prompt_readonly_isos() -> Result<Option<Vec<String>>, String> {
+fn prompt_readonly_isos() -> anyhow::Result<Option<Vec<String>>> {
     println!();
     println!("  Read-only ISO drives (optional)");
     println!("    Attach raw ISO images as read-only virtio drives.");

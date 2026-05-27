@@ -16,7 +16,7 @@ use crate::VciGlobalPaths;
 /// 4. SSH credentials
 /// 5. Summary + confirmation
 /// 6. Save .vci file
-pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(), String> {
+pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Result<()> {
     println!("VCI Tart Image Setup");
     println!("====================\n");
 
@@ -41,12 +41,15 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
         managed: None,
         backend: BackendConfig::Tart(TartConfig { vm_name }),
         remote: None,
+        // Tart is macOS-only
+        #[cfg(target_os = "windows")]
+        wsl_distro: None,
     };
 
     print_summary(&config);
 
     if prompt_yes_no("Save this configuration?", true)? {
-        save_config(&config, &dest_home, system)?;
+        save_config(&config, &dest_home, system).map_err(anyhow::Error::msg)?;
         println!("\nSaved to {}/{}.vci", dest_home.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);
     } else {
@@ -56,7 +59,7 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
     Ok(())
 }
 
-fn verify_tart_installed() -> Result<(), String> {
+fn verify_tart_installed() -> anyhow::Result<()> {
     match std::process::Command::new("tart").arg("--version").output() {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
@@ -64,12 +67,12 @@ fn verify_tart_installed() -> Result<(), String> {
             println!();
             Ok(())
         }
-        _ => Err("tart is not installed or not in PATH. Install from https://tart.run".to_string()),
+        _ => anyhow::bail!("tart is not installed or not in PATH. Install from https://tart.run"),
     }
 }
 
 /// Step 1
-fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
+fn prompt_image_name(paths: &VciGlobalPaths) -> anyhow::Result<String> {
     println!("Step 1: Image Name");
     println!("  This name will be used in workflow files (e.g., image: macos-sequoia)");
 
@@ -89,7 +92,7 @@ fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
 }
 
 /// Step 2
-fn prompt_tart_vm_name() -> Result<String, String> {
+fn prompt_tart_vm_name() -> anyhow::Result<String> {
     println!("Step 2: Tart VM Name");
     println!("  The name of an existing tart VM (as shown by `tart list`).");
 
@@ -143,7 +146,7 @@ fn list_tart_vms() -> Vec<String> {
 }
 
 /// Step 3
-fn prompt_guest_os() -> Result<GuestOs, String> {
+fn prompt_guest_os() -> anyhow::Result<GuestOs> {
     println!("Step 3: Guest OS");
     println!("  1) macOS");
     println!("  2) Linux");
@@ -166,7 +169,7 @@ fn prompt_guest_os() -> Result<GuestOs, String> {
 }
 
 /// Step 4
-fn prompt_ssh_config() -> Result<SshConfig, String> {
+fn prompt_ssh_config() -> anyhow::Result<SshConfig> {
     println!("Step 4: SSH Configuration");
     println!("  1) Password");
     println!("  2) SSH Key");
@@ -245,7 +248,7 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
     }
 }
 
-fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
+fn prompt_yes_no(prompt: &str, default: bool) -> anyhow::Result<bool> {
     let default_str = if default { "Y/n" } else { "y/N" };
     loop {
         let input = read_line(&format!("{prompt} [{default_str}]: "))?;

@@ -33,7 +33,7 @@ pub struct UefiSplit {
 }
 
 /// Is the host environment that will be running the stuff. Mostly relevant for Windows / WSL2.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum HostExecTarget {
     Linux,
     MacOS,
@@ -168,21 +168,22 @@ pub struct ImageDescription {
     pub managed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteInfo>,
+    #[cfg(target_os = "windows")]
+    #[serde(skip)]
+    pub wsl_distro: Option<String>,
 }
 
-pub fn read_line(prompt: &str) -> Result<String, String> {
+pub fn read_line(prompt: &str) -> anyhow::Result<String> {
     print!("{prompt}");
-    io::stdout().flush().map_err(|e| e.to_string())?;
+    io::stdout().flush()?;
 
     let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .map_err(|e| e.to_string())?;
+    io::stdin().read_line(&mut input)?;
 
     Ok(input.trim().to_string())
 }
 
-pub fn read_line_with_default(prompt: &str, default: &str) -> Result<String, String> {
+pub fn read_line_with_default(prompt: &str, default: &str) -> anyhow::Result<String> {
     let full_prompt = format!("{prompt} [{default}]: ");
     let input = read_line(&full_prompt)?;
 

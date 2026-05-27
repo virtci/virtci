@@ -201,7 +201,22 @@ fn run_cleanup(args: cli::CleanupArgs, paths: &VciGlobalPaths) {
     use colored::Colorize;
     use std::io::{self, Write};
 
-    let files = find_vci_temp_files(&paths.temp);
+    // Mirrors `cleanup_stale_qemu_files()`
+    #[cfg(target_os = "windows")]
+    let temp_dirs: Vec<PathBuf> = {
+        let mut dirs = vec![paths.temp.clone()];
+        if let Some(wsl) = &paths.wsl {
+            dirs.push(wsl.to_unc(&wsl.temp));
+        }
+        dirs
+    };
+    #[cfg(not(target_os = "windows"))]
+    let temp_dirs: Vec<PathBuf> = vec![paths.temp.clone()];
+
+    let files: Vec<PathBuf> = temp_dirs
+        .iter()
+        .flat_map(|dir| find_vci_temp_files(dir))
+        .collect();
 
     if files.is_empty() {
         println!("{}", "No temporary VCI files found".dimmed());
