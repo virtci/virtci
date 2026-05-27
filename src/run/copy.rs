@@ -12,8 +12,18 @@ enum CopyDirection {
     VmToHost,
 }
 
-/// if `convert_to_lf` Host->VM only will rewrite CRLF/CR to LF in text files within the archive
-/// before sending. Never touches the host's source files on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineEndingConversion {
+    None,
+    /// Rewrite text files in the archive so all line endings are LF.
+    ToLf,
+    /// Rewrite text files in the archive so all line endings are CRLF.
+    ToCrlf,
+}
+
+/// `line_endings` rewrites the in-flight tar archive so text files arrive with
+/// the requested line endings. Binary files are detected by a null-byte scan
+/// and left alone. Files on disk (host source or VM source) are never modified.
 #[allow(clippy::too_many_arguments)]
 pub async fn copy_files_tar(
     ssh: &SshTarget,
@@ -24,7 +34,7 @@ pub async fn copy_files_tar(
     timeout: Option<Duration>,
     no_mkdir: bool,
     allow_empty: bool,
-    convert_to_lf: bool,
+    line_endings: LineEndingConversion,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
     let poll_interval = Duration::from_secs(5);
@@ -64,11 +74,11 @@ pub async fn copy_files_tar(
                     &remote_path,
                     ignore,
                     allow_empty,
-                    convert_to_lf,
+                    line_endings,
                 )
                 .await
             } else {
-                copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore, convert_to_lf).await
+                copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore, line_endings).await
             }
         }
         CopyDirection::VmToHost => {
@@ -77,10 +87,19 @@ pub async fn copy_files_tar(
                     .map_err(|e| format!("Failed to create local directory {local_path}: {e}"))?;
             }
             if let Some((root, pattern)) = split_glob(&remote_path) {
-                copy_vm_to_host_glob(ssh, &root, &pattern, local_path, ignore, os, allow_empty)
-                    .await
+                copy_vm_to_host_glob(
+                    ssh,
+                    &root,
+                    &pattern,
+                    local_path,
+                    ignore,
+                    os,
+                    allow_empty,
+                    line_endings,
+                )
+                .await
             } else {
-                copy_vm_to_host_tar(ssh, &remote_path, local_path, ignore, os).await
+                copy_vm_to_host_tar(ssh, &remote_path, local_path, ignore, os, line_endings).await
             }
         }
     }
@@ -144,7 +163,7 @@ async fn copy_host_to_vm_tar(
     local_path: &str,
     remote_path: &str,
     ignore: &[String],
-    convert_to_lf: bool,
+    line_endings: LineEndingConversion,
 ) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
@@ -201,11 +220,7 @@ async fn copy_host_to_vm_tar(
         );
     }
 
-    let archive = if convert_to_lf {
-        rewrite_tar_to_lf(&tar_output.stdout)?
-    } else {
-        tar_output.stdout
-    };
+    let archive = apply_line_ending_conversion(tar_output.stdout, line_endings)?;
 
     send_archive_to_remote(ssh, &archive, remote_path).await
 }
@@ -218,7 +233,7 @@ async fn copy_host_to_vm_glob(
     remote_path: &str,
     ignore: &[String],
     allow_empty: bool,
-    convert_to_lf: bool,
+    line_endings: LineEndingConversion,
 ) -> Result<(), String> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
@@ -296,11 +311,7 @@ async fn copy_host_to_vm_glob(
 
     eprintln!("[TAR] Archive created: {} bytes", tar_output.stdout.len());
 
-    let archive = if convert_to_lf {
-        rewrite_tar_to_lf(&tar_output.stdout)?
-    } else {
-        tar_output.stdout
-    };
+    let archive = apply_line_ending_conversion(tar_output.stdout, line_endings)?;
 
     send_archive_to_remote(ssh, &archive, remote_path).await
 }
@@ -412,6 +423,7 @@ async fn copy_vm_to_host_tar(
     local_path: &str,
     ignore: &[String],
     os: GuestOs,
+    line_endings: LineEndingConversion,
 ) -> Result<(), String> {
     let is_windows = os == GuestOs::Windows;
 
@@ -459,9 +471,11 @@ async fn copy_vm_to_host_tar(
         ));
     }
 
-    extract_archive_locally(&result.stdout, local_path)
+    let archive = apply_line_ending_conversion(result.stdout, line_endings)?;
+    extract_archive_locally(&archive, local_path)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn copy_vm_to_host_glob(
     ssh: &SshTarget,
     root: &str,
@@ -470,6 +484,7 @@ async fn copy_vm_to_host_glob(
     ignore: &[String],
     os: GuestOs,
     allow_empty: bool,
+    line_endings: LineEndingConversion,
 ) -> Result<(), String> {
     let is_windows = os == GuestOs::Windows;
 
@@ -541,6 +556,7 @@ async fn copy_vm_to_host_glob(
     let file_list = matches.join("\n");
     let archive = exec_remote_with_stdin(ssh, &tar_cmd, file_list.as_bytes()).await?;
 
+    let archive = apply_line_ending_conversion(archive, line_endings)?;
     extract_archive_locally(&archive, local_path)
 }
 
@@ -753,10 +769,21 @@ fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a str, 
     }
 }
 
-/// Rewrites an uncompressed tar archive in memory doing the CRLF/CR line endings,
-/// converting them to just LF in text. Binary files are untouched. Also files
-/// on disk aren't modified either.
-fn rewrite_tar_to_lf(tar_bytes: &[u8]) -> Result<Vec<u8>, String> {
+fn apply_line_ending_conversion(
+    tar_bytes: Vec<u8>,
+    conv: LineEndingConversion,
+) -> Result<Vec<u8>, String> {
+    match conv {
+        LineEndingConversion::None => Ok(tar_bytes),
+        LineEndingConversion::ToLf => rewrite_tar(&tar_bytes, crlf_to_lf),
+        LineEndingConversion::ToCrlf => rewrite_tar(&tar_bytes, lf_to_crlf),
+    }
+}
+
+/// Rewrites an uncompressed tar archive in memory, running `convert` over each
+/// text file payload. Binary files (detected by a null-byte scan) are passed
+/// through untouched. Files on disk aren't modified either.
+fn rewrite_tar(tar_bytes: &[u8], convert: fn(&[u8]) -> Vec<u8>) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
 
     let mut archive = tar::Archive::new(tar_bytes);
@@ -781,7 +808,7 @@ fn rewrite_tar_to_lf(tar_bytes: &[u8]) -> Result<Vec<u8>, String> {
                     .read_to_end(&mut data)
                     .map_err(|e| format!("Failed to read tar entry data: {e}"))?;
                 if is_text(&data) {
-                    data = crlf_to_lf(&data);
+                    data = convert(&data);
                 }
                 header.set_size(data.len() as u64);
                 builder
@@ -829,6 +856,29 @@ fn crlf_to_lf(data: &[u8]) -> Vec<u8> {
             }
         } else {
             out.push(data[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+fn lf_to_crlf(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + data.len() / 16);
+    let mut i = 0;
+    while i < data.len() {
+        match data[i] {
+            b'\r' => {
+                out.push(b'\r');
+                out.push(b'\n');
+                if i + 1 < data.len() && data[i + 1] == b'\n' {
+                    i += 1;
+                }
+            }
+            b'\n' => {
+                out.push(b'\r');
+                out.push(b'\n');
+            }
+            b => out.push(b),
         }
         i += 1;
     }

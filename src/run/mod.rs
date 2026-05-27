@@ -239,11 +239,26 @@ impl Job {
                 let ssh = self.backend.ssh_target();
                 let guest_os = self.backend.os();
                 let is_host_to_vm = copy_spec.to.starts_with("vm:");
+                let host_is_windows = cfg!(target_os = "windows");
+                let guest_is_windows = guest_os == GuestOs::Windows;
 
-                let convert_to_lf = copy_spec.crlf
-                    && is_host_to_vm
-                    && guest_os != GuestOs::Windows
-                    && cfg!(target_os = "windows");
+                // In-flight tar conversion. Host->VM CRLF is still done in-guest
+                // by `convert_windows_line_endings` below, not here.
+                let line_endings = if !copy_spec.crlf {
+                    copy::LineEndingConversion::None
+                } else if is_host_to_vm {
+                    if host_is_windows && !guest_is_windows {
+                        copy::LineEndingConversion::ToLf
+                    } else {
+                        copy::LineEndingConversion::None
+                    }
+                } else if guest_is_windows && !host_is_windows {
+                    copy::LineEndingConversion::ToLf
+                } else if !guest_is_windows && host_is_windows {
+                    copy::LineEndingConversion::ToCrlf
+                } else {
+                    copy::LineEndingConversion::None
+                };
 
                 let copy_future = copy::copy_files_tar(
                     &ssh,
@@ -254,7 +269,7 @@ impl Job {
                     Some(timeout_duration),
                     copy_spec.no_mkdir,
                     copy_spec.allow_empty,
-                    convert_to_lf,
+                    line_endings,
                 );
 
                 tokio::time::timeout(timeout_duration, copy_future)
@@ -262,7 +277,7 @@ impl Job {
                     .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
 
                 let convert_to_crlf =
-                    is_host_to_vm && guest_os == GuestOs::Windows && copy_spec.crlf;
+                    is_host_to_vm && guest_is_windows && copy_spec.crlf;
                 if convert_to_crlf {
                     copy::convert_windows_line_endings(&ssh, &copy_spec.to).await;
                 }

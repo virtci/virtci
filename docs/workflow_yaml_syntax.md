@@ -219,12 +219,19 @@ steps:
 
 Defaults to `false`.
 
-If `false`, no line-ending conversion happens. If `true`, and the copy is from host to VM, line endings are normalized to the guest's convention:
+If `false`, no line-ending conversion happens. If `true`, text files are normalized to the destination's convention. Conversion only runs when host and guest disagree:
 
-- **Windows VM copied from non Windows Host**: CRLF, converted in-guest after the files are extracted.
-- **Unix VM (Linux/macOS/etc) copied from a Windows Host**: LF, converted by rewriting the transfer archive in memory before sending. This keeps shell scripts and the like from arriving with `\r` that breaks `/bin/sh`.
+Host to VM:
 
-Binary files and source files on the host are never modified, only the in-flight copy is converted.
+- **Windows VM copied from non-Windows host**: CRLF, converted in-guest after the files are extracted.
+- **Unix VM (Linux/macOS/etc) copied from a Windows host**: LF, converted by rewriting the transfer archive in memory before sending. Keeps shell scripts from arriving with `\r` that breaks `/bin/sh`.
+
+VM to Host:
+
+- **Windows VM copied to a non-Windows host**: LF, converted by rewriting the received archive in memory before local extraction.
+- **Unix VM copied to a Windows host**: CRLF, converted by rewriting the received archive in memory before local extraction.
+
+Binary files (detected by a null-byte scan) and the source files on disk are never modified so only the in-flight tar is converted.
 
 ```yaml
 steps:
