@@ -29,11 +29,10 @@ pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> 
     }
 
     if let Some(existing_home) = paths.resolve_image_home(&name) {
-        let existing_vci = existing_home.dir.join(format!("{name}.vci"));
         anyhow::bail!(
             "Image '{}' already exists at {}",
             name,
-            existing_vci.display()
+            existing_home.path.display()
         );
     }
 

@@ -43,11 +43,11 @@ pub fn run_list(verbose: bool, paths: &VciGlobalPaths) {
 }
 
 pub fn load_all_images(paths: &VciGlobalPaths) -> Vec<ImageDescription> {
-    let mut images = Vec::new();
+    let mut images: Vec<ImageDescription> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     for home in paths.image_homes() {
-        for img in load_images_in(&home.dir) {
+        for img in load_images_in(&home.path) {
             if seen.insert(img.name.clone()) {
                 #[cfg(target_os = "windows")]
                 let img = {

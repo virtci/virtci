@@ -91,7 +91,7 @@ pub fn run_export(
         )
     })?;
 
-    let desc = load_image(name, &home.dir)?;
+    let desc = super::load_image(name, &home.path)?;
     let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.tar")));
 
     println!("Exporting '{}' to {}", name, output_path.display());
@@ -136,22 +136,6 @@ pub fn run_export(
 
     println!("Export complete: {}", output_path.display());
     Ok(())
-}
-
-fn load_image(name: &str, home_path: &Path) -> anyhow::Result<ImageDescription> {
-    let vci_path = home_path.join(format!("{name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).with_context(|| {
-        format!(
-            "Failed to load image description '{}' (looked at {})",
-            name,
-            vci_path.display()
-        )
-    })?;
-
-    let mut desc: ImageDescription = serde_json::from_str(&contents)
-        .with_context(|| format!("Failed to parse image description '{name}'"))?;
-    desc.name = name.to_string();
-    Ok(desc)
 }
 
 /// Append a file to the archive. WSL files are streamed through a native `wsl -- cat`

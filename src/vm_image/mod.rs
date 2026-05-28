@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 // https://stackoverflow.com/questions/75527167/serde-deserialize-string-into-u64
 use serde_with::{serde_as, DisplayFromStr};
 
+use anyhow::Context;
+
 use crate::VciGlobalPaths;
 
 /// TTL for remote images if 24 hours by default
@@ -241,11 +243,10 @@ pub fn validate_image_name(name: &str, paths: &VciGlobalPaths) -> Result<(), Str
     }
 
     if let Some(home) = paths.resolve_image_home(name) {
-        let vci_path = home.dir.join(format!("{name}.vci"));
         return Err(format!(
             "VCI image '{}' already exists at {}",
             name,
-            vci_path.display()
+            home.path.display()
         ));
     }
 
@@ -413,4 +414,18 @@ pub fn expand_path(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+pub fn load_image(name: &str, file_path: &Path) -> anyhow::Result<ImageDescription> {
+    let contents = std::fs::read_to_string(file_path).with_context(|| {
+        format!(
+            "Failed to load image description '{}' (looked at {})",
+            name,
+            file_path.display()
+        )
+    })?;
+    let mut desc: ImageDescription = serde_json::from_str(&contents)
+        .with_context(|| format!("Failed to parse image description '{name}'"))?;
+    desc.name = name.to_string();
+    Ok(desc)
 }
