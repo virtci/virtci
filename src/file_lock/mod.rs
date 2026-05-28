@@ -25,10 +25,19 @@ pub struct LockMetadata {
     pid: u32,
     process_start_time: u64,
     locked_at: u64,
+    /// May be the marker for the WSL2 process if this flock is for that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<crate::vm_image::SshTarget>,
+    /// The WSL2 distro this run's QEMU/swtpm live in, if any. Set by the QEMU
+    /// backend before it spawns anything, so a later `cleanup` can reap orphans
+    /// left by an abrupt death (SIGKILL/crash) via `pkill -f run_name` inside the
+    /// distro. `None` for native runs, where there is no in-distro process to
+    /// reap and the marker would be meaningless.
+    #[cfg(target_os = "windows")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
 }
 
 impl LockMetadata {
@@ -43,6 +52,8 @@ impl LockMetadata {
             locked_at: now,
             run_name: None,
             ssh: None,
+            #[cfg(target_os = "windows")]
+            wsl_distro: None,
         }
     }
 
@@ -178,6 +189,20 @@ impl FileLock {
         self.file.write_all(content).map_err(|_| ())?;
         self.file.flush().map_err(|_| ())?;
         Ok(())
+    }
+
+    /// Read and parse the [`LockMetadata`] currently stored in the file.
+    ///
+    /// Intended to be called while holding the lock (e.g. just after
+    /// [`try_lock_exist`](Self::try_lock_exist) reclaimed it from a dead owner),
+    /// so the contents are stable. Returns `None` if the file is empty or does
+    /// not parse — e.g. a torn write from a process killed mid-update.
+    pub fn read_metadata(&self) -> Option<LockMetadata> {
+        let mut file = &self.file;
+        file.seek(SeekFrom::Start(0)).ok()?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).ok()?;
+        serde_json::from_str(&contents).ok()
     }
 
     /// Try to acquire a flock on an existing file without creating it.

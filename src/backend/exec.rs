@@ -156,18 +156,20 @@ struct WslProcess {
 #[cfg(target_os = "windows")]
 impl WslProcess {
     fn kill(&mut self) {
-        let _ = Command::new("wsl")
-            .args([
-                "-d",
-                &self.wsl_distro,
-                "--",
-                "pkill",
-                "-9",
-                "-f",
-                &self.marker,
-            ])
-            .status();
+        reap_wsl2_marker_process(&self.wsl_distro, &self.marker);
         let _ = self.relay.kill();
         let _ = self.relay.wait();
     }
+}
+
+/// Force-kill every process inside `distro` whose command line contains `marker`
+/// (the run name, such as `vci-<name>-<port>`), killing both the run's QEMU and
+/// swtpm. Used by `Drop`/the signal handler (via [`WslProcess::kill`]) AND by the
+/// startup `cleanup` reaper for processes orphaned by an abrupt prior death (like SIGKILL).
+/// Immune to PID recycling.
+#[cfg(target_os = "windows")]
+pub fn reap_wsl2_marker_process(distro: &str, marker: &str) {
+    let _ = Command::new("wsl")
+        .args(["-d", distro, "--", "pkill", "-9", "-f", marker])
+        .status();
 }

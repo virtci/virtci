@@ -276,8 +276,7 @@ impl Job {
                     .await
                     .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
 
-                let convert_to_crlf =
-                    is_host_to_vm && guest_is_windows && copy_spec.crlf;
+                let convert_to_crlf = is_host_to_vm && guest_is_windows && copy_spec.crlf;
                 if convert_to_crlf {
                     copy::convert_windows_line_endings(&ssh, &copy_spec.to).await;
                 }

@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use crate::{file_lock::FileLock, global_paths::VciGlobalPaths, vm_image::HostExecTarget};
+use crate::{
+    file_lock::{FileLock, LockMetadata},
+    global_paths::VciGlobalPaths,
+    vm_image::HostExecTarget,
+};
 
 pub mod backend;
 pub mod binaries;
@@ -74,6 +78,16 @@ impl PortFlock {
             "Unable to acquire any QEMU forwarded ports"
         ))
     }
+
+    /// Put the actual `meta` [`LockMetadata`] into the PortFlock file.
+    pub fn write_metadata(&mut self, meta: &LockMetadata) -> anyhow::Result<()> {
+        let lock = self.lock.as_mut().context("port flock already released")?;
+        let json =
+            serde_json::to_string_pretty(meta).context("failed to serialize lock metadata")?;
+        lock.write_content(json.as_bytes())
+            .map_err(|()| anyhow::anyhow!("failed to write port lock metadata"))?;
+        Ok(())
+    }
 }
 
 impl Drop for PortFlock {
@@ -87,13 +101,15 @@ impl Drop for PortFlock {
     }
 }
 
+/// Create a thin qcow2 overlay file, backed by `source_exec` and written to `dest_exec`.
+/// Both paths are within the namespace of `exec_target`, so may be inside WSL2.
 pub fn create_backing_file(
-    source_path: &std::path::Path,
-    dest_path: &std::path::Path,
+    source_exec: &str,
+    dest_exec: &str,
     exec_target: &HostExecTarget,
 ) -> anyhow::Result<()> {
     let qemu_img = binaries::qemu_image_binary(exec_target)
-        .with_context(|| format!("Unable to get qemu-img binary to create the thin overlay"))?
+        .context("Unable to get qemu-img binary to create the thin overlay")?
         .0;
 
     let output = binaries::target_command(exec_target, &qemu_img)
@@ -102,21 +118,17 @@ pub fn create_backing_file(
             "-f",
             "qcow2",
             "-b",
-            &source_path.display().to_string(),
+            source_exec,
             "-F",
             "qcow2",
-            &dest_path.display().to_string(),
+            dest_exec,
         ])
         .output()
         .with_context(|| format!("Failed to run {qemu_img}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "qemu-img failed for '{}':\n{}",
-            source_path.display(),
-            stderr.trim()
-        );
+        anyhow::bail!("qemu-img failed for '{source_exec}':\n{}", stderr.trim());
     }
 
     Ok(())
@@ -156,6 +168,17 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
         let Ok(lock) = FileLock::try_lock_exist(entry.path()) else {
             continue;
         };
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(meta) = lock.read_metadata() {
+                if let (Some(distro), Some(marker)) =
+                    (meta.wsl_distro.as_deref(), meta.run_name.as_deref())
+                {
+                    crate::backend::exec::reap_wsl2_marker_process(distro, marker);
+                }
+            }
+        }
 
         let suffixes = [
             format!("-{port_str}.qcow2"),

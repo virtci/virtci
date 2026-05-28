@@ -400,7 +400,7 @@ fn load_image_description(image_name: &str, paths: &VciGlobalPaths) -> vm_image:
             paths.system_home.display()
         )
     });
-    let vci_path = home.dir.join(format!("{image_name}.vci"));
+    let vci_path = home.path;
     let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|e| {
         panic!(
             "Failed to read image description at {}: {e}",
