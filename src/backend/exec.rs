@@ -52,6 +52,10 @@ impl TargetChildProcess {
         self.process.wait();
     }
 
+    pub fn try_wait(&mut self) -> bool {
+        self.process.try_wait()
+    }
+
     /// Host PID for an external graceful signal. `None` for WSL2.
     pub fn host_pid(&self) -> Option<u32> {
         self.process.host_pid()
@@ -132,6 +136,14 @@ impl TargetChild {
             Self::WSL(p) => {
                 let _ = p.relay.wait();
             }
+        }
+    }
+
+    fn try_wait(&mut self) -> bool {
+        match self {
+            Self::Host(child) => matches!(child.try_wait(), Ok(Some(_))),
+            #[cfg(target_os = "windows")]
+            Self::WSL(p) => matches!(p.relay.try_wait(), Ok(Some(_))),
         }
     }
 

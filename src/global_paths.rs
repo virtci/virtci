@@ -221,6 +221,14 @@ impl TargetPath {
     pub fn in_wsl(&self) -> bool {
         self.wsl_distro.is_some()
     }
+
+    pub fn join(&self, component: &str) -> TargetPath {
+        TargetPath {
+            path: self.path.join(component),
+            #[cfg(target_os = "windows")]
+            wsl_distro: self.wsl_distro.clone(),
+        }
+    }
 }
 
 fn default_user_home_path() -> PathBuf {

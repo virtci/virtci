@@ -9,11 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use crate::{
-    file_lock::{FileLock, LockMetadata},
-    global_paths::VciGlobalPaths,
-    vm_image::HostExecTarget,
-};
+use crate::{file_lock::FileLock, global_paths::VciGlobalPaths, vm_image::HostExecTarget};
 
 pub mod backend;
 pub mod binaries;
@@ -78,16 +74,6 @@ impl PortFlock {
             "Unable to acquire any QEMU forwarded ports"
         ))
     }
-
-    /// Put the actual `meta` [`LockMetadata`] into the PortFlock file.
-    pub fn write_metadata(&mut self, meta: &LockMetadata) -> anyhow::Result<()> {
-        let lock = self.lock.as_mut().context("port flock already released")?;
-        let json =
-            serde_json::to_string_pretty(meta).context("failed to serialize lock metadata")?;
-        lock.write_content(json.as_bytes())
-            .map_err(|()| anyhow::anyhow!("failed to write port lock metadata"))?;
-        Ok(())
-    }
 }
 
 impl Drop for PortFlock {
@@ -134,11 +120,14 @@ pub fn create_backing_file(
     Ok(())
 }
 
-/// Cleans up ALL unused temporary QEMU files.
-/// The .lock flocks are the true authority, always in the native system's temp dir.
-/// The relevant artifacts (qcow2 overlays, UEFI vars, serial logs, TPM dirs) however
-/// will live in the execution target, which is nearly always the host, but may include
-/// within the WSL2 system.
+/// Cleanup ALL unused temporary VirtCI files.
+/// Authority is on the `.lock` flocks which always live in the host system's temp dir.
+/// There are 3 kinds of them:
+/// - `vci-active-{id}.lock` A run's stable identifier. See [`crate::run::run_id::ReservedRunId`].
+///     Reclaiming one means it's owner died, to any orphaned QEMU/swtpm stuff by the market stored
+///     in its metadata shall be used to cleanup.
+/// - `vci-qemu-port-{port}.lock` Used to note which VirtCI processes are using which TCP ports.
+/// - `vci_image_{name}.lock` Shared / exclusive lock on a VirtCI image file.
 pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
     let lock_dir = paths.temp.as_path();
 
@@ -153,13 +142,13 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
     #[cfg(not(target_os = "windows"))]
     let payload_dirs: Vec<PathBuf> = vec![lock_dir.to_path_buf()];
 
-    // Gate on port lock, and get rid of any artifacts in any possible directory it could live
+    // 1. Active-run identity locks: reap orphans by marker, then delete payload.
     for entry in dir_entries(lock_dir) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        let Some(port_str) = name_str
-            .strip_prefix("vci-qemu-port-")
+        let Some(id) = name_str
+            .strip_prefix("vci-active-")
             .and_then(|s| s.strip_suffix(".lock"))
         else {
             continue;
@@ -169,23 +158,25 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
             continue;
         };
 
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(meta) = lock.read_metadata() {
-                if let (Some(distro), Some(marker)) =
-                    (meta.wsl_distro.as_deref(), meta.run_name.as_deref())
-                {
+        // The marker (`run_name`) is written before any process spawns, so it is
+        // always present whenever there is something to reap.
+        if let Some(meta) = lock.read_metadata() {
+            if let Some(marker) = meta.run_name.as_deref() {
+                #[cfg(target_os = "windows")]
+                if let Some(distro) = meta.wsl_distro.as_deref() {
                     crate::backend::exec::reap_wsl2_marker_process(distro, marker);
                 }
+                #[cfg(unix)]
+                reap_host_marker_process(marker);
             }
         }
 
+        // `-{id}.qcow2` also covers the `…-drive{n}-{id}.qcow2` additional drives.
         let suffixes = [
-            format!("-{port_str}.qcow2"),
-            format!("-{port_str}-VARS.fd"),
-            format!("-{port_str}-tpm.lock"),
-            format!("-{port_str}-tpm"),
-            format!("-{port_str}-serial.log"),
+            format!("-{id}.qcow2"),
+            format!("-{id}-VARS.fd"),
+            format!("-{id}-tpm"),
+            format!("-{id}-serial.log"),
         ];
         for dir in &payload_dirs {
             remove_matching(dir, &suffixes);
@@ -195,12 +186,12 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
         drop(lock);
     }
 
-    // TPM state dirs whose tpm lock is free but the port lock was already reclaimed above.
+    // 2. Port reservations: a reclaimable one is stale, drop the lock file.
     for entry in dir_entries(lock_dir) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        if !name_str.starts_with("vci-") || !name_str.ends_with("-tpm.lock") {
+        if !name_str.starts_with("vci-qemu-port-") || !name_str.ends_with(".lock") {
             continue;
         }
 
@@ -208,19 +199,11 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
             continue;
         };
 
-        let dir_name = name_str.strip_suffix(".lock").unwrap();
-        for dir in &payload_dirs {
-            let dir_path = dir.join(dir_name);
-            if dir_path.is_dir() {
-                let _ = std::fs::remove_dir_all(&dir_path);
-            }
-        }
-
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
     }
 
-    // Stale vci_image_*.lock files from crashed or previous runs (lock only).
+    // 3. Stale vci_image_*.lock files from crashed or previous runs (lock only).
     for entry in dir_entries(lock_dir) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
@@ -236,6 +219,13 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
     }
+}
+
+#[cfg(unix)]
+fn reap_host_marker_process(marker: &str) {
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "-f", marker])
+        .status();
 }
 
 /// Collects the directory entries of `dir`, or an empty list if it can't be read.

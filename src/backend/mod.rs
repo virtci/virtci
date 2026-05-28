@@ -11,10 +11,7 @@ pub mod qemu;
 pub mod qemu_old;
 pub mod tart;
 
-use crate::{
-    global_paths::VciGlobalPaths,
-    vm_image::{Arch, GuestOs, SshTarget},
-};
+use crate::vm_image::{Arch, GuestOs, SshTarget};
 
 #[derive(Debug, Clone, Default)]
 pub struct VmStartConfig {
@@ -28,8 +25,6 @@ pub struct VmStartConfig {
 }
 
 pub trait VmBackend {
-    fn setup_clone(&mut self, paths: &VciGlobalPaths) -> anyhow::Result<()>;
-
     fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()>;
 
     fn is_offline(&self) -> bool {

@@ -3,6 +3,7 @@
 
 mod command;
 mod copy;
+pub mod run_id;
 
 use std::{
     collections::HashMap,
