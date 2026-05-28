@@ -6,6 +6,7 @@ use std::{
     str::FromStr,
 };
 
+pub mod exec;
 pub mod qemu;
 pub mod qemu_old;
 pub mod tart;

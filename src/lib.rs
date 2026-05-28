@@ -5,6 +5,7 @@ pub mod backend;
 pub mod cli;
 pub mod file_lock;
 pub mod global_paths;
+pub mod orphan;
 pub mod run;
 pub mod run_state;
 pub mod transfer_lock;
@@ -35,7 +36,8 @@ pub fn run_virtci_cli(paths: &VciGlobalPaths) {
 }
 
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
-    setup_signal_handlers();
+    let orphans = orphan::OrphanTracker::new();
+    setup_signal_handlers(orphans.clone());
 
     backend::qemu::cleanup_stale_qemu_files(paths);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
@@ -294,21 +296,21 @@ fn find_vci_temp_files(temp_dir: &std::path::Path) -> Vec<PathBuf> {
     files
 }
 
-fn setup_signal_handlers() {
+fn setup_signal_handlers(orphans: orphan::OrphanTracker) {
     // background thread handles signals (kinda silly but whatever, tokio you do you)
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("Failed to create signal handler runtime");
 
         rt.block_on(async {
-            signal_handler().await;
+            signal_handler(orphans).await;
         });
     });
 }
 
-async fn signal_handler() {
+async fn signal_handler(orphans: orphan::OrphanTracker) {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
@@ -341,6 +343,7 @@ async fn signal_handler() {
                         .arg(pid.to_string())
                         .status();
                 }
+                orphans.kill_all();
                 std::process::exit(1);
             }
 
@@ -361,6 +364,7 @@ async fn signal_handler() {
                 }
             }
 
+            orphans.kill_all();
             std::process::exit(1);
         }
     }
@@ -382,6 +386,7 @@ async fn signal_handler() {
             _ = ctrl_shutdown.recv() => {},
         }
 
+        orphans.kill_all();
         std::process::exit(1);
     }
 }
