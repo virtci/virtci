@@ -42,7 +42,6 @@ pub enum HostExecTarget {
     WindowsNative,
     /// Stores the distro
     WSL2(String),
-    FreeBSD,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

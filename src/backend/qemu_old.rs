@@ -228,7 +228,7 @@ impl QemuBackend {
         self.runner = Some(runner);
 
         let ssh_target = self.ssh_target();
-        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target);
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target, None);
         if let Ok(json) = serde_json::to_string_pretty(&meta) {
             let _ = self
                 .runner
@@ -575,7 +575,7 @@ impl VmBackend for QemuBackend {
         self.runner = Some(runner);
 
         let ssh_target = self.ssh_target();
-        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target);
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target, None);
         if let Ok(json) = serde_json::to_string_pretty(&meta) {
             let _ = self
                 .runner

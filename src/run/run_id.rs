@@ -5,10 +5,13 @@ use crate::{file_lock::FileLock, global_paths::VciGlobalPaths};
 use std::io::Write;
 
 /// A multi-process-wide unique run identifier, reserved by holding an exclusive flock on
-/// `vci-active-{id}.lock` in the host's temp directory.
+/// `vci-active-{id:05}.lock` in the host's temp directory, for example, ``vci-active-00001.lock`.
 ///
 /// Stable identity for a single VM run, or VM boot. This is decoupled from SSH forwarding
 /// port entirely, because it CAN change across restarts.
+///
+/// The id is always done zero-padded to 5 digits so that the run marker `vci-{name}-{id:05}`
+/// of one run is never a substring of another's.
 pub struct ReservedRunId {
     pub id: u16,
     name: String,
@@ -18,16 +21,12 @@ pub struct ReservedRunId {
 impl ReservedRunId {
     pub fn new(paths: &VciGlobalPaths) -> anyhow::Result<ReservedRunId> {
         for id in 1u16..u16::MAX {
-            let mut data = [0u8; 64];
-            let mut buffer = &mut data[..];
-            write!(buffer, "vci-active-{id}.lock").expect("Failed to write into static buffer");
-            let s = str::from_utf8(&data)
-                .expect("Failed to read utf8 from statically allocated buffer");
-            let file_path = paths.temp.join(s);
+            let name = format!("vci-active-{id:05}.lock");
+            let file_path = paths.temp.join(&name);
             if let Ok(flock) = FileLock::try_new(&file_path) {
                 return Ok(ReservedRunId {
                     id,
-                    name: s.to_string(),
+                    name,
                     flock: Some(flock),
                 });
             }

@@ -57,10 +57,25 @@ impl LockMetadata {
         }
     }
 
-    pub fn with_run_info(run_name: String, ssh: crate::vm_image::SshTarget) -> Self {
+    /// This must be written to the `vci-active-{id:05}` flock BEFORE any process actually spawns.
+    /// The cleanup runs on `run_name` and `wsl_distro`, so a crash between spawn and write
+    /// would orphan them.
+    pub fn with_run_info(
+        run_name: String,
+        ssh: crate::vm_image::SshTarget,
+        wsl_distro: Option<String>,
+    ) -> Self {
         let mut meta = Self::new();
         meta.run_name = Some(run_name);
         meta.ssh = Some(ssh);
+        #[cfg(target_os = "windows")]
+        {
+            meta.wsl_distro = wsl_distro;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = wsl_distro;
+        }
         meta
     }
 }
