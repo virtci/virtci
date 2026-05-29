@@ -11,7 +11,10 @@ pub mod qemu;
 pub mod qemu_old;
 pub mod tart;
 
-use crate::vm_image::{Arch, GuestOs, SshTarget};
+use crate::{
+    global_paths::VciGlobalPaths,
+    vm_image::{Arch, GuestOs, SshTarget},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct VmStartConfig {

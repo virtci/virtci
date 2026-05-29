@@ -23,7 +23,7 @@ use crate::vm_image::HostExecTarget;
 /// absent or not openable, so no separate Hyper-V/`.wslconfig` query is needed.
 pub fn check_kvm_access(exec_target: &HostExecTarget) -> anyhow::Result<()> {
     match exec_target {
-        HostExecTarget::WindowsNative | HostExecTarget::FreeBSD | HostExecTarget::MacOS => Ok(()),
+        HostExecTarget::WindowsNative | HostExecTarget::MacOS => Ok(()),
         HostExecTarget::Linux => check_kvm_native(),
         HostExecTarget::WSL2(distro) => check_kvm_through_wsl2(distro),
     }

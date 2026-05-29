@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use crate::{
     backend::{
-        exec::TargetChildProcess,
+        exec::{self, TargetChildProcess},
         qemu::{create_backing_file, PortFlock},
-        VmStartConfig,
+        VmBackend, VmStartConfig,
     },
     file_lock::FileLock,
     global_paths::{TargetPath, VciGlobalPaths},
@@ -20,6 +20,9 @@ use crate::{
 };
 
 use anyhow::Context;
+
+const DEFAULT_CPUS: u32 = 2;
+const DEFAULT_MEMORY_MB: u64 = 8192;
 
 pub struct QemuBackend {
     pub run_id: ReservedRunId,
@@ -34,6 +37,8 @@ pub struct QemuBackend {
     /// and routed to stdio when `!graphics`, or to this file when `graphics`.
     pub serial_log: Option<TargetPath>,
     pub exec_target: HostExecTarget,
+    host_temp_dir: PathBuf,
+    exec_target_temp_dir: TargetPath,
 
     /// Shared or exclusive `vci_image_<name>.lock`
     image_lock: FileLock,
@@ -105,6 +110,9 @@ impl QemuBackend {
             clone,
         )?;
 
+        let host_temp_dir = paths.temp.clone();
+        let exec_target_temp_dir = temp_dir_target(paths, &exec_target);
+
         Ok(QemuBackend {
             run_id,
             name,
@@ -115,6 +123,8 @@ impl QemuBackend {
             graphics,
             serial_log: setup.serial_log,
             exec_target,
+            host_temp_dir,
+            exec_target_temp_dir,
             image_lock: setup.image_lock,
             host_port: None,
             disk: setup.disk,
@@ -141,6 +151,167 @@ impl QemuBackend {
     /// so it must match the file stems built in `setup_run`.
     pub fn run_marker(&self) -> String {
         format!("vci-{}-{:05}", self.name, self.run_id.id)
+    }
+
+    fn write_run_metadata(&mut self) -> anyhow::Result<()> {
+        let ssh = self.ssh_target();
+        let wsl_distro = match &self.exec_target {
+            HostExecTarget::WSL2(distro) => Some(distro.clone()),
+            _ => None,
+        };
+        let meta =
+            crate::file_lock::LockMetadata::with_run_info(self.run_marker(), ssh, wsl_distro);
+        let json =
+            serde_json::to_string_pretty(&meta).context("Failed to serialize run metadata")?;
+        self.run_id
+            .flock_mut()
+            .write_content(json.as_bytes())
+            .map_err(|()| anyhow::anyhow!("Failed to write run metadata to the active-run lock"))?;
+        Ok(())
+    }
+
+    fn spawn_swtpm(&mut self) -> anyhow::Result<()> {
+        let tpm = self
+            .tpm_info
+            .as_ref()
+            .expect("spawn_swtpm called without tpm_info");
+
+        let args = vec![
+            "socket".to_string(),
+            "--tpmstate".to_string(),
+            format!("dir={}", tpm.state_dir.native_path()),
+            "--ctrl".to_string(),
+            format!("type=unixio,path={}", tpm.socket_path.native_path()),
+            "--tpm2".to_string(),
+        ];
+
+        let process = TargetChildProcess::new(
+            &self.exec_target,
+            &self.run_marker(),
+            "swtpm",
+            &args,
+            exec::ChildIo::Quiet,
+        )
+        .context("Failed to spawn swtpm")?;
+        self.orphans.add_child_process(&process);
+        self.tpm_process = Some(process);
+
+        self.wait_for_tpm_socket()
+    }
+
+    fn wait_for_tpm_socket(&self) -> anyhow::Result<()> {
+        let socket = self
+            .tpm_info
+            .as_ref()
+            .expect("wait_for_tpm_socket called without tpm_info")
+            .socket_path
+            .native_path();
+
+        for _ in 0..50 {
+            let ready = super::binaries::target_command(&self.exec_target, "test")
+                .args(["-S", &socket])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ready {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        anyhow::bail!("swtpm control socket {socket} did not appear within 5s")
+    }
+}
+
+impl VmBackend for QemuBackend {
+    fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()> {
+        if let Some(o) = cfg.offline {
+            self.start_config.offline = Some(o);
+        }
+        if let Some(c) = cfg.cpus {
+            self.start_config.cpus = Some(c);
+        }
+        if let Some(m) = cfg.memory_mb {
+            self.start_config.memory_mb = Some(m);
+        }
+
+        let _ = self.start_config.cpus.get_or_insert(DEFAULT_CPUS);
+        let _ = self.start_config.memory_mb.get_or_insert(DEFAULT_MEMORY_MB);
+
+        self.host_port = Some(PortFlock::get_available(&self.host_temp_dir, 0)?);
+        self.write_run_metadata()?;
+
+        if self.is_tpm() {
+            self.spawn_swtpm()?;
+        }
+
+        let stderr_log = self
+            .host_temp_dir
+            .join(format!("{}-qemu.stderr", self.run_marker()));
+
+        let qemu = loop {
+            let cmd = build_qemu_args(self)?;
+            let qemu = TargetChildProcess::new(
+                &self.exec_target,
+                &self.run_marker(),
+                &cmd.program,
+                &cmd.arguments,
+                exec::ChildIo::StderrToFile(&stderr_log),
+            )
+            .context("Failed to spawn QEMU")?;
+            self.orphans.add_child_process(&qemu);
+
+            match qemu_launch_outcome(&qemu, &stderr_log)? {
+                QemuLaunchOutcome::Running => break qemu,
+                QemuLaunchOutcome::PortTaken => {
+                    // QEMU already exited, so drop it, release the reserved port, and try again.
+                    drop(qemu);
+                    let taken = self.host_port.as_ref().expect("port reserved").port;
+                    self.host_port =
+                        Some(PortFlock::get_available(&self.host_temp_dir, taken + 1)?);
+                    self.write_run_metadata()?;
+                }
+            }
+        };
+
+        self.qemu_process = Some(qemu);
+
+        Ok(())
+    }
+
+    fn stop_vm(&mut self) {
+        todo!()
+    }
+
+    fn ssh_target(&self) -> crate::vm_image::SshTarget {
+        crate::vm_image::SshTarget {
+            ip: "127.0.0.1".to_string(),
+            port: self
+                .host_port
+                .as_ref()
+                .expect("Need booted VM to get the host port")
+                .port,
+            cred: self.base_image.ssh.clone(),
+        }
+    }
+
+    fn os(&self) -> crate::vm_image::GuestOs {
+        self.base_image.os
+    }
+
+    fn run_name(&self) -> String {
+        self.run_marker()
+    }
+
+    fn wait_for_exit(&mut self) {
+        todo!()
+    }
+
+    fn serial_log_path(&self) -> Option<&Path> {
+        if let Some(serial_log) = &self.serial_log {
+            return Some(serial_log.path.as_path());
+        }
+        None
     }
 }
 
@@ -715,4 +886,35 @@ fn build_qemu_args(backend: &QemuBackend) -> anyhow::Result<QemuBuiltCommand> {
         program,
         arguments: args,
     })
+}
+
+enum QemuLaunchOutcome {
+    Running,
+    PortTaken,
+}
+
+/// Observe the launch for about 1.5 seconds to see if the port was taken.
+fn qemu_launch_outcome(
+    qemu: &Arc<Mutex<TargetChildProcess>>,
+    stderr_log: &Path,
+) -> anyhow::Result<QemuLaunchOutcome> {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(100);
+    const ATTEMPTS: u32 = 15;
+
+    for _ in 0..ATTEMPTS {
+        std::thread::sleep(POLL);
+        let exited = {
+            let mut guard = qemu.lock().expect("QEMU process lock poisoned how?");
+            guard.try_wait()
+        };
+        if exited {
+            let stderr = std::fs::read_to_string(stderr_log).unwrap_or_default();
+            if stderr.to_lowercase().contains("host forwarding rule") {
+                return Ok(QemuLaunchOutcome::PortTaken);
+            }
+            anyhow::bail!("QEMU exited immediately after launch:\n{}", stderr.trim());
+        }
+    }
+
+    Ok(QemuLaunchOutcome::Running)
 }
