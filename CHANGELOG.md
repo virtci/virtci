@@ -11,6 +11,10 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - RISC-V64 QEMU Setup has more accurate defaults.
+- Fixed Windows `crlf` copy flag not working on Windows host's correctly.
+- Fixed occasional QEMU port binding failure.
+- Fixed Windows being unable to run TPM-enabled VMs.
+  - Now, TPM VMs are ran through WSL2, being invoke on the Windows host.
 
 ## Version 0.1.0 - 2026-05-11
 
