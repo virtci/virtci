@@ -53,10 +53,22 @@ pub fn list_active_runs(temp_path: &PathBuf) -> Vec<LockMetadata> {
 }
 
 pub fn find_active_run(name: &str, temp_path: &PathBuf) -> Option<LockMetadata> {
-    let runs = list_active_runs(temp_path);
+    // A run rewrites its active-lock metadata non-atomically on restart (set_len(0)
+    // then write), so a lookup can race that window and read an empty/torn file.
+    // Retry a bit before giving up.
+    const ATTEMPTS: u32 = 3;
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
-    if let Some(run) = runs.iter().find(|r| r.run_name.as_deref() == Some(name)) {
-        return Some(run.clone());
+    for attempt in 0..ATTEMPTS {
+        let runs = list_active_runs(temp_path);
+
+        if let Some(run) = runs.iter().find(|r| r.run_name.as_deref() == Some(name)) {
+            return Some(run.clone());
+        }
+
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(RETRY_DELAY);
+        }
     }
 
     None
