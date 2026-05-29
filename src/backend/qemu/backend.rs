@@ -145,6 +145,14 @@ impl QemuBackend {
         self.tpm_info.is_some()
     }
 
+    /// Host PID of the running QEMU process, or `None` when it runs inside WSL2 (no host PID),
+    /// OR has not been spawned. Used by `virtci boot` to register a graceful-SIGTERM target.
+    pub fn qemu_pid(&self) -> Option<u32> {
+        self.qemu_process
+            .as_ref()
+            .and_then(|p| p.lock().ok().and_then(|g| g.host_pid()))
+    }
+
     /// The run marker `vci-<name>-<id:05>`: QEMU's `-name`, the substring the orphan reaper
     /// `pkill -f`s, the metadata `run_name`, and the stem of every temp artifact. Zero-padding
     /// the id keeps one run's marker from being a substring of another's. Single source of truth,
