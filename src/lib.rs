@@ -54,7 +54,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                     e
                 )
             });
-            let jobs = extract_yaml_workflows(&run_args, paths);
+            let jobs = extract_yaml_workflows(&run_args, paths, &orphans);
             run_jobs(jobs, paths);
         }
         cli::Command::Setup(setup_args) => {
@@ -413,7 +413,11 @@ fn load_image_description(image_name: &str, paths: &VciGlobalPaths) -> vm_image:
     desc
 }
 
-fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<run::Job> {
+fn extract_yaml_workflows(
+    args: &cli::RunArgs,
+    paths: &VciGlobalPaths,
+    orphans: &orphan::OrphanTracker,
+) -> Vec<run::Job> {
     let file_contents = std::fs::read_to_string(&args.workflow)
         .unwrap_or_else(|_| panic!("Failed to load workflow file: {}", args.workflow.display()));
 
@@ -504,25 +508,26 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
         assert!(!steps.is_empty(), "Expected at least 1 step");
 
         let backend: Box<dyn backend::VmBackend> = match &image_desc.backend {
-            vm_image::BackendConfig::Qemu(_) => Box::new(
-                backend::qemu_old::QemuBackend::new(
+            vm_image::BackendConfig::Qemu(_) => {
+                let mut b = backend::qemu::backend::QemuBackend::new(
                     name.clone(),
                     image_desc,
-                    cpus,
-                    memory_mb,
-                    &paths.temp,
+                    paths,
+                    true,
+                    false,
+                    false,
+                    orphans.clone(),
                 )
-                .unwrap_or_else(|()| panic!("Failed to create QEMU backend for job '{}'", &name)),
-            ),
+                .unwrap_or_else(|e| panic!("Failed to create QEMU backend for job '{name}': {e}"));
+                b.start_config.cpus = Some(cpus);
+                b.start_config.memory_mb = Some(memory_mb);
+                Box::new(b)
+            }
             vm_image::BackendConfig::Tart(_) => Box::new(
-                backend::tart::TartBackend::new(
-                    name.clone(),
-                    image_desc,
-                    cpus,
-                    memory_mb,
-                    &paths.temp,
-                )
-                .unwrap_or_else(|()| panic!("Failed to create Tart backend for job '{}'", &name)),
+                backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb, paths)
+                    .unwrap_or_else(|e| {
+                        panic!("Failed to create Tart backend for job '{name}': {e}")
+                    }),
             ),
         };
 

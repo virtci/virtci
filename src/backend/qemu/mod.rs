@@ -40,7 +40,7 @@ impl PortFlock {
     ///
     /// * `temp_path` - The path to write the flock .lock file to.
     /// * `ignore_ports_below` - Skip past any port numbers below this one, used if QEMU reports the actual
-    /// TCP port to be busy. Use `0` by default generally if you don't want to ignore any ports.
+    ///   TCP port to be busy. Use `0` by default generally if you don't want to ignore any ports.
     pub fn get_available(temp_path: &Path, ignore_ports_below: u16) -> anyhow::Result<PortFlock> {
         const PORT_RANGE_START: u16 = if cfg!(target_os = "windows") {
             55000
@@ -124,8 +124,8 @@ pub fn create_backing_file(
 /// Authority is on the `.lock` flocks which always live in the host system's temp dir.
 /// There are 3 kinds of them:
 /// - `vci-active-{id}.lock` A run's stable identifier. See [`crate::run::run_id::ReservedRunId`].
-///     Reclaiming one means it's owner died, to any orphaned QEMU/swtpm stuff by the market stored
-///     in its metadata shall be used to cleanup.
+///   Reclaiming one means it's owner died, to any orphaned QEMU/swtpm stuff by the market stored
+///   in its metadata shall be used to cleanup.
 /// - `vci-qemu-port-{port}.lock` Used to note which VirtCI processes are using which TCP ports.
 /// - `vci_image_{name}.lock` Shared / exclusive lock on a VirtCI image file.
 pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {

@@ -23,7 +23,7 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
     let mut desc = super::load_image(&remove_args.name, &home.path).expect("Failed to load image");
     #[cfg(target_os = "windows")]
     {
-        desc.wsl_distro = home.wsl_distro.clone();
+        desc.wsl_distro.clone_from(&home.wsl_distro);
     }
     let name = &desc.name;
 

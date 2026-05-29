@@ -119,8 +119,8 @@ pub fn run_export(
         }
     }
 
-    let vci_json = serde_json::to_string_pretty(&exported_desc)
-        .with_context(|| format!("Failed to serialize config"))?;
+    let vci_json =
+        serde_json::to_string_pretty(&exported_desc).context("Failed to serialize config")?;
     let vci_bytes = vci_json.as_bytes();
     let mut header = tar::Header::new_gnu();
     header.set_size(vci_bytes.len() as u64);
@@ -128,11 +128,9 @@ pub fn run_export(
     header.set_cksum();
     archive
         .append_data(&mut header, format!("{name}.vci"), vci_bytes)
-        .with_context(|| format!("Failed to write .vci to archive"))?;
+        .context("Failed to write .vci to archive")?;
 
-    archive
-        .finish()
-        .with_context(|| format!("Failed to finalize archive"))?;
+    archive.finish().context("Failed to finalize archive")?;
 
     println!("Export complete: {}", output_path.display());
     Ok(())
@@ -147,7 +145,7 @@ pub fn run_export(
 /// - `archive` The tar archive to append the file to.
 /// - `wsl_distro` Only used on Windows. If the file lives within WSL2, is the distro name.
 /// - `raw_path` The path exactly as recorded in the `.vci` image description file. Either is the
-/// host path, or the WSL-namespace path.
+///   host path, or the WSL-namespace path.
 /// - `archive_name` Name of the tar archive.
 fn append_file<W: std::io::Write>(
     archive: &mut tar::Builder<W>,
@@ -360,7 +358,7 @@ fn export_tart<W: std::io::Write>(
         .arg(&tart.vm_name)
         .arg(&tvm_temp_path)
         .output()
-        .with_context(|| format!("Failed to run tart export"))?;
+        .context("Failed to run tart export")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -818,7 +818,7 @@ fn rewrite_tar(tar_bytes: &[u8], convert: fn(&[u8]) -> Vec<u8>) -> Result<Vec<u8
                 let target = entry
                     .link_name()
                     .map_err(|e| format!("Bad link name in tar entry: {e}"))?
-                    .map(|c| c.into_owned());
+                    .map(std::borrow::Cow::into_owned);
                 match target {
                     Some(target) => builder
                         .append_link(&mut header, &path, &target)

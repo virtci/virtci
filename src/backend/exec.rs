@@ -20,6 +20,7 @@ use anyhow::Context;
 use crate::vm_image::HostExecTarget;
 
 /// How a spawned child's standard streams are wired.
+#[derive(Clone, Copy)]
 pub enum ChildIo<'a> {
     /// Discard stdin/stdout/stderr. For background daemons like swtpm.
     Quiet,
@@ -80,7 +81,7 @@ impl Drop for TargetChildProcess {
 enum TargetChild {
     Host(Child),
     #[cfg(target_os = "windows")]
-    WSL(WslProcess),
+    Wsl(WslProcess),
 }
 
 impl TargetChild {
@@ -110,7 +111,7 @@ impl TargetChild {
                 let relay = cmd
                     .spawn()
                     .with_context(|| format!("failed to spawn `{program}` via WSL2"))?;
-                Ok(Self::WSL(WslProcess {
+                Ok(Self::Wsl(WslProcess {
                     relay,
                     wsl_distro: distro.clone(),
                     marker: marker.to_string(),
@@ -135,7 +136,7 @@ impl TargetChild {
                 let _ = child.wait();
             }
             #[cfg(target_os = "windows")]
-            Self::WSL(p) => p.kill(),
+            Self::Wsl(p) => p.kill(),
         }
     }
 
@@ -145,7 +146,7 @@ impl TargetChild {
                 let _ = child.wait();
             }
             #[cfg(target_os = "windows")]
-            Self::WSL(p) => {
+            Self::Wsl(p) => {
                 let _ = p.relay.wait();
             }
         }
@@ -155,7 +156,7 @@ impl TargetChild {
         match self {
             Self::Host(child) => matches!(child.try_wait(), Ok(Some(_))),
             #[cfg(target_os = "windows")]
-            Self::WSL(p) => matches!(p.relay.try_wait(), Ok(Some(_))),
+            Self::Wsl(p) => matches!(p.relay.try_wait(), Ok(Some(_))),
         }
     }
 
@@ -163,7 +164,7 @@ impl TargetChild {
         match self {
             Self::Host(child) => Some(child.id()),
             #[cfg(target_os = "windows")]
-            Self::WSL(_) => None,
+            Self::Wsl(_) => None,
         }
     }
 }

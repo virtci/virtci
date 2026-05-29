@@ -155,7 +155,9 @@ impl WslPaths {
         let distro: String = if let Some(distro) = std::env::var_os("VIRTCI_WSL_DISTRO") {
             distro
                 .into_string()
-                .map_err(|os| anyhow::anyhow!("Invalid unicode in VIRTCI_WSL_DISTRO: {os:?}"))?
+                .map_err(|os| {
+                    anyhow::anyhow!("Invalid unicode in VIRTCI_WSL_DISTRO: {}", os.display())
+                })?
         } else {
             default_wsl_distro()?
         };
@@ -207,7 +209,7 @@ impl TargetPath {
         {
             if let Some(distro) = &self.wsl_distro {
                 let path = self.path.to_string_lossy();
-                let prefix = format!(r"\\wsl.localhost\{}", distro);
+                let prefix = format!(r"\\wsl.localhost\{distro}");
                 return path
                     .strip_prefix(prefix.as_str())
                     .expect("Expected to strip WSL UNC path prefix")
@@ -222,6 +224,7 @@ impl TargetPath {
         self.wsl_distro.is_some()
     }
 
+    #[must_use]
     pub fn join(&self, component: &str) -> TargetPath {
         TargetPath {
             path: self.path.join(component),

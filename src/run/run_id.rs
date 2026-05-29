@@ -13,7 +13,7 @@ use crate::{file_lock::FileLock, global_paths::VciGlobalPaths};
 /// of one run is never a substring of another's.
 pub struct ReservedRunId {
     pub id: u16,
-    name: String,
+    _name: String,
     flock: Option<FileLock>,
 }
 
@@ -25,7 +25,7 @@ impl ReservedRunId {
             if let Ok(flock) = FileLock::try_new(&file_path) {
                 return Ok(ReservedRunId {
                     id,
-                    name,
+                    _name: name,
                     flock: Some(flock),
                 });
             }

@@ -52,7 +52,7 @@ pub fn load_all_images(paths: &VciGlobalPaths) -> Vec<ImageDescription> {
                 #[cfg(target_os = "windows")]
                 let img = {
                     let mut img = img;
-                    img.wsl_distro = home.wsl_distro.clone();
+                    img.wsl_distro.clone_from(&home.wsl_distro);
                     img
                 };
                 images.push(img);
