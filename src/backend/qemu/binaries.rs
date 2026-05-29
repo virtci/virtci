@@ -77,6 +77,7 @@ pub fn qemu_image_binary(exec_target: &HostExecTarget) -> anyhow::Result<(String
     Ok((binary, version))
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 pub fn qemu_machine(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
     match arch {
         Arch::X64 => {
@@ -92,6 +93,7 @@ pub fn qemu_machine(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
 }
 
 #[allow(clippy::match_same_arms)]
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 pub fn qemu_cpu(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
     match arch {
         Arch::X64 => {

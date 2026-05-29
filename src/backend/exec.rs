@@ -160,6 +160,7 @@ impl TargetChild {
         }
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(clippy::unnecessary_wraps))]
     fn host_pid(&self) -> Option<u32> {
         match self {
             Self::Host(child) => Some(child.id()),

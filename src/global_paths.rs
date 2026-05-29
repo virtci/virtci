@@ -101,17 +101,19 @@ impl VciGlobalPaths {
     /// 3. WSL user home
     /// 4. WSL system home
     pub fn image_homes(&self) -> Vec<TargetPath> {
-        let mut vec = Vec::<TargetPath>::default();
-        vec.push(TargetPath {
-            path: self.user_home.clone(),
-            #[cfg(target_os = "windows")]
-            wsl_distro: None,
-        });
-        vec.push(TargetPath {
-            path: self.system_home.clone(),
-            #[cfg(target_os = "windows")]
-            wsl_distro: None,
-        });
+        #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+        let mut vec = vec![
+            TargetPath {
+                path: self.user_home.clone(),
+                #[cfg(target_os = "windows")]
+                wsl_distro: None,
+            },
+            TargetPath {
+                path: self.system_home.clone(),
+                #[cfg(target_os = "windows")]
+                wsl_distro: None,
+            },
+        ];
         #[cfg(target_os = "windows")]
         {
             if let Some(wsl_paths) = &self.wsl {

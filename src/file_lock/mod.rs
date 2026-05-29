@@ -60,6 +60,7 @@ impl LockMetadata {
     /// This must be written to the `vci-active-{id:05}` flock BEFORE any process actually spawns.
     /// The cleanup runs on `run_name` and `wsl_distro`, so a crash between spawn and write
     /// would orphan them.
+    #[cfg_attr(not(target_os = "windows"), allow(clippy::needless_pass_by_value))]
     pub fn with_run_info(
         run_name: String,
         ssh: crate::vm_image::SshTarget,
