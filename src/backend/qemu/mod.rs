@@ -177,6 +177,7 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
             format!("-{id}-VARS.fd"),
             format!("-{id}-tpm"),
             format!("-{id}-serial.log"),
+            format!("-{id}-qemu.stderr"),
         ];
         for dir in &payload_dirs {
             remove_matching(dir, &suffixes);

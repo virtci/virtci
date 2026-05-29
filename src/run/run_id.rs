@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use crate::{file_lock::FileLock, global_paths::VciGlobalPaths};
-use std::io::Write;
 
 /// A multi-process-wide unique run identifier, reserved by holding an exclusive flock on
 /// `vci-active-{id:05}.lock` in the host's temp directory, for example, ``vci-active-00001.lock`.

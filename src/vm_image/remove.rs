@@ -3,8 +3,7 @@ use std::path::Path;
 use crate::{
     cli::RemoveArgs,
     vm_image::{
-        list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig,
-        ImageDescription, QemuConfig,
+        list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig, QemuConfig,
     },
     VciGlobalPaths,
 };
