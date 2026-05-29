@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use russh::client;
 use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
@@ -59,7 +60,7 @@ pub enum StepKind {
 }
 
 impl Job {
-    pub async fn run(&mut self, _paths: &VciGlobalPaths) -> Result<(), String> {
+    pub async fn run(&mut self, _paths: &VciGlobalPaths) -> anyhow::Result<()> {
         use colored::Colorize;
 
         let ssh_target = self.backend.ssh_target();
@@ -77,12 +78,12 @@ impl Job {
         };
         self.backend
             .start_vm(initial_cfg)
-            .map_err(|()| format!("Failed to start VM: {}", &self.name))?;
+            .with_context(|| format!("Failed to start VM: {}", &self.name))?;
 
         match wait_for_ssh(&ssh_target, SSH_WAIT_TIMEOUT).await {
             Some(secs) => println!("{}", format!("SSH ready after {secs}s").dimmed()),
             None => {
-                return Err(format!("SSH not available after {SSH_WAIT_TIMEOUT}s"));
+                anyhow::bail!("SSH not available after {SSH_WAIT_TIMEOUT}s");
             }
         }
 
@@ -97,9 +98,9 @@ impl Job {
                     .await
                 {
                     Ok(Ok(_)) => {}
-                    Ok(Err(e)) => return Err(format!("offline enforcement failed: {e}")),
+                    Ok(Err(e)) => anyhow::bail!("offline enforcement failed: {e}"),
                     Err(_) => {
-                        return Err("offline enforcement timed out after 30s".to_string());
+                        anyhow::bail!("offline enforcement timed out after 30s");
                     }
                 }
             }
@@ -176,7 +177,7 @@ impl Job {
                     if continue_on_error {
                         println!("{}", format!("  Failed (continuing): {e}").yellow());
                     } else {
-                        return Err(format!("Step '{step_name}' failed: {e}"));
+                        anyhow::bail!("Step '{step_name}' failed: {e}");
                     }
                 }
             }
@@ -185,7 +186,7 @@ impl Job {
         Ok(())
     }
 
-    async fn run_step(&mut self, step_idx: usize) -> Result<(), String> {
+    async fn run_step(&mut self, step_idx: usize) -> anyhow::Result<()> {
         use colored::Colorize;
 
         let step = &self.steps[step_idx];
@@ -229,11 +230,12 @@ impl Job {
                                 .red()
                                 .bold()
                         );
-                        format!("Timed out after {}s", step.timeout)
-                    })??;
+                        anyhow::anyhow!("Timed out after {}s", step.timeout)
+                    })?
+                    .map_err(|e| anyhow::anyhow!(e))?;
 
                 if result.exit_code != 0 {
-                    return Err(format!("Exit code: {}", result.exit_code));
+                    anyhow::bail!("Exit code: {}", result.exit_code);
                 }
             }
             StepKind::Copy(copy_spec) => {
@@ -275,7 +277,8 @@ impl Job {
 
                 tokio::time::timeout(timeout_duration, copy_future)
                     .await
-                    .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
+                    .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", step.timeout))?
+                    .map_err(|e| anyhow::anyhow!(e))?;
 
                 let convert_to_crlf = is_host_to_vm && guest_is_windows && copy_spec.crlf;
                 if convert_to_crlf {
@@ -351,16 +354,14 @@ impl Job {
                     };
 
                     self.backend.stop_vm();
-                    self.backend
-                        .start_vm(cfg)
-                        .map_err(|()| "Failed to restart VM")?;
+                    self.backend.start_vm(cfg).context("Failed to restart VM")?;
 
                     let ssh = self.backend.ssh_target();
                     match wait_for_ssh(&ssh, SSH_WAIT_TIMEOUT).await {
                         Some(secs) => {
                             println!("{}", format!("  SSH ready after {secs}s").dimmed());
                         }
-                        None => return Err("SSH not available after restart".to_string()),
+                        None => anyhow::bail!("SSH not available after restart"),
                     }
 
                     if self.backend.is_offline() {
@@ -382,12 +383,10 @@ impl Job {
                             {
                                 Ok(Ok(_)) => {}
                                 Ok(Err(e)) => {
-                                    return Err(format!("offline enforcement failed: {e}"))
+                                    anyhow::bail!("offline enforcement failed: {e}")
                                 }
                                 Err(_) => {
-                                    return Err(
-                                        "offline enforcement timed out after 30s".to_string()
-                                    )
+                                    anyhow::bail!("offline enforcement timed out after 30s")
                                 }
                             }
                         }

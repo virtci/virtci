@@ -8,7 +8,6 @@ use std::{
 
 pub mod exec;
 pub mod qemu;
-pub mod qemu_old;
 pub mod tart;
 
 use crate::vm_image::{Arch, GuestOs, SshTarget};

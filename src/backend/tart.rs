@@ -162,9 +162,7 @@ impl TartBackend {
 
         Ok(())
     }
-}
 
-impl VmBackend for TartBackend {
     fn setup_clone(&mut self, paths: &VciGlobalPaths) -> anyhow::Result<()> {
         assert!(self.runner.is_none());
 
@@ -247,7 +245,9 @@ impl VmBackend for TartBackend {
                 let _ = std::process::Command::new("tart")
                     .args(["delete", &clone_name])
                     .output();
-                return Err(anyhow::Error::new(e).context("Failed to boot tart VM for IP discovery"));
+                return Err(
+                    anyhow::Error::new(e).context("Failed to boot tart VM for IP discovery")
+                );
             }
         };
 
@@ -293,7 +293,9 @@ impl VmBackend for TartBackend {
 
         Ok(())
     }
+}
 
+impl VmBackend for TartBackend {
     fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()> {
         if let Some(o) = cfg.offline {
             self.offline = o;
