@@ -43,7 +43,7 @@ ubuntu-server-x64:
     - name: Go Offline
       restart:
         offline: true
-        memory_mb: 10240
+        memory: 8192
 
     - name: Check Formatting (Rust)
       run: . "$HOME/.cargo/env" && cargo fmt --check
