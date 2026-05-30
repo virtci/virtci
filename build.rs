@@ -17,7 +17,24 @@ fn main() {
         // .warnings_into_errors(true)
         .compile("vci-native");
 
+    emit_git_version();
     build_frontend();
+}
+
+fn emit_git_version() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/refs");
+    println!("cargo:rerun-if-changed=.git/packed-refs");
+
+    let describe = Command::new("git")
+        .args(["describe", "--tags", "--always", "--dirty"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    println!("cargo:rustc-env=VIRTCI_GIT_DESCRIBE={describe}");
 }
 
 fn build_frontend() {

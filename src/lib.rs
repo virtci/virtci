@@ -44,7 +44,12 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
 
     match args.command {
         cli::Command::Version(_) => {
-            println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
+            let describe = env!("VIRTCI_GIT_DESCRIBE");
+            if describe.is_empty() {
+                println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
+            } else {
+                println!("VirtCI version: {}", describe);
+            }
         }
         cli::Command::Run(run_args) => {
             std::fs::create_dir_all(&paths.temp).unwrap_or_else(|e| {
