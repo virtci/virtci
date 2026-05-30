@@ -271,8 +271,7 @@ fn firmware_pair_exists(exec_target: &HostExecTarget, code: &str, vars: &str) ->
         HostExecTarget::WSL2(_) => target_command(exec_target, "sh")
             .args(["-c", &format!("test -f '{code}' && test -f '{vars}'")])
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false),
+            .is_ok_and(|s| s.success()),
         _ => Path::new(code).exists() && Path::new(vars).exists(),
     }
 }

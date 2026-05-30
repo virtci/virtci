@@ -226,8 +226,7 @@ impl QemuBackend {
             let ready = super::binaries::target_command(&self.exec_target, "test")
                 .args(["-S", &socket])
                 .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+                .is_ok_and(|s| s.success());
             if ready {
                 return Ok(());
             }
@@ -349,8 +348,7 @@ impl VmBackend for QemuBackend {
             loop {
                 let exited = qemu
                     .lock()
-                    .map(|mut guard| guard.try_wait())
-                    .unwrap_or(true);
+                    .map_or(true, |mut guard| guard.try_wait());
                 if exited {
                     break;
                 }
