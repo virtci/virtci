@@ -127,7 +127,7 @@ jobs:
           PROMPT_END
           )
 
-          # add `--print-logs --log-level DEBUG` before run to get debug logs
+          # add `--print-logs --log-level DEBUG \` before run to get debug logs
 
           timeout --preserve-status --signal=TERM --kill-after=30s 840 \
             docker run --rm --name "$CONTAINER_NAME" \
@@ -145,6 +145,7 @@ jobs:
               -e XDG_DATA_HOME=/tmp/.local/share \
               -e OPENCODE_CONFIG_CONTENT \
               ghcr.io/anomalyco/opencode:latest \
+              --print-logs --log-level DEBUG \
               run \
                 "$PROMPT" \
                 --file /workspace/diff.txt \
