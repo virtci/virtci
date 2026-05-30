@@ -149,7 +149,7 @@ jobs:
               run \
                 "$PROMPT" \
                 --file /workspace/diff.txt \
-                --model ollama/qwen3.6:27b \
+                --model llamacpp/default \
             2>&1 | tee llm-analysis-raw.md
           EXIT=${PIPESTATUS[0]}
           echo "opencode exit code: $EXIT"
