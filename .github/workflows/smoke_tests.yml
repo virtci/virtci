@@ -146,7 +146,6 @@ jobs:
               -e OPENCODE_CONFIG_CONTENT \
               -e LLAMA_CPP_API_KEY \
               ghcr.io/anomalyco/opencode:latest \
-              --print-logs --log-level DEBUG \
               run \
                 "$PROMPT" \
                 --file /workspace/diff.txt \
