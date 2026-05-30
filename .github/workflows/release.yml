@@ -1,17 +1,54 @@
 name: Release
 
+# How To Trigger a Release
+#
+# Ensure you're on latest main `git checkout main && git pull`
+# Ensure a clean working tree `git status`
+#
+# Push the tag
+# ```sh
+# git tag -a v1.2.3 -m "Release 1.2.3"
+# git push origin v1.2.3
+# ```
+
 on:
   workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]+.[0-9]+.[0-9]+' # something like v1.2.3
+      - 'v[0-9]+.[0-9]+.[0-9]+~*' # something like v1.2.3~rc1
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check Cargo.toml version matches the tag
+        run: |
+          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+            echo "Not a tag push (${GITHUB_REF}) so skipping version check."
+            exit 0
+          fi
+
+          # Tag may be v1.2.3 or v1.2.3~rc1 so just get the X.Y.Z core.
+          tag="${GITHUB_REF_NAME}"
+          tag_version="${tag#v}"
+          tag_version="${tag_version%%~*}"
+
+          echo "Tag: ${tag} (core: ${tag_version})"
+
+          if ! cargo pkgid "virtci@${tag_version}"; then
+            echo "::error::Cargo.toml version does not match tag (${tag_version})."
+            exit 1
+          fi
+
   run-tests:
+    needs: [verify-version]
     uses: ./.github/workflows/full_test_suite.yml
 
   build-linux-x64-bootstrap:
