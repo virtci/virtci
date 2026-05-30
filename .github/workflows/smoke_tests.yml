@@ -144,6 +144,7 @@ jobs:
               -e HOME=/tmp \
               -e XDG_DATA_HOME=/tmp/.local/share \
               -e OPENCODE_CONFIG_CONTENT \
+              -e LLAMA_CPP_API_KEY \
               ghcr.io/anomalyco/opencode:latest \
               --print-logs --log-level DEBUG \
               run \
