@@ -63,8 +63,6 @@ impl Job {
     pub async fn run(&mut self, _paths: &VciGlobalPaths) -> anyhow::Result<()> {
         use colored::Colorize;
 
-        let ssh_target = self.backend.ssh_target();
-
         let (initial_cfg, skip_first) = match &self.steps[0].kind {
             StepKind::Restart(r) => (
                 VmStartConfig {
@@ -80,8 +78,25 @@ impl Job {
             .start_vm(initial_cfg)
             .with_context(|| format!("Failed to start VM: {}", &self.name))?;
 
+        let ssh_target = self.backend.ssh_target();
+
         match wait_for_ssh(&ssh_target, SSH_WAIT_TIMEOUT).await {
-            Some(secs) => println!("{}", format!("SSH ready after {secs}s").dimmed()),
+            Some(secs) => {
+                let ssh_cmd = match &ssh_target.cred.key {
+                    Some(key) => format!(
+                        "ssh -i {} {}@{} -p {}",
+                        key, ssh_target.cred.user, ssh_target.ip, ssh_target.port
+                    ),
+                    None => format!(
+                        "ssh {}@{} -p {}",
+                        ssh_target.cred.user, ssh_target.ip, ssh_target.port
+                    ),
+                };
+                println!(
+                    "{}",
+                    format!("SSH ready after {secs}s. [{ssh_cmd}]").dimmed()
+                );
+            }
             None => {
                 anyhow::bail!("SSH not available after {SSH_WAIT_TIMEOUT}s");
             }

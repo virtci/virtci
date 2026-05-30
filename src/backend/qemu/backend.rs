@@ -267,13 +267,11 @@ impl VmBackend for QemuBackend {
         let qemu = loop {
             let cmd = super::binaries::build_qemu_args(self)?;
 
-            if self.serial_log.is_some() {
-                eprintln!("QEMU launch command:");
-                eprintln!(
-                    "{}",
-                    super::binaries::format_launch_command(&self.exec_target, &cmd)
-                );
-            }
+            eprintln!("QEMU launch command:");
+            eprintln!(
+                "{}",
+                super::binaries::format_launch_command(&self.exec_target, &cmd)
+            );
 
             let qemu = TargetChildProcess::new(
                 &self.exec_target,
