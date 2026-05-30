@@ -40,6 +40,12 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
         return;
     }
 
+    #[cfg(target_os = "windows")]
+    if let Some(distro) = home.wsl_distro.clone() {
+        remove_wsl2_image(&home, name, &distro);
+        return;
+    }
+
     if desc.managed.is_some() && *desc.managed.as_ref().unwrap() {
         let mut home_path = home.path.clone();
         home_path.pop();
@@ -88,6 +94,28 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
             "Failed to delete VirtCI VM metadata file: {e}{}",
             permission_hint(&e)
         );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn remove_wsl2_image(home: &crate::global_paths::TargetPath, name: &str, distro: &str) {
+    let vci_native = home.native_path(); // e.g. /home/<user>/<name>.vci
+    let managed_dir = match vci_native.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{name}"),
+        None => name.to_string(),
+    };
+
+    let output = std::process::Command::new("wsl")
+        .args(["-d", distro, "--", "rm", "-rf", &managed_dir, &vci_native])
+        .output();
+
+    match output {
+        Ok(proc) if proc.status.success() => {}
+        Ok(proc) => println!(
+            "Failed to delete WSL2 VM files in distro '{distro}': {}",
+            String::from_utf8_lossy(&proc.stderr).trim()
+        ),
+        Err(e) => println!("Failed to run `wsl rm -rf` in distro '{distro}': {e}"),
     }
 }
 
