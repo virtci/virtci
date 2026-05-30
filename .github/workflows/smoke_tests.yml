@@ -45,14 +45,11 @@ jobs:
       - self-hosted
       - Linux
       - X64
-    timeout-minutes: 35
+    timeout-minutes: 15
     continue-on-error: true
     permissions: # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
       contents: read # read repo
       pull-requests: write # post comments
-    concurrency:
-      group: virtci-llm-self-hosted
-      cancel-in-progress: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -129,7 +126,7 @@ jobs:
           PROMPT_END
           )
 
-          timeout --preserve-status --signal=TERM --kill-after=30s 1980 \
+          timeout --preserve-status --signal=TERM --kill-after=30s 840 \
             docker run --rm --name "$CONTAINER_NAME" \
               --add-host=host.docker.internal:host-gateway \
               --user 65534:65534 \
@@ -145,6 +142,7 @@ jobs:
               -e XDG_DATA_HOME=/tmp/.local/share \
               -e OPENCODE_CONFIG_CONTENT \
               ghcr.io/anomalyco/opencode:latest \
+              --print-logs --log-level DEBUG \
               run \
                 "$PROMPT" \
                 --file /workspace/diff.txt \
