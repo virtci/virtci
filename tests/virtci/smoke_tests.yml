@@ -7,11 +7,11 @@ ubuntu-server-x64:
       copy:
         from: ./
         to: vm:~/
-      exclude:
-        - .git
-        - .github
-        - docs
-        - target
+        exclude:
+          - .git
+          - .github
+          - docs
+          - target
 
     - name: Install Rust
       run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
