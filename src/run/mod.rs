@@ -260,6 +260,27 @@ impl Job {
                 let host_is_windows = cfg!(target_os = "windows");
                 let guest_is_windows = guest_os == GuestOs::Windows;
 
+                if !copy_spec.crlf {
+                    let warning = if is_host_to_vm {
+                        if host_is_windows && !guest_is_windows {
+                            Some("[VirtCI] Copying files from a Windows host to a non-Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                        } else if !host_is_windows && guest_is_windows {
+                            Some("[VirtCI] Copying files from a non-Windows host to a Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                        } else {
+                            None
+                        }
+                    } else if guest_is_windows && !host_is_windows {
+                        Some("[VirtCI] Copying files from a Windows guest to a non-Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                    } else if !guest_is_windows && host_is_windows {
+                        Some("[VirtCI] Copying files from a non-Windows guest to a Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                    } else {
+                        None
+                    };
+                    if let Some(warning) = warning {
+                        println!("{}", warning.yellow());
+                    }
+                }
+
                 // In-flight tar conversion. Host->VM CRLF is still done in-guest
                 // by `convert_windows_line_endings` below, not here.
                 let line_endings = if !copy_spec.crlf {
