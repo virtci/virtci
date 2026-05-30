@@ -44,6 +44,10 @@ pub struct QemuBackend {
     pub image_lock: FileLock,
     pub host_port: Option<PortFlock>,
     pub disk: BackingFile,
+    /// pflash unit=0 code firmware path, in the exec namespace. May differ from the image's
+    /// `uefi.code` when Secure Boot is substituted.
+    pub uefi_code: Option<String>,
+    /// May differ from the image's `uefi.vars` when Secure Boot is substituted.
     pub uefi_vars: Option<BackingFile>,
     pub additional_drives: Vec<AdditionalDrive>,
     pub tpm_info: Option<TpmInfo>,
@@ -75,16 +79,18 @@ impl QemuBackend {
         let exec_target: HostExecTarget = {
             #[cfg(target_os = "windows")]
             {
-                if base_image
-                    .backend
-                    .as_qemu()
-                    .expect("Expected QEMU config")
-                    .tpm
-                {
+                let qemu = base_image.backend.as_qemu().expect("Expected QEMU config");
+                if qemu.requires_wsl2() {
                     if let Some(wsl_paths) = &paths.wsl {
                         HostExecTarget::WSL2(wsl_paths.distro.clone())
                     } else {
-                        anyhow::bail!(format!("Need WSL2 paths in order to use TPM "))
+                        let reason = if qemu.tpm { "a TPM" } else { "UEFI firmware" };
+                        anyhow::bail!(
+                            "Image '{}' needs {reason}, which on Windows requires KVM via WSL2 \
+                             (native QEMU/WHPX cannot run TPM or UEFI guests), but no WSL2 distro \
+                             is configured.",
+                            base_image.name
+                        )
                     }
                 } else {
                     HostExecTarget::WindowsNative
@@ -128,6 +134,7 @@ impl QemuBackend {
             image_lock: setup.image_lock,
             host_port: None,
             disk: setup.disk,
+            uefi_code: setup.uefi_code,
             uefi_vars: setup.uefi_vars,
             additional_drives: setup.additional_drives,
             tpm_info: setup.tpm_info,
@@ -259,6 +266,15 @@ impl VmBackend for QemuBackend {
 
         let qemu = loop {
             let cmd = super::binaries::build_qemu_args(self)?;
+
+            if self.serial_log.is_some() {
+                eprintln!("QEMU launch command:");
+                eprintln!(
+                    "{}",
+                    super::binaries::format_launch_command(&self.exec_target, &cmd)
+                );
+            }
+
             let qemu = TargetChildProcess::new(
                 &self.exec_target,
                 &self.run_marker(),
@@ -457,6 +473,7 @@ pub struct TpmInfo {
 struct RunSetup {
     image_lock: FileLock,
     disk: BackingFile,
+    uefi_code: Option<String>,
     uefi_vars: Option<BackingFile>,
     additional_drives: Vec<AdditionalDrive>,
     tpm_info: Option<TpmInfo>,
@@ -527,7 +544,16 @@ fn setup_run(
     })?;
 
     let disk = setup_disk(name, id, qemu_config, paths, exec_target, &temp_dir, clone)?;
-    let uefi_vars = setup_uefi_vars(name, id, qemu_config, paths, exec_target, &temp_dir, clone)?;
+    let (uefi_code, uefi_vars) = setup_uefi(
+        name,
+        id,
+        qemu_config,
+        paths,
+        exec_target,
+        &temp_dir,
+        clone,
+        base_image.arch,
+    )?;
     let additional_drives =
         setup_additional_drives(name, id, qemu_config, paths, exec_target, &temp_dir, clone)?;
 
@@ -555,6 +581,7 @@ fn setup_run(
     Ok(RunSetup {
         image_lock,
         disk,
+        uefi_code,
         uefi_vars,
         additional_drives,
         tpm_info,
@@ -589,7 +616,8 @@ fn setup_disk(
     Ok(BackingFile::Temp(overlay))
 }
 
-fn setup_uefi_vars(
+#[allow(clippy::too_many_arguments)]
+fn setup_uefi(
     name: &str,
     id: u16,
     qemu_config: &crate::vm_image::QemuConfig,
@@ -597,26 +625,59 @@ fn setup_uefi_vars(
     exec_target: &HostExecTarget,
     temp_dir: &TargetPath,
     clone: bool,
-) -> anyhow::Result<Option<BackingFile>> {
+    arch: crate::vm_image::Arch,
+) -> anyhow::Result<(Option<String>, Option<BackingFile>)> {
     let Some(uefi) = &qemu_config.uefi else {
-        return Ok(None);
+        return Ok((None, None));
     };
 
-    if !clone {
-        return Ok(Some(BackingFile::Base(config_path_target_with_unc(
-            &uefi.vars,
-            exec_target,
-            paths,
-        ))));
+    let wants_substitute = crate::vm_image::host_lacks_smm(exec_target)
+        && crate::vm_image::is_maybe_secure_boot_firmware(uefi);
+
+    let substitute = if wants_substitute {
+        super::binaries::find_non_secboot_firmware(arch, exec_target)
+    } else {
+        None
+    };
+
+    if wants_substitute {
+        let configured = crate::vm_image::export::filename_of(&uefi.code);
+        match &substitute {
+            Some((sub_code, _)) => eprintln!(
+                "Note: '{name}' uses Secure Boot firmware ({configured}), which cannot run on this \
+                 host (no SMM). Substituting non-secboot firmware: {sub_code}"
+            ),
+            None => eprintln!(
+                "Warning: '{name}' uses Secure Boot firmware ({configured}), which cannot run on \
+                 this host (no SMM), and no non-secboot OVMF was found to substitute it. Boot will \
+                 likely fail — install the 'ovmf' package in the exec environment."
+            ),
+        }
     }
 
-    let src = config_path_target_with_unc(&uefi.vars, exec_target, paths);
-    let dest = temp_dir.join(&format!("vci-{name}-{id:05}-VARS.fd"));
-    let contents = std::fs::read(&src.path)
-        .with_context(|| format!("Failed to read UEFI vars {}", src.path.display()))?;
-    std::fs::write(&dest.path, &contents)
-        .with_context(|| format!("Failed to write UEFI vars to {}", dest.path.display()))?;
-    Ok(Some(BackingFile::Temp(dest)))
+    let (code, vars_src) = match &substitute {
+        Some((sub_code, sub_vars)) => (
+            sub_code.clone(),
+            config_path_target_with_unc(sub_vars, exec_target, paths),
+        ),
+        None => (
+            uefi.code.clone(),
+            config_path_target_with_unc(&uefi.vars, exec_target, paths),
+        ),
+    };
+
+    let vars_backing = if substitute.is_some() || clone {
+        let dest = temp_dir.join(&format!("vci-{name}-{id:05}-VARS.fd"));
+        let contents = std::fs::read(&vars_src.path)
+            .with_context(|| format!("Failed to read UEFI vars {}", vars_src.path.display()))?;
+        std::fs::write(&dest.path, &contents)
+            .with_context(|| format!("Failed to write UEFI vars to {}", dest.path.display()))?;
+        BackingFile::Temp(dest)
+    } else {
+        BackingFile::Base(vars_src)
+    };
+
+    Ok((Some(code), Some(vars_backing)))
 }
 
 fn setup_additional_drives(

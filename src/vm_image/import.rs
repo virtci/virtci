@@ -6,6 +6,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
+use crate::vm_image::progress::ProgressReader;
 use crate::vm_image::{
     ensure_world_readable_dir, ensure_world_readable_file, permission_hint, BackendConfig,
     ImageDescription,
@@ -36,13 +37,23 @@ pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> 
         );
     }
 
-    // TPM images on Windows live inside the WSL2 ext4 filesystem so QEMU (run through `wsl`)
-    // resolves their backing files natively gives full performance and working qcow2 locking.
+    warn_if_unsupported_secure_boot(&desc, paths);
+
+    // TPM and UEFI images on Windows MUST run inside of WSL2. WHPX cannot handle either, and QEMU on
+    // a windows host cannot do TPM whatsoever.
     #[cfg(target_os = "windows")]
-    if let Some(wsl) = wsl_target_for(&desc, paths) {
+    if image_requires_wsl2(&desc) {
+        let Some(wsl) = paths.wsl.as_ref() else {
+            let reason = wsl_requirement_reason(&desc);
+            anyhow::bail!(
+                "Image '{name}' needs {reason}, which on Windows requires KVM via WSL2 \
+                 (native QEMU/WHPX cannot run TPM or UEFI guests), but no WSL2 distro is \
+                 configured. Set up WSL2 and re-import."
+            );
+        };
         if system {
             anyhow::bail!(
-                "Importing a TPM image into WSL2 with --system is not yet supported; \
+                "Importing a TPM/UEFI image into WSL2 with --system is not yet supported; \
                  import it into the user home (omit --system)."
             );
         }
@@ -50,6 +61,52 @@ pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> 
     }
 
     import_native(archive_path, &mut desc, &name, paths, system)
+}
+
+/// Windows hosts, or WSL2, cannot handle secure boot at all.
+fn warn_if_unsupported_secure_boot(desc: &ImageDescription, paths: &VciGlobalPaths) {
+    let BackendConfig::Qemu(qemu) = &desc.backend else {
+        return;
+    };
+    let Some(uefi) = &qemu.uefi else {
+        return;
+    };
+    if !crate::vm_image::is_maybe_secure_boot_firmware(uefi) {
+        return;
+    }
+
+    let host_lacks_smm = cfg!(target_os = "windows") || crate::vm_image::running_inside_wsl();
+    if !host_lacks_smm {
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    let exec_target = if qemu.requires_wsl2() {
+        match &paths.wsl {
+            Some(wsl) => crate::vm_image::HostExecTarget::WSL2(wsl.distro.clone()),
+            None => crate::vm_image::HostExecTarget::WindowsNative,
+        }
+    } else {
+        crate::vm_image::HostExecTarget::WindowsNative
+    };
+    #[cfg(not(target_os = "windows"))]
+    let exec_target = {
+        let _ = paths;
+        crate::vm_image::HostExecTarget::Linux
+    };
+
+    let configured = crate::vm_image::export::filename_of(&uefi.code);
+    if let Some((code, vars)) =
+        crate::backend::qemu::binaries::find_non_secboot_firmware(desc.arch, &exec_target)
+    {
+        eprintln!("This image's UEFI firmware appears to use Secure Boot ({configured}).");
+        eprintln!("Secure Boot is not supported on Windows or WSL2 because they lack SMM. Non-secure boot UEFI firmware will be used instead.");
+        eprintln!("Code: {code}, Vars: {vars}");
+    } else {
+        eprintln!("This image's UEFI firmware appears to use Secure Boot ({configured}).");
+        eprintln!("Secure Boot is not supported on Windows or WSL2 because they lack SMM.");
+        eprintln!("Couldn't find any OVMF firmware to use instead, so boot will likely fail. Please install OVMF firmware.");
+    }
 }
 
 /// Read the root `<name>.vci` member from the archive, returning `(name, json)`.
@@ -145,7 +202,6 @@ fn import_native(
         }
 
         let dest = managed_dir.join(filename);
-        println!("  Extracting: {filename}");
 
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
@@ -159,7 +215,10 @@ fn import_native(
                 permission_hint(&e)
             )
         })?;
-        std::io::copy(&mut entry, &mut out_file)
+        let entry_size = entry.header().size().unwrap_or(0);
+        let mut reader =
+            ProgressReader::new(&mut entry, entry_size, format!("Extracting {filename}"));
+        std::io::copy(&mut reader, &mut out_file)
             .with_context(|| format!("Failed to extract {filename}"))?;
         if system {
             ensure_world_readable_file(&dest)
@@ -233,14 +292,20 @@ fn import_native(
 
 /// `Some(&WslPaths)` when this image must be imported into WSL2 if a TPM-requiring QEMU image on a
 /// Windows host with a usable WSL2 distro configured.
+/// Whether this image must be staged into WSL2 to be runnable on a Windows host (TPM or UEFI).
+/// See [`crate::vm_image::QemuConfig::requires_wsl2`].
 #[cfg(target_os = "windows")]
-fn wsl_target_for<'a>(
-    desc: &ImageDescription,
-    paths: &'a VciGlobalPaths,
-) -> Option<&'a crate::global_paths::WslPaths> {
+fn image_requires_wsl2(desc: &ImageDescription) -> bool {
+    matches!(&desc.backend, BackendConfig::Qemu(qemu) if qemu.requires_wsl2())
+}
+
+/// Human-readable reason an image needs WSL2, for error messages.
+#[cfg(target_os = "windows")]
+fn wsl_requirement_reason(desc: &ImageDescription) -> &'static str {
     match &desc.backend {
-        BackendConfig::Qemu(qemu) if qemu.tpm => paths.wsl.as_ref(),
-        _ => None,
+        BackendConfig::Qemu(qemu) if qemu.tpm => "a TPM",
+        BackendConfig::Qemu(qemu) if qemu.uefi.is_some() => "UEFI firmware",
+        _ => "WSL2",
     }
 }
 
@@ -285,7 +350,7 @@ fn import_into_wsl(
 }
 
 #[cfg(target_os = "windows")]
-fn wsl_mkdir_p(distro: &str, wsl_dir: &str) -> anyhow::Result<()> {
+pub(crate) fn wsl_mkdir_p(distro: &str, wsl_dir: &str) -> anyhow::Result<()> {
     let output = std::process::Command::new("wsl")
         .args(["-d", distro, "--", "mkdir", "-p", wsl_dir])
         .output()
@@ -306,8 +371,14 @@ fn wsl_tar_extract(
     dest_dir: &str,
     member: &str,
 ) -> anyhow::Result<()> {
-    let mut archive = std::fs::File::open(archive_path)
+    let archive = std::fs::File::open(archive_path)
         .with_context(|| format!("Failed to open {}", archive_path.display()))?;
+    let archive_size = archive
+        .metadata()
+        .with_context(|| format!("Failed to stat {}", archive_path.display()))?
+        .len();
+
+    let mut reader = ProgressReader::new(archive, archive_size, format!("Extracting {member}"));
 
     let mut child = std::process::Command::new("wsl")
         .args([
@@ -323,7 +394,7 @@ fn wsl_tar_extract(
         .stdin
         .take()
         .context("Failed to capture `wsl tar` stdin")?;
-    let copy_res = std::io::copy(&mut archive, &mut stdin);
+    let copy_res = std::io::copy(&mut reader, &mut stdin);
     drop(stdin); // close stdin so tar sees EOF and finishes
 
     let output = child

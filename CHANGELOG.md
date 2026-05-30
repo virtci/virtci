@@ -7,14 +7,17 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Provide setup guide for a RISC-V64 Linux VM in [riscv64_linux_setup.md](/docs/riscv64_linux_setup.md).
+- Detect if a user is using UEFI firmware with secure boot, which does not work on Windows or WSL2 hosts.
+  - Warns that it will be substituted on run / boot.
 
 ### Fixed
 
 - RISC-V64 QEMU Setup has more accurate defaults.
 - Fixed Windows `crlf` copy flag not working on Windows host's correctly.
 - Fixed occasional QEMU port binding failure.
-- Fixed Windows being unable to run TPM-enabled VMs.
-  - Now, TPM VMs are ran through WSL2, being invoke on the Windows host.
+- Fixed Windows being unable to run TPM or UEFI enabled VMs.
+  - Now, TPM or UEFI VMs are ran through WSL2, being invoked on the Windows host.
+  - Secure Boot VMs are strictly not supported, and likely will never be as Windows Hosts and WSL2 lack SMM.
 
 ## Version 0.1.0 - 2026-05-11
 

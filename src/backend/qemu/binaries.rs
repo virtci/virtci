@@ -225,6 +225,58 @@ fn ensure_tpm_support(binary: &str, exec_target: &HostExecTarget) -> anyhow::Res
     }
 }
 
+pub fn find_non_secboot_firmware(
+    arch: Arch,
+    exec_target: &HostExecTarget,
+) -> Option<(String, String)> {
+    // Secure Boot is an x86_64 Windows VM concern.
+    if !matches!(arch, Arch::X64) {
+        return None;
+    }
+
+    let candidates: &[(&str, &str)] = if matches!(exec_target, HostExecTarget::WindowsNative) {
+        &[(
+            "C:\\Program Files\\qemu\\share\\edk2-x86_64-code.fd",
+            "C:\\Program Files\\qemu\\share\\edk2-i386-vars.fd",
+        )]
+    } else {
+        &[
+            (
+                "/usr/share/OVMF/OVMF_CODE_4M.fd",
+                "/usr/share/OVMF/OVMF_VARS_4M.fd",
+            ),
+            (
+                "/usr/share/edk2-ovmf/x64/OVMF_CODE.4m.fd",
+                "/usr/share/edk2-ovmf/x64/OVMF_VARS.4m.fd",
+            ),
+            (
+                "/usr/share/OVMF/OVMF_CODE.fd",
+                "/usr/share/OVMF/OVMF_VARS.fd",
+            ),
+            (
+                "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+                "/usr/share/edk2/ovmf/OVMF_VARS.fd",
+            ),
+        ]
+    };
+
+    candidates
+        .iter()
+        .find(|(code, vars)| firmware_pair_exists(exec_target, code, vars))
+        .map(|(code, vars)| ((*code).to_string(), (*vars).to_string()))
+}
+
+fn firmware_pair_exists(exec_target: &HostExecTarget, code: &str, vars: &str) -> bool {
+    match exec_target {
+        HostExecTarget::WSL2(_) => target_command(exec_target, "sh")
+            .args(["-c", &format!("test -f '{code}' && test -f '{vars}'")])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        _ => Path::new(code).exists() && Path::new(vars).exists(),
+    }
+}
+
 pub struct QemuBuiltCommand {
     pub program: String,
     pub arguments: Vec<String>,
@@ -280,11 +332,11 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
     push_arg(&mut args, "-smp", cpus.to_string());
     push_arg(&mut args, "-m", format!("{memory_mb}M"));
 
-    if let Some(uefi) = &qemu_config.uefi {
+    if let Some(code) = &backend.uefi_code {
         push_arg(
             &mut args,
             "-drive",
-            format!("if=pflash,format=raw,unit=0,readonly=on,file={}", uefi.code),
+            format!("if=pflash,format=raw,unit=0,readonly=on,file={code}"),
         );
         if let Some(vars) = &backend.uefi_vars {
             push_arg(
@@ -451,6 +503,24 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
         program,
         arguments: args,
     })
+}
+
+pub fn format_launch_command(exec_target: &HostExecTarget, cmd: &QemuBuiltCommand) -> String {
+    fn quote(s: &str) -> String {
+        if s.is_empty() || s.chars().any(char::is_whitespace) {
+            format!("'{}'", s.replace('\'', r"'\''"))
+        } else {
+            s.to_string()
+        }
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if let HostExecTarget::WSL2(distro) = exec_target {
+        parts.extend(["wsl".into(), "-d".into(), distro.clone(), "--".into()]);
+    }
+    parts.push(quote(&cmd.program));
+    parts.extend(cmd.arguments.iter().map(|a| quote(a)));
+    parts.join(" ")
 }
 
 pub enum QemuLaunchOutcome {

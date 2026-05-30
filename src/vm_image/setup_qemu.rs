@@ -40,17 +40,26 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Re
     let (tpm, nvme, cpu_model, additional_drives, additional_devices, readonly_isos) =
         prompt_advanced_options(guest_os, arch)?;
 
+    // On Windows, TPM or UEFI images must run via WSL2/KVM — native WHPX has no swtpm and cannot
+    // emulate the OVMF pflash MMIO (QEMU GitLab #513). BIOS, non-TPM images run natively.
     #[cfg(target_os = "windows")]
-    let wsl_distro: Option<String> = if tpm {
+    let needs_wsl2 = tpm || uefi.is_some();
+
+    #[cfg(target_os = "windows")]
+    let wsl_distro: Option<String> = if needs_wsl2 {
         match &paths.wsl {
-            None => anyhow::bail!("A WSL2 distro is required for TPM VMs on Windows"),
+            None => anyhow::bail!(
+                "A WSL2 distro is required for TPM or UEFI VMs on Windows \
+                 (native QEMU/WHPX cannot run them)."
+            ),
             Some(wsl_paths) => Some(wsl_paths.distro.clone()),
         }
     } else {
         None
     };
 
-    let config = ImageDescription {
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut config = ImageDescription {
         name,
         os: guest_os,
         arch,
@@ -74,6 +83,35 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Re
     print_summary(&config);
 
     if prompt_yes_no("Save this configuration?", true)? {
+        #[cfg(target_os = "windows")]
+        if needs_wsl2 {
+            let wsl = paths
+                .wsl
+                .as_ref()
+                .expect("TPM/UEFI requires WSL2 paths (validated above)");
+            if system {
+                anyhow::bail!(
+                    "Setting up a TPM or UEFI image with --system is not yet supported; \
+                     omit --system to install it into your user home."
+                );
+            }
+            stage_qemu_image_into_wsl(&mut config, wsl)?;
+            let dest_vci = wsl
+                .to_unc(&wsl.user_home)
+                .join(format!("{}.vci", config.name));
+            let vci_out =
+                serde_json::to_string_pretty(&config).context("Failed to serialize config")?;
+            std::fs::write(&dest_vci, vci_out)
+                .with_context(|| format!("Failed to write {}", dest_vci.display()))?;
+            println!(
+                "\nSaved to {} (in WSL distro '{}')",
+                dest_vci.display(),
+                wsl.distro
+            );
+            println!("Use in workflows with: image: {}", config.name);
+            return Ok(());
+        }
+
         save_config(&config, &dest_home, system).map_err(anyhow::Error::msg)?;
         println!("\nSaved to {}/{}.vci", dest_home.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);
@@ -81,6 +119,118 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Re
         println!("Setup cancelled.");
     }
 
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn copy_host_file_into_wsl(
+    src_host: &str,
+    dest_wsl: &str,
+    distro: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    let file =
+        std::fs::File::open(src_host).with_context(|| format!("Failed to open {src_host}"))?;
+    let size = file
+        .metadata()
+        .with_context(|| format!("Failed to stat {src_host}"))?
+        .len();
+    let mut reader = crate::vm_image::progress::ProgressReader::new(file, size, label.to_string());
+
+    let mut child = std::process::Command::new("wsl")
+        .args([
+            "-d",
+            distro,
+            "--",
+            "sh",
+            "-c",
+            &format!("cat > '{dest_wsl}'"),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to spawn `wsl` to write {dest_wsl}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("Failed to capture `wsl` stdin")?;
+    let copy_res = std::io::copy(&mut reader, &mut stdin);
+    drop(stdin); // close so the in-distro `cat` sees EOF
+
+    let output = child
+        .wait_with_output()
+        .context("Failed to wait on `wsl` writer")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Writing {dest_wsl} into WSL failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    copy_res.with_context(|| format!("Failed to stream {src_host} into WSL"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn stage_file(src_host: &str, managed_dir: &str, distro: &str) -> anyhow::Result<String> {
+    let base = crate::vm_image::export::filename_of(src_host);
+    let dest = format!("{}/{}", managed_dir.trim_end_matches('/'), base);
+    copy_host_file_into_wsl(src_host, &dest, distro, &format!("Copying {base}"))?;
+    Ok(dest)
+}
+
+#[cfg(target_os = "windows")]
+fn stage_drive_into_wsl(drive: &str, managed_dir: &str, distro: &str) -> anyhow::Result<String> {
+    let mut out = Vec::new();
+    for part in drive.split(',') {
+        if let Some(file) = part.strip_prefix("file=") {
+            let dest = stage_file(file, managed_dir, distro)?;
+            out.push(format!("file={dest}"));
+        } else {
+            out.push(part.to_string());
+        }
+    }
+    Ok(out.join(","))
+}
+
+#[cfg(target_os = "windows")]
+fn stage_qemu_image_into_wsl(
+    config: &mut ImageDescription,
+    wsl: &crate::global_paths::WslPaths,
+) -> anyhow::Result<()> {
+    let distro = wsl.distro.clone();
+    let wsl_home = wsl.user_home.trim_end_matches('/');
+    let managed_dir = format!("{wsl_home}/{}", config.name);
+
+    crate::vm_image::import::wsl_mkdir_p(&distro, &managed_dir)?;
+
+    println!("\nStaging image files into WSL distro '{distro}' (ext4)...");
+
+    let BackendConfig::Qemu(ref mut qemu) = config.backend else {
+        anyhow::bail!("stage_qemu_image_into_wsl called on a non-QEMU image");
+    };
+
+    qemu.image = stage_file(&qemu.image, &managed_dir, &distro)?;
+
+    if let Some(ref mut uefi) = qemu.uefi {
+        uefi.code = stage_file(&uefi.code, &managed_dir, &distro)?;
+        uefi.vars = stage_file(&uefi.vars, &managed_dir, &distro)?;
+    }
+
+    if let Some(ref mut drives) = qemu.additional_drives {
+        for drive in drives.iter_mut() {
+            *drive = stage_drive_into_wsl(drive, &managed_dir, &distro)?;
+        }
+    }
+
+    if let Some(ref mut isos) = qemu.readonly_isos {
+        for iso in isos.iter_mut() {
+            *iso = stage_file(iso, &managed_dir, &distro)?;
+        }
+    }
+
+    config.managed = Some(true);
     Ok(())
 }
 

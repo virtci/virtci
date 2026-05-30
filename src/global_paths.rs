@@ -155,11 +155,9 @@ pub struct WslPaths {
 impl WslPaths {
     pub fn new() -> anyhow::Result<Self> {
         let distro: String = if let Some(distro) = std::env::var_os("VIRTCI_WSL_DISTRO") {
-            distro
-                .into_string()
-                .map_err(|os| {
-                    anyhow::anyhow!("Invalid unicode in VIRTCI_WSL_DISTRO: {}", os.display())
-                })?
+            distro.into_string().map_err(|os| {
+                anyhow::anyhow!("Invalid unicode in VIRTCI_WSL_DISTRO: {}", os.display())
+            })?
         } else {
             default_wsl_distro()?
         };

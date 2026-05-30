@@ -20,6 +20,7 @@ pub mod boot;
 pub mod export;
 pub mod import;
 pub mod list;
+pub mod progress;
 pub mod remove;
 pub mod setup_qemu;
 #[cfg(target_os = "macos")]
@@ -42,6 +43,49 @@ pub enum HostExecTarget {
     WindowsNative,
     /// Stores the distro
     WSL2(String),
+}
+
+#[must_use]
+pub fn running_inside_wsl() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // The interop env vars are present in any WSL2 shell; fall back to the kernel release
+        // string ("...-microsoft-standard-WSL2") for stripped/`env -i` environments.
+        if std::env::var_os("WSL_INTEROP").is_some()
+            || std::env::var_os("WSL_DISTRO_NAME").is_some()
+        {
+            return true;
+        }
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .map(|s| {
+                let s = s.to_ascii_lowercase();
+                s.contains("microsoft") || s.contains("wsl")
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+#[must_use]
+pub fn host_lacks_smm(exec_target: &HostExecTarget) -> bool {
+    match exec_target {
+        HostExecTarget::WindowsNative | HostExecTarget::WSL2(_) => true,
+        HostExecTarget::Linux => running_inside_wsl(),
+        HostExecTarget::MacOS => false,
+    }
+}
+
+#[must_use]
+pub fn is_maybe_secure_boot_firmware(uefi: &UefiSplit) -> bool {
+    let haystack = format!(
+        "{} {}",
+        uefi.code.to_ascii_lowercase(),
+        uefi.vars.to_ascii_lowercase()
+    );
+    haystack.contains("secboot") || haystack.contains(".ms.") || haystack.contains("snakeoil")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +138,20 @@ pub struct QemuConfig {
     pub nvme: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly_isos: Option<Vec<String>>,
+}
+
+impl QemuConfig {
+    /// On a Windows host, whether this image must run through WSL2 (KVM) rather than native
+    /// QEMU/WHPX. Two independent reasons, both hard limitations of the Windows hypervisor stack:
+    /// - **TPM**: swtpm only exists in the WSL2 distro.
+    /// - **UEFI**: WHPX cannot emulate the OVMF `-pflash` MMIO (QEMU GitLab #513), so *any* UEFI
+    ///   guest fails on native WHPX. Legacy-BIOS guests (`uefi: None`) run fine natively.
+    ///
+    /// On non-Windows hosts this predicate is irrelevant (the exec target is chosen by OS).
+    #[must_use]
+    pub fn requires_wsl2(&self) -> bool {
+        self.tpm || self.uefi.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
