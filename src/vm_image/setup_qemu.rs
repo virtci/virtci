@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
+
 use crate::vm_image::{
     expand_path, read_line, read_line_with_default, save_config, validate_image_name, Arch,
     BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig, UefiSplit,
@@ -19,7 +21,7 @@ use crate::VciGlobalPaths;
 /// 7. Advanced options (tpm, nvme, cpu model, extra drives/devices)
 /// 8. Summary + confirmation
 /// 9. Save .vci file
-pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(), String> {
+pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Result<()> {
     println!("VCI QEMU Image Setup");
     println!("====================\n");
 
@@ -38,7 +40,26 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
     let (tpm, nvme, cpu_model, additional_drives, additional_devices, readonly_isos) =
         prompt_advanced_options(guest_os, arch)?;
 
-    let config = ImageDescription {
+    // On Windows, TPM or UEFI images must run via WSL2/KVM — native WHPX has no swtpm and cannot
+    // emulate the OVMF pflash MMIO (QEMU GitLab #513). BIOS, non-TPM images run natively.
+    #[cfg(target_os = "windows")]
+    let needs_wsl2 = tpm || uefi.is_some();
+
+    #[cfg(target_os = "windows")]
+    let wsl_distro: Option<String> = if needs_wsl2 {
+        match &paths.wsl {
+            None => anyhow::bail!(
+                "A WSL2 distro is required for TPM or UEFI VMs on Windows \
+                 (native QEMU/WHPX cannot run them)."
+            ),
+            Some(wsl_paths) => Some(wsl_paths.distro.clone()),
+        }
+    } else {
+        None
+    };
+
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut config = ImageDescription {
         name,
         os: guest_os,
         arch,
@@ -55,12 +76,43 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
             readonly_isos,
         }),
         remote: None,
+        #[cfg(target_os = "windows")]
+        wsl_distro,
     };
 
     print_summary(&config);
 
     if prompt_yes_no("Save this configuration?", true)? {
-        save_config(&config, &dest_home, system)?;
+        #[cfg(target_os = "windows")]
+        if needs_wsl2 {
+            let wsl = paths
+                .wsl
+                .as_ref()
+                .expect("TPM/UEFI requires WSL2 paths (validated above)");
+            if system {
+                anyhow::bail!(
+                    "Setting up a TPM or UEFI image with --system is not yet supported; \
+                     omit --system to install it into your user home."
+                );
+            }
+            stage_qemu_image_into_wsl(&mut config, wsl)?;
+            let dest_vci = wsl
+                .to_unc(&wsl.user_home)
+                .join(format!("{}.vci", config.name));
+            let vci_out =
+                serde_json::to_string_pretty(&config).context("Failed to serialize config")?;
+            std::fs::write(&dest_vci, vci_out)
+                .with_context(|| format!("Failed to write {}", dest_vci.display()))?;
+            println!(
+                "\nSaved to {} (in WSL distro '{}')",
+                dest_vci.display(),
+                wsl.distro
+            );
+            println!("Use in workflows with: image: {}", config.name);
+            return Ok(());
+        }
+
+        save_config(&config, &dest_home, system).map_err(anyhow::Error::msg)?;
         println!("\nSaved to {}/{}.vci", dest_home.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);
     } else {
@@ -70,8 +122,120 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> Result<(),
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn copy_host_file_into_wsl(
+    src_host: &str,
+    dest_wsl: &str,
+    distro: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    let file =
+        std::fs::File::open(src_host).with_context(|| format!("Failed to open {src_host}"))?;
+    let size = file
+        .metadata()
+        .with_context(|| format!("Failed to stat {src_host}"))?
+        .len();
+    let mut reader = crate::vm_image::progress::ProgressReader::new(file, size, label.to_string());
+
+    let mut child = std::process::Command::new("wsl")
+        .args([
+            "-d",
+            distro,
+            "--",
+            "sh",
+            "-c",
+            &format!("cat > '{dest_wsl}'"),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to spawn `wsl` to write {dest_wsl}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("Failed to capture `wsl` stdin")?;
+    let copy_res = std::io::copy(&mut reader, &mut stdin);
+    drop(stdin); // close so the in-distro `cat` sees EOF
+
+    let output = child
+        .wait_with_output()
+        .context("Failed to wait on `wsl` writer")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Writing {dest_wsl} into WSL failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    copy_res.with_context(|| format!("Failed to stream {src_host} into WSL"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn stage_file(src_host: &str, managed_dir: &str, distro: &str) -> anyhow::Result<String> {
+    let base = crate::vm_image::export::filename_of(src_host);
+    let dest = format!("{}/{}", managed_dir.trim_end_matches('/'), base);
+    copy_host_file_into_wsl(src_host, &dest, distro, &format!("Copying {base}"))?;
+    Ok(dest)
+}
+
+#[cfg(target_os = "windows")]
+fn stage_drive_into_wsl(drive: &str, managed_dir: &str, distro: &str) -> anyhow::Result<String> {
+    let mut out = Vec::new();
+    for part in drive.split(',') {
+        if let Some(file) = part.strip_prefix("file=") {
+            let dest = stage_file(file, managed_dir, distro)?;
+            out.push(format!("file={dest}"));
+        } else {
+            out.push(part.to_string());
+        }
+    }
+    Ok(out.join(","))
+}
+
+#[cfg(target_os = "windows")]
+fn stage_qemu_image_into_wsl(
+    config: &mut ImageDescription,
+    wsl: &crate::global_paths::WslPaths,
+) -> anyhow::Result<()> {
+    let distro = wsl.distro.clone();
+    let wsl_home = wsl.user_home.trim_end_matches('/');
+    let managed_dir = format!("{wsl_home}/{}", config.name);
+
+    crate::vm_image::import::wsl_mkdir_p(&distro, &managed_dir)?;
+
+    println!("\nStaging image files into WSL distro '{distro}' (ext4)...");
+
+    let BackendConfig::Qemu(ref mut qemu) = config.backend else {
+        anyhow::bail!("stage_qemu_image_into_wsl called on a non-QEMU image");
+    };
+
+    qemu.image = stage_file(&qemu.image, &managed_dir, &distro)?;
+
+    if let Some(ref mut uefi) = qemu.uefi {
+        uefi.code = stage_file(&uefi.code, &managed_dir, &distro)?;
+        uefi.vars = stage_file(&uefi.vars, &managed_dir, &distro)?;
+    }
+
+    if let Some(ref mut drives) = qemu.additional_drives {
+        for drive in drives.iter_mut() {
+            *drive = stage_drive_into_wsl(drive, &managed_dir, &distro)?;
+        }
+    }
+
+    if let Some(ref mut isos) = qemu.readonly_isos {
+        for iso in isos.iter_mut() {
+            *iso = stage_file(iso, &managed_dir, &distro)?;
+        }
+    }
+
+    config.managed = Some(true);
+    Ok(())
+}
+
 /// Step 1
-fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
+fn prompt_image_name(paths: &VciGlobalPaths) -> anyhow::Result<String> {
     println!("Step 1: Image Name");
     println!("  This name will be used in workflow files (e.g., image: win-11-arm64)");
 
@@ -91,7 +255,7 @@ fn prompt_image_name(paths: &VciGlobalPaths) -> Result<String, String> {
 }
 
 /// Step 2
-fn prompt_guest_os() -> Result<GuestOs, String> {
+fn prompt_guest_os() -> anyhow::Result<GuestOs> {
     println!("Step 2: Guest OS");
     println!("  1) Linux");
     println!("  2) macOS");
@@ -120,7 +284,7 @@ fn prompt_guest_os() -> Result<GuestOs, String> {
 }
 
 /// Step 3
-fn prompt_architecture() -> Result<Arch, String> {
+fn prompt_architecture() -> anyhow::Result<Arch> {
     let default = match std::env::consts::ARCH {
         "x86_64" => Arch::X64,
         "aarch64" => Arch::ARM64,
@@ -158,7 +322,7 @@ fn prompt_architecture() -> Result<Arch, String> {
 }
 
 /// Step 4
-fn prompt_image_path() -> Result<String, String> {
+fn prompt_image_path() -> anyhow::Result<String> {
     println!("Step 4: Disk Image Path");
     println!("  Path to the qcow2 disk image file.");
 
@@ -202,35 +366,33 @@ fn prompt_image_path() -> Result<String, String> {
 }
 
 /// https://www.qemu.org/docs/master/interop/qcow2.html
-fn validate_qcow2(path: &std::path::Path) -> Result<(), String> {
+fn validate_qcow2(path: &std::path::Path) -> anyhow::Result<()> {
     // Bytes 0 - 3 "QFI\xfb"
     const QCOW2_MAGIC: [u8; 4] = [0x51, 0x46, 0x49, 0xFB];
 
     use std::io::Read;
 
-    let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
+    let mut file = std::fs::File::open(path).context("Cannot open file")?;
 
     let mut header = [0u8; 8];
     file.read_exact(&mut header)
-        .map_err(|e| format!("Cannot read file header: {e}"))?;
+        .context("Cannot read file header")?;
 
     if header[0..4] != QCOW2_MAGIC {
-        return Err("Not a valid qcow2 file (invalid magic bytes)".to_string());
+        anyhow::bail!("Not a valid qcow2 file (invalid magic bytes)");
     }
 
     // Bytes 4-7 version number (2 or 3 big-endian u32)
     let version = u32::from_be_bytes([header[4], header[5], header[6], header[7]]);
     if version != 2 && version != 3 {
-        return Err(format!(
-            "Unsupported qcow2 version: {version} (expected 2 or 3)"
-        ));
+        anyhow::bail!("Unsupported qcow2 version: {version} (expected 2 or 3)");
     }
 
     Ok(())
 }
 
 /// Step 5
-fn prompt_ssh_config() -> Result<SshConfig, String> {
+fn prompt_ssh_config() -> anyhow::Result<SshConfig> {
     println!("Step 5: SSH Configuration");
     println!("  1) Password");
     println!("  2) SSH Key");
@@ -310,7 +472,7 @@ fn prompt_ssh_config() -> Result<SshConfig, String> {
 }
 
 /// Step 6
-fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, String> {
+fn prompt_uefi_config(os: GuestOs, arch: Arch) -> anyhow::Result<Option<UefiSplit>> {
     println!("Step 6: UEFI Configuration");
 
     if matches!(os, GuestOs::Windows) {
@@ -357,7 +519,7 @@ fn prompt_uefi_config(os: GuestOs, arch: Arch) -> Result<Option<UefiSplit>, Stri
     Ok(Some(UefiSplit { code, vars }))
 }
 
-fn prompt_uefi_file(label: &str, default: Option<&str>) -> Result<String, String> {
+fn prompt_uefi_file(label: &str, default: Option<&str>) -> anyhow::Result<String> {
     loop {
         let input = if let Some(def) = default {
             read_line_with_default(label, def)?
@@ -481,17 +643,14 @@ pub fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
 fn prompt_advanced_options(
     os: GuestOs,
     arch: Arch,
-) -> Result<
-    (
-        bool,
-        bool,
-        Option<String>,
-        Option<Vec<String>>,
-        Option<Vec<String>>,
-        Option<Vec<String>>,
-    ),
-    String,
-> {
+) -> anyhow::Result<(
+    bool,
+    bool,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<Vec<String>>,
+    Option<Vec<String>>,
+)> {
     println!("Step 7: Advanced Options");
 
     let default_tpm = matches!(os, GuestOs::Windows);
@@ -599,7 +758,7 @@ fn prompt_advanced_options(
     ))
 }
 
-pub fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
+pub fn prompt_yes_no(prompt: &str, default: bool) -> anyhow::Result<bool> {
     let default_str = if default { "Y/n" } else { "y/N" };
     loop {
         let input = read_line(&format!("{prompt} [{default_str}]: "))?;
@@ -615,7 +774,7 @@ pub fn prompt_yes_no(prompt: &str, default: bool) -> Result<bool, String> {
 }
 
 #[allow(clippy::type_complexity)]
-fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>), String> {
+fn prompt_macos_x64_config() -> anyhow::Result<(Option<Vec<String>>, Option<Vec<String>>)> {
     println!();
     println!("  OpenCore Bootloader");
     println!("    macOS on QEMU x64 requires an OpenCore bootloader image.");
@@ -669,7 +828,7 @@ fn prompt_macos_x64_config() -> Result<(Option<Vec<String>>, Option<Vec<String>>
     Ok((Some(additional_drives), Some(additional_devices)))
 }
 
-fn prompt_readonly_isos() -> Result<Option<Vec<String>>, String> {
+fn prompt_readonly_isos() -> anyhow::Result<Option<Vec<String>>> {
     println!();
     println!("  Read-only ISO drives (optional)");
     println!("    Attach raw ISO images as read-only virtio drives.");

@@ -4,6 +4,8 @@
 pub mod backend;
 pub mod cli;
 pub mod file_lock;
+pub mod global_paths;
+pub mod orphan;
 pub mod run;
 pub mod run_state;
 pub mod transfer_lock;
@@ -11,7 +13,8 @@ pub mod vm_image;
 pub mod web;
 pub mod yaml;
 
-use std::path::{Path, PathBuf};
+use global_paths::VciGlobalPaths;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use argh::FromArgs;
@@ -33,9 +36,10 @@ pub fn run_virtci_cli(paths: &VciGlobalPaths) {
 }
 
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
-    setup_signal_handlers();
+    let orphans = orphan::OrphanTracker::new();
+    setup_signal_handlers(orphans.clone());
 
-    backend::qemu::cleanup_stale_qemu_files(&paths.temp);
+    backend::qemu::cleanup_stale_qemu_files(paths);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     match args.command {
@@ -50,7 +54,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                     e
                 )
             });
-            let jobs = extract_yaml_workflows(&run_args, paths);
+            let jobs = extract_yaml_workflows(&run_args, paths, &orphans);
             run_jobs(jobs, paths);
         }
         cli::Command::Setup(setup_args) => {
@@ -85,7 +89,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             vm_image::remove::run_remove(&remove_args, paths);
         }
         cli::Command::Boot(boot_args) => {
-            vm_image::boot::run_boot(&boot_args, paths);
+            vm_image::boot::run_boot(&boot_args, paths, &orphans);
         }
         cli::Command::Shell(shell_args) => {
             run_state::run_shell(&shell_args, &paths.temp);
@@ -185,7 +189,7 @@ fn run_jobs(jobs: Vec<run::Job>, paths: &VciGlobalPaths) {
         }
     }
 
-    backend::qemu::cleanup_stale_qemu_files(&paths.temp);
+    backend::qemu::cleanup_stale_qemu_files(paths);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
 
     if failed {
@@ -199,7 +203,22 @@ fn run_cleanup(args: cli::CleanupArgs, paths: &VciGlobalPaths) {
     use colored::Colorize;
     use std::io::{self, Write};
 
-    let files = find_vci_temp_files(&paths.temp);
+    // Mirrors `cleanup_stale_qemu_files()`
+    #[cfg(target_os = "windows")]
+    let temp_dirs: Vec<PathBuf> = {
+        let mut dirs = vec![paths.temp.clone()];
+        if let Some(wsl) = &paths.wsl {
+            dirs.push(wsl.to_unc(&wsl.temp));
+        }
+        dirs
+    };
+    #[cfg(not(target_os = "windows"))]
+    let temp_dirs: Vec<PathBuf> = vec![paths.temp.clone()];
+
+    let files: Vec<PathBuf> = temp_dirs
+        .iter()
+        .flat_map(|dir| find_vci_temp_files(dir))
+        .collect();
 
     if files.is_empty() {
         println!("{}", "No temporary VCI files found".dimmed());
@@ -277,21 +296,21 @@ fn find_vci_temp_files(temp_dir: &std::path::Path) -> Vec<PathBuf> {
     files
 }
 
-fn setup_signal_handlers() {
+fn setup_signal_handlers(orphans: orphan::OrphanTracker) {
     // background thread handles signals (kinda silly but whatever, tokio you do you)
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("Failed to create signal handler runtime");
 
         rt.block_on(async {
-            signal_handler().await;
+            signal_handler(orphans).await;
         });
     });
 }
 
-async fn signal_handler() {
+async fn signal_handler(orphans: orphan::OrphanTracker) {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
@@ -324,6 +343,7 @@ async fn signal_handler() {
                         .arg(pid.to_string())
                         .status();
                 }
+                orphans.kill_all();
                 std::process::exit(1);
             }
 
@@ -344,6 +364,7 @@ async fn signal_handler() {
                 }
             }
 
+            orphans.kill_all();
             std::process::exit(1);
         }
     }
@@ -365,6 +386,7 @@ async fn signal_handler() {
             _ = ctrl_shutdown.recv() => {},
         }
 
+        orphans.kill_all();
         std::process::exit(1);
     }
 }
@@ -378,7 +400,7 @@ fn load_image_description(image_name: &str, paths: &VciGlobalPaths) -> vm_image:
             paths.system_home.display()
         )
     });
-    let vci_path = home.join(format!("{image_name}.vci"));
+    let vci_path = home.path;
     let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|e| {
         panic!(
             "Failed to read image description at {}: {e}",
@@ -391,7 +413,11 @@ fn load_image_description(image_name: &str, paths: &VciGlobalPaths) -> vm_image:
     desc
 }
 
-fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<run::Job> {
+fn extract_yaml_workflows(
+    args: &cli::RunArgs,
+    paths: &VciGlobalPaths,
+    orphans: &orphan::OrphanTracker,
+) -> Vec<run::Job> {
     let file_contents = std::fs::read_to_string(&args.workflow)
         .unwrap_or_else(|_| panic!("Failed to load workflow file: {}", args.workflow.display()));
 
@@ -482,25 +508,26 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
         assert!(!steps.is_empty(), "Expected at least 1 step");
 
         let backend: Box<dyn backend::VmBackend> = match &image_desc.backend {
-            vm_image::BackendConfig::Qemu(_) => Box::new(
-                backend::qemu::QemuBackend::new(
+            vm_image::BackendConfig::Qemu(_) => {
+                let mut b = backend::qemu::backend::QemuBackend::new(
                     name.clone(),
                     image_desc,
-                    cpus,
-                    memory_mb,
-                    &paths.temp,
+                    paths,
+                    true,
+                    false,
+                    false,
+                    orphans.clone(),
                 )
-                .unwrap_or_else(|()| panic!("Failed to create QEMU backend for job '{}'", &name)),
-            ),
+                .unwrap_or_else(|e| panic!("Failed to create QEMU backend for job '{name}': {e}"));
+                b.start_config.cpus = Some(cpus);
+                b.start_config.memory_mb = Some(memory_mb);
+                Box::new(b)
+            }
             vm_image::BackendConfig::Tart(_) => Box::new(
-                backend::tart::TartBackend::new(
-                    name.clone(),
-                    image_desc,
-                    cpus,
-                    memory_mb,
-                    &paths.temp,
-                )
-                .unwrap_or_else(|()| panic!("Failed to create Tart backend for job '{}'", &name)),
+                backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb, paths)
+                    .unwrap_or_else(|e| {
+                        panic!("Failed to create Tart backend for job '{name}': {e}")
+                    }),
             ),
         };
 
@@ -513,105 +540,4 @@ fn extract_yaml_workflows(args: &cli::RunArgs, paths: &VciGlobalPaths) -> Vec<ru
     }
 
     jobs
-}
-
-/// Tests need to be able to control where they're writing to. Using
-/// `VciGlobalPaths::default()` works for normal use.
-pub struct VciGlobalPaths {
-    pub user_home: PathBuf,
-    pub system_home: PathBuf,
-    pub temp: PathBuf,
-}
-
-impl VciGlobalPaths {
-    fn default_user_home_path() -> PathBuf {
-        if let Some(vci_home) = std::env::var_os("VCI_USER_HOME") {
-            return PathBuf::from(vci_home);
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            // ~/.vci/ (kinda matches tart)
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(".vci");
-            }
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // $XDG_DATA_HOME/vci or ~/.local/share/vci/
-            if let Some(xdg_data) = std::env::var_os("XDG_DATA_HOME") {
-                return PathBuf::from(xdg_data).join("vci");
-            }
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(".local/share/vci");
-            }
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            // %LOCALAPPDATA%\vci\
-            if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-                return PathBuf::from(local_app_data).join("vci");
-            }
-        }
-
-        #[allow(unreachable_code)]
-        PathBuf::from(".vci")
-    }
-
-    pub fn resolve_image_home(&self, name: &str) -> Option<&Path> {
-        let filename = format!("{name}.vci");
-        if self.user_home.join(&filename).exists() {
-            Some(&self.user_home)
-        } else if self.system_home.join(&filename).exists() {
-            Some(&self.system_home)
-        } else {
-            None
-        }
-    }
-
-    pub fn image_homes(&self) -> [&Path; 2] {
-        [&self.user_home, &self.system_home]
-    }
-
-    fn default_system_home_path() -> PathBuf {
-        if let Some(vci_system_home) = std::env::var_os("VCI_SYSTEM_HOME") {
-            return PathBuf::from(vci_system_home);
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            // /Library/Application Support/vci/
-            return PathBuf::from("/Library/Application Support/vci");
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // /var/lib/vci/ (FHS variable state, not subject to tmpfiles cleanup)
-            return PathBuf::from("/var/lib/vci");
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            // %PROGRAMDATA%\vci\ (typically C:\ProgramData\vci)
-            if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
-                return PathBuf::from(program_data).join("vci");
-            }
-            return PathBuf::from(r"C:\ProgramData\vci");
-        }
-
-        #[allow(unreachable_code)]
-        PathBuf::from(".vci-system")
-    }
-}
-
-impl Default for VciGlobalPaths {
-    fn default() -> Self {
-        Self {
-            user_home: Self::default_user_home_path(),
-            system_home: Self::default_system_home_path(),
-            temp: std::env::temp_dir().join("vci"),
-        }
-    }
 }

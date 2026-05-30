@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 // https://stackoverflow.com/questions/75527167/serde-deserialize-string-into-u64
 use serde_with::{serde_as, DisplayFromStr};
 
+use anyhow::Context;
+
 use crate::VciGlobalPaths;
 
 /// TTL for remote images if 24 hours by default
@@ -18,6 +20,7 @@ pub mod boot;
 pub mod export;
 pub mod import;
 pub mod list;
+pub mod progress;
 pub mod remove;
 pub mod setup_qemu;
 #[cfg(target_os = "macos")]
@@ -30,6 +33,58 @@ pub mod setup_tart;
 pub struct UefiSplit {
     pub code: String,
     pub vars: String,
+}
+
+/// Is the host environment that will be running the stuff. Mostly relevant for Windows / WSL2.
+#[derive(Debug, Clone)]
+pub enum HostExecTarget {
+    Linux,
+    MacOS,
+    WindowsNative,
+    /// Stores the distro
+    WSL2(String),
+}
+
+#[must_use]
+pub fn running_inside_wsl() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // The interop env vars are present in any WSL2 shell; fall back to the kernel release
+        // string ("...-microsoft-standard-WSL2") for stripped/`env -i` environments.
+        if std::env::var_os("WSL_INTEROP").is_some()
+            || std::env::var_os("WSL_DISTRO_NAME").is_some()
+        {
+            return true;
+        }
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .is_ok_and(|s| {
+                let s = s.to_ascii_lowercase();
+                s.contains("microsoft") || s.contains("wsl")
+            })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+#[must_use]
+pub fn host_lacks_smm(exec_target: &HostExecTarget) -> bool {
+    match exec_target {
+        HostExecTarget::WindowsNative | HostExecTarget::WSL2(_) => true,
+        HostExecTarget::Linux => running_inside_wsl(),
+        HostExecTarget::MacOS => false,
+    }
+}
+
+#[must_use]
+pub fn is_maybe_secure_boot_firmware(uefi: &UefiSplit) -> bool {
+    let haystack = format!(
+        "{} {}",
+        uefi.code.to_ascii_lowercase(),
+        uefi.vars.to_ascii_lowercase()
+    );
+    haystack.contains("secboot") || haystack.contains(".ms.") || haystack.contains("snakeoil")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +137,20 @@ pub struct QemuConfig {
     pub nvme: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly_isos: Option<Vec<String>>,
+}
+
+impl QemuConfig {
+    /// On a Windows host, whether this image must run through WSL2 (KVM) rather than native
+    /// QEMU/WHPX. Two independent reasons, both hard limitations of the Windows hypervisor stack:
+    /// - **TPM**: swtpm only exists in the WSL2 distro.
+    /// - **UEFI**: WHPX cannot emulate the OVMF `-pflash` MMIO (QEMU GitLab #513), so *any* UEFI
+    ///   guest fails on native WHPX. Legacy-BIOS guests (`uefi: None`) run fine natively.
+    ///
+    /// On non-Windows hosts this predicate is irrelevant (the exec target is chosen by OS).
+    #[must_use]
+    pub fn requires_wsl2(&self) -> bool {
+        self.tpm || self.uefi.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,21 +226,22 @@ pub struct ImageDescription {
     pub managed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteInfo>,
+    #[cfg(target_os = "windows")]
+    #[serde(skip)]
+    pub wsl_distro: Option<String>,
 }
 
-pub fn read_line(prompt: &str) -> Result<String, String> {
+pub fn read_line(prompt: &str) -> anyhow::Result<String> {
     print!("{prompt}");
-    io::stdout().flush().map_err(|e| e.to_string())?;
+    io::stdout().flush()?;
 
     let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .map_err(|e| e.to_string())?;
+    io::stdin().read_line(&mut input)?;
 
     Ok(input.trim().to_string())
 }
 
-pub fn read_line_with_default(prompt: &str, default: &str) -> Result<String, String> {
+pub fn read_line_with_default(prompt: &str, default: &str) -> anyhow::Result<String> {
     let full_prompt = format!("{prompt} [{default}]: ");
     let input = read_line(&full_prompt)?;
 
@@ -229,11 +299,10 @@ pub fn validate_image_name(name: &str, paths: &VciGlobalPaths) -> Result<(), Str
     }
 
     if let Some(home) = paths.resolve_image_home(name) {
-        let vci_path = home.join(format!("{name}.vci"));
         return Err(format!(
             "VCI image '{}' already exists at {}",
             name,
-            vci_path.display()
+            home.path.display()
         ));
     }
 
@@ -401,4 +470,18 @@ pub fn expand_path(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+pub fn load_image(name: &str, file_path: &Path) -> anyhow::Result<ImageDescription> {
+    let contents = std::fs::read_to_string(file_path).with_context(|| {
+        format!(
+            "Failed to load image description '{}' (looked at {})",
+            name,
+            file_path.display()
+        )
+    })?;
+    let mut desc: ImageDescription = serde_json::from_str(&contents)
+        .with_context(|| format!("Failed to parse image description '{name}'"))?;
+    desc.name = name.to_string();
+    Ok(desc)
 }

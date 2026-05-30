@@ -30,18 +30,31 @@ pub fn run_list(verbose: bool, paths: &VciGlobalPaths) {
         }
     } else {
         for img in &images {
+            #[cfg(target_os = "windows")]
+            if let Some(distro) = &img.wsl_distro {
+                println!("{}  (WSL2: {distro})", img.name);
+            } else {
+                println!("{}", img.name);
+            }
+            #[cfg(not(target_os = "windows"))]
             println!("{}", img.name);
         }
     }
 }
 
 pub fn load_all_images(paths: &VciGlobalPaths) -> Vec<ImageDescription> {
-    let mut images = Vec::new();
+    let mut images: Vec<ImageDescription> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     for home in paths.image_homes() {
-        for img in load_images_in(home) {
+        for img in load_images_in(&home.path) {
             if seen.insert(img.name.clone()) {
+                #[cfg(target_os = "windows")]
+                let img = {
+                    let mut img = img;
+                    img.wsl_distro.clone_from(&home.wsl_distro);
+                    img
+                };
                 images.push(img);
             }
         }
@@ -88,6 +101,10 @@ fn load_images_in(home_path: &Path) -> Vec<ImageDescription> {
 
 pub fn print_verbose(img: &ImageDescription) {
     println!("{}:", img.name);
+    #[cfg(target_os = "windows")]
+    if let Some(distro) = &img.wsl_distro {
+        println!("  Location: WSL2 distro '{distro}'");
+    }
     println!("  OS:   {:?}", img.os);
     println!("  Arch: {:?}", img.arch);
     println!("  SSH user: {}", img.ssh.user);

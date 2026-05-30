@@ -3,6 +3,7 @@
 
 mod command;
 mod copy;
+pub mod run_id;
 
 use std::{
     collections::HashMap,
@@ -11,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use russh::client;
 use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
@@ -58,10 +60,8 @@ pub enum StepKind {
 }
 
 impl Job {
-    pub async fn run(&mut self, _paths: &VciGlobalPaths) -> Result<(), String> {
+    pub async fn run(&mut self, _paths: &VciGlobalPaths) -> anyhow::Result<()> {
         use colored::Colorize;
-
-        let ssh_target = self.backend.ssh_target();
 
         let (initial_cfg, skip_first) = match &self.steps[0].kind {
             StepKind::Restart(r) => (
@@ -76,12 +76,29 @@ impl Job {
         };
         self.backend
             .start_vm(initial_cfg)
-            .map_err(|()| format!("Failed to start VM: {}", &self.name))?;
+            .with_context(|| format!("Failed to start VM: {}", &self.name))?;
+
+        let ssh_target = self.backend.ssh_target();
 
         match wait_for_ssh(&ssh_target, SSH_WAIT_TIMEOUT).await {
-            Some(secs) => println!("{}", format!("SSH ready after {secs}s").dimmed()),
+            Some(secs) => {
+                let ssh_cmd = match &ssh_target.cred.key {
+                    Some(key) => format!(
+                        "ssh -i {} {}@{} -p {}",
+                        key, ssh_target.cred.user, ssh_target.ip, ssh_target.port
+                    ),
+                    None => format!(
+                        "ssh {}@{} -p {}",
+                        ssh_target.cred.user, ssh_target.ip, ssh_target.port
+                    ),
+                };
+                println!(
+                    "{}",
+                    format!("SSH ready after {secs}s. [{ssh_cmd}]").dimmed()
+                );
+            }
             None => {
-                return Err(format!("SSH not available after {SSH_WAIT_TIMEOUT}s"));
+                anyhow::bail!("SSH not available after {SSH_WAIT_TIMEOUT}s");
             }
         }
 
@@ -96,9 +113,9 @@ impl Job {
                     .await
                 {
                     Ok(Ok(_)) => {}
-                    Ok(Err(e)) => return Err(format!("offline enforcement failed: {e}")),
+                    Ok(Err(e)) => anyhow::bail!("offline enforcement failed: {e}"),
                     Err(_) => {
-                        return Err("offline enforcement timed out after 30s".to_string());
+                        anyhow::bail!("offline enforcement timed out after 30s");
                     }
                 }
             }
@@ -175,7 +192,7 @@ impl Job {
                     if continue_on_error {
                         println!("{}", format!("  Failed (continuing): {e}").yellow());
                     } else {
-                        return Err(format!("Step '{step_name}' failed: {e}"));
+                        anyhow::bail!("Step '{step_name}' failed: {e}");
                     }
                 }
             }
@@ -184,7 +201,7 @@ impl Job {
         Ok(())
     }
 
-    async fn run_step(&mut self, step_idx: usize) -> Result<(), String> {
+    async fn run_step(&mut self, step_idx: usize) -> anyhow::Result<()> {
         use colored::Colorize;
 
         let step = &self.steps[step_idx];
@@ -228,34 +245,79 @@ impl Job {
                                 .red()
                                 .bold()
                         );
-                        format!("Timed out after {}s", step.timeout)
-                    })??;
+                        anyhow::anyhow!("Timed out after {}s", step.timeout)
+                    })?
+                    .map_err(|e| anyhow::anyhow!(e))?;
 
                 if result.exit_code != 0 {
-                    return Err(format!("Exit code: {}", result.exit_code));
+                    anyhow::bail!("Exit code: {}", result.exit_code);
                 }
             }
             StepKind::Copy(copy_spec) => {
                 let ssh = self.backend.ssh_target();
+                let guest_os = self.backend.os();
+                let is_host_to_vm = copy_spec.to.starts_with("vm:");
+                let host_is_windows = cfg!(target_os = "windows");
+                let guest_is_windows = guest_os == GuestOs::Windows;
+
+                if !copy_spec.crlf {
+                    let warning = if is_host_to_vm {
+                        if host_is_windows && !guest_is_windows {
+                            Some("[VirtCI] Copying files from a Windows host to a non-Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                        } else if !host_is_windows && guest_is_windows {
+                            Some("[VirtCI] Copying files from a non-Windows host to a Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                        } else {
+                            None
+                        }
+                    } else if guest_is_windows && !host_is_windows {
+                        Some("[VirtCI] Copying files from a Windows guest to a non-Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                    } else if !guest_is_windows && host_is_windows {
+                        Some("[VirtCI] Copying files from a non-Windows guest to a Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                    } else {
+                        None
+                    };
+                    if let Some(warning) = warning {
+                        println!("{}", warning.yellow());
+                    }
+                }
+
+                // In-flight tar conversion. Host->VM CRLF is still done in-guest
+                // by `convert_windows_line_endings` below, not here.
+                let line_endings = if !copy_spec.crlf {
+                    copy::LineEndingConversion::None
+                } else if is_host_to_vm {
+                    if host_is_windows && !guest_is_windows {
+                        copy::LineEndingConversion::ToLf
+                    } else {
+                        copy::LineEndingConversion::None
+                    }
+                } else if guest_is_windows && !host_is_windows {
+                    copy::LineEndingConversion::ToLf
+                } else if !guest_is_windows && host_is_windows {
+                    copy::LineEndingConversion::ToCrlf
+                } else {
+                    copy::LineEndingConversion::None
+                };
+
                 let copy_future = copy::copy_files_tar(
                     &ssh,
                     &copy_spec.from,
                     &copy_spec.to,
                     &copy_spec.exclude,
-                    self.backend.os(),
+                    guest_os,
                     Some(timeout_duration),
                     copy_spec.no_mkdir,
                     copy_spec.allow_empty,
+                    line_endings,
                 );
 
                 tokio::time::timeout(timeout_duration, copy_future)
                     .await
-                    .map_err(|_| format!("Copy timed out after {}s", step.timeout))??;
+                    .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", step.timeout))?
+                    .map_err(|e| anyhow::anyhow!(e))?;
 
-                let is_host_to_vm = copy_spec.to.starts_with("vm:");
-                let should_convert_line_endings =
-                    is_host_to_vm && self.backend.os() == GuestOs::Windows && copy_spec.crlf;
-                if should_convert_line_endings {
+                let convert_to_crlf = is_host_to_vm && guest_is_windows && copy_spec.crlf;
+                if convert_to_crlf {
                     copy::convert_windows_line_endings(&ssh, &copy_spec.to).await;
                 }
             }
@@ -328,16 +390,14 @@ impl Job {
                     };
 
                     self.backend.stop_vm();
-                    self.backend
-                        .start_vm(cfg)
-                        .map_err(|()| "Failed to restart VM")?;
+                    self.backend.start_vm(cfg).context("Failed to restart VM")?;
 
                     let ssh = self.backend.ssh_target();
                     match wait_for_ssh(&ssh, SSH_WAIT_TIMEOUT).await {
                         Some(secs) => {
                             println!("{}", format!("  SSH ready after {secs}s").dimmed());
                         }
-                        None => return Err("SSH not available after restart".to_string()),
+                        None => anyhow::bail!("SSH not available after restart"),
                     }
 
                     if self.backend.is_offline() {
@@ -359,12 +419,10 @@ impl Job {
                             {
                                 Ok(Ok(_)) => {}
                                 Ok(Err(e)) => {
-                                    return Err(format!("offline enforcement failed: {e}"))
+                                    anyhow::bail!("offline enforcement failed: {e}")
                                 }
                                 Err(_) => {
-                                    return Err(
-                                        "offline enforcement timed out after 30s".to_string()
-                                    )
+                                    anyhow::bail!("offline enforcement timed out after 30s")
                                 }
                             }
                         }

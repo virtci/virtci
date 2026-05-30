@@ -8,6 +8,7 @@ use std::collections::HashMap;
 pub type Workflow = HashMap<String, Job>;
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Job {
     pub image: String,
     pub cpus: Option<u32>,
@@ -18,6 +19,7 @@ pub struct Job {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Step {
     pub name: Option<String>,
     pub run: Option<String>,
@@ -32,6 +34,7 @@ pub struct Step {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CopySpec {
     pub from: String,
     pub to: String,
@@ -46,6 +49,7 @@ pub struct CopySpec {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RestartSpec {
     /// `None` preserves the VM's current offline state.
     pub offline: Option<bool>,

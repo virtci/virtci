@@ -3,8 +3,7 @@ use std::path::Path;
 use crate::{
     cli::RemoveArgs,
     vm_image::{
-        list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig,
-        ImageDescription, QemuConfig,
+        list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig, QemuConfig,
     },
     VciGlobalPaths,
 };
@@ -20,7 +19,12 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
                 paths.system_home.display()
             )
         });
-    let desc = load_image(&remove_args.name, home).expect("Failed to load image");
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut desc = super::load_image(&remove_args.name, &home.path).expect("Failed to load image");
+    #[cfg(target_os = "windows")]
+    {
+        desc.wsl_distro.clone_from(&home.wsl_distro);
+    }
     let name = &desc.name;
 
     println!("[VirtCI] Removing VM image:");
@@ -36,10 +40,18 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
         return;
     }
 
+    #[cfg(target_os = "windows")]
+    if let Some(distro) = home.wsl_distro.clone() {
+        remove_wsl2_image(&home, name, &distro);
+        return;
+    }
+
     if desc.managed.is_some() && *desc.managed.as_ref().unwrap() {
+        let mut home_path = home.path.clone();
+        home_path.pop();
         match &desc.backend {
             BackendConfig::Qemu(ref qemu) => {
-                if let Err(e) = delete_qemu_managed_files(home, &desc.name, qemu) {
+                if let Err(e) = delete_qemu_managed_files(&home_path, &desc.name, qemu) {
                     println!(
                         "Failed to delete QEMU backend files: {e}{}",
                         permission_hint(&e)
@@ -68,7 +80,7 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
             }
         }
 
-        let vci_image_folder_path = home.join(name);
+        let vci_image_folder_path = home_path.join(name);
         if let Err(e) = std::fs::remove_dir_all(vci_image_folder_path) {
             println!(
                 "Failed to delete VirtCI VM folder: {e}{}",
@@ -77,12 +89,33 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
         }
     }
 
-    let vci_image_description_path = home.join(format!("{name}.vci"));
-    if let Err(e) = std::fs::remove_file(vci_image_description_path) {
+    if let Err(e) = std::fs::remove_file(&home.path) {
         println!(
             "Failed to delete VirtCI VM metadata file: {e}{}",
             permission_hint(&e)
         );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn remove_wsl2_image(home: &crate::global_paths::TargetPath, name: &str, distro: &str) {
+    let vci_native = home.native_path(); // e.g. /home/<user>/<name>.vci
+    let managed_dir = match vci_native.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{name}"),
+        None => name.to_string(),
+    };
+
+    let output = std::process::Command::new("wsl")
+        .args(["-d", distro, "--", "rm", "-rf", &managed_dir, &vci_native])
+        .output();
+
+    match output {
+        Ok(proc) if proc.status.success() => {}
+        Ok(proc) => println!(
+            "Failed to delete WSL2 VM files in distro '{distro}': {}",
+            String::from_utf8_lossy(&proc.stderr).trim()
+        ),
+        Err(e) => println!("Failed to run `wsl rm -rf` in distro '{distro}': {e}"),
     }
 }
 
@@ -115,19 +148,4 @@ fn delete_qemu_managed_files(
     }
 
     Ok(())
-}
-
-fn load_image(name: &str, home_path: &Path) -> Result<ImageDescription, String> {
-    let vci_path = home_path.join(format!("{name}.vci"));
-    let contents = std::fs::read_to_string(&vci_path).map_err(|_| {
-        format!(
-            "Failed to load image description '{}' (looked at {})",
-            name,
-            vci_path.display()
-        )
-    })?;
-    let mut desc: ImageDescription = serde_json::from_str(&contents)
-        .map_err(|e| format!("Failed to parse image description '{name}': {e}"))?;
-    desc.name = name.to_string();
-    Ok(desc)
 }

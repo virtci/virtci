@@ -6,6 +6,7 @@ use std::{
     str::FromStr,
 };
 
+pub mod exec;
 pub mod qemu;
 pub mod tart;
 
@@ -23,9 +24,7 @@ pub struct VmStartConfig {
 }
 
 pub trait VmBackend {
-    fn setup_clone(&mut self, temp_path: &Path) -> Result<(), ()>;
-
-    fn start_vm(&mut self, cfg: VmStartConfig) -> Result<(), ()>;
+    fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()>;
 
     fn is_offline(&self) -> bool {
         false

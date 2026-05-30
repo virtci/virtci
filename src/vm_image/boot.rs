@@ -6,12 +6,13 @@ use colored::Colorize;
 use crate::{
     backend::VmBackend,
     cli::BootArgs,
+    orphan::OrphanTracker,
     run::{wait_for_ssh, SSH_WAIT_TIMEOUT},
     vm_image::{BackendConfig, ImageDescription, SshTarget},
     VciGlobalPaths,
 };
 
-pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) {
+pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths, orphans: &OrphanTracker) {
     let image_desc = load_image(&args.name, paths).unwrap_or_else(|e| {
         eprintln!(
             "{}",
@@ -48,48 +49,46 @@ pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths) {
     }
 
     match image_desc.backend {
-        BackendConfig::Qemu(_) => boot_qemu(image_desc, args, paths),
+        BackendConfig::Qemu(_) => boot_qemu(image_desc, args, paths, orphans),
         BackendConfig::Tart(_) => boot_tart(image_desc, args, paths),
     }
 }
 
-fn boot_qemu(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPaths) {
-    use crate::backend::{qemu::QemuBackend, VmStartConfig};
+fn boot_qemu(
+    image_desc: ImageDescription,
+    args: &BootArgs,
+    paths: &VciGlobalPaths,
+    orphans: &OrphanTracker,
+) {
+    use crate::backend::{qemu::backend::QemuBackend, VmStartConfig};
 
     let (cpus, memory_mb) = resolve_cpus_and_memory(args);
 
-    let mut backend = if args.clone {
-        let mut b = QemuBackend::new(args.name.clone(), image_desc, cpus, memory_mb, &paths.temp)
-            .unwrap_or_else(|()| {
-                eprintln!("{}", "Failed to initialize QEMU backend for boot".red());
-                std::process::exit(1);
-            });
-        b.graphics = !args.nographics;
-        b.serial_stdio = true;
-        b
-    } else {
-        QemuBackend::new_base(
-            args.name.clone(),
-            image_desc,
-            cpus,
-            memory_mb,
-            args.nographics,
-            &paths.temp,
-        )
-        .unwrap_or_else(|()| {
-            eprintln!("{}", "Failed to initialize QEMU backend for boot".red());
-            std::process::exit(1);
-        })
-    };
+    let mut backend = QemuBackend::new(
+        args.name.clone(),
+        image_desc,
+        paths,
+        args.clone,
+        !args.nographics,
+        true,
+        orphans.clone(),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!(
+            "{}",
+            format!("Failed to initialize QEMU backend for boot: {e}").red()
+        );
+        std::process::exit(1);
+    });
 
     backend
         .start_vm(VmStartConfig {
             offline: Some(args.offline),
-            cpus: None,
-            memory_mb: None,
+            cpus: Some(cpus),
+            memory_mb: Some(memory_mb),
         })
-        .unwrap_or_else(|()| {
-            eprintln!("{}", "Failed to start VM".red());
+        .unwrap_or_else(|e| {
+            eprintln!("{}", format!("Failed to start VM: {e}").red());
             std::process::exit(1);
         });
 
@@ -117,12 +116,14 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
         let (cpus, memory_mb) = resolve_cpus_and_memory(args);
 
         let mut backend = if args.clone {
-            let mut b =
-                TartBackend::new(args.name.clone(), image_desc, cpus, memory_mb, &paths.temp)
-                    .unwrap_or_else(|()| {
-                        eprintln!("{}", "Failed to initialize Tart backend for boot".red());
-                        std::process::exit(1);
-                    });
+            let mut b = TartBackend::new(args.name.clone(), image_desc, cpus, memory_mb, paths)
+                .unwrap_or_else(|e| {
+                    eprintln!(
+                        "{}",
+                        format!("Failed to initialize Tart backend for boot: {e}").red()
+                    );
+                    std::process::exit(1);
+                });
             b.graphics = !args.nographics;
             b
         } else {
@@ -132,10 +133,13 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
                 cpus,
                 memory_mb,
                 args.nographics,
-                &paths.temp,
+                paths,
             )
-            .unwrap_or_else(|()| {
-                eprintln!("{}", "Failed to initialize Tart backend for boot".red());
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "{}",
+                    format!("Failed to initialize Tart backend for boot: {e}").red()
+                );
                 std::process::exit(1);
             })
         };
@@ -155,8 +159,8 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
                 cpus: None,
                 memory_mb: None,
             })
-            .unwrap_or_else(|()| {
-                eprintln!("{}", "Failed to start VM".red());
+            .unwrap_or_else(|e| {
+                eprintln!("{}", format!("Failed to start VM: {e}").red());
                 std::process::exit(1);
             });
 
@@ -235,7 +239,7 @@ fn load_image(name: &str, paths: &VciGlobalPaths) -> Result<ImageDescription, St
             paths.system_home.display()
         )
     })?;
-    let vci_path = home.join(format!("{name}.vci"));
+    let vci_path = home.path;
     let contents = std::fs::read_to_string(&vci_path)
         .map_err(|e| format!("Failed to read {}: {e}", vci_path.display()))?;
     let mut desc: ImageDescription = serde_json::from_str(&contents)

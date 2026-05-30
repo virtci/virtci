@@ -29,7 +29,7 @@ irm https://virtci.com/install.ps1 | iex
 
 ### Setup VM
 
-Setup a QEMU or Tart VM through your method of choice. See [docs](/docs) for more details information on setting up from a platform specific ISO.
+Setup a QEMU or Tart VM through your method of choice. See [docs](/docs) for more details information on setting up from a platform specific ISO. Windows VMs with BitLocker encryption will not run on Windows or WSL2 hosts.
 
 ### Add VM to VirtCI
 

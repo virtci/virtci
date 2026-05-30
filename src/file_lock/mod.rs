@@ -25,10 +25,19 @@ pub struct LockMetadata {
     pid: u32,
     process_start_time: u64,
     locked_at: u64,
+    /// May be the marker for the WSL2 process if this flock is for that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<crate::vm_image::SshTarget>,
+    /// The WSL2 distro this run's QEMU/swtpm live in, if any. Set by the QEMU
+    /// backend before it spawns anything, so a later `cleanup` can reap orphans
+    /// left by an abrupt death (SIGKILL/crash) via `pkill -f run_name` inside the
+    /// distro. `None` for native runs, where there is no in-distro process to
+    /// reap and the marker would be meaningless.
+    #[cfg(target_os = "windows")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
 }
 
 impl LockMetadata {
@@ -43,13 +52,31 @@ impl LockMetadata {
             locked_at: now,
             run_name: None,
             ssh: None,
+            #[cfg(target_os = "windows")]
+            wsl_distro: None,
         }
     }
 
-    pub fn with_run_info(run_name: String, ssh: crate::vm_image::SshTarget) -> Self {
+    /// This must be written to the `vci-active-{id:05}` flock BEFORE any process actually spawns.
+    /// The cleanup runs on `run_name` and `wsl_distro`, so a crash between spawn and write
+    /// would orphan them.
+    #[cfg_attr(not(target_os = "windows"), allow(clippy::needless_pass_by_value))]
+    pub fn with_run_info(
+        run_name: String,
+        ssh: crate::vm_image::SshTarget,
+        wsl_distro: Option<String>,
+    ) -> Self {
         let mut meta = Self::new();
         meta.run_name = Some(run_name);
         meta.ssh = Some(ssh);
+        #[cfg(target_os = "windows")]
+        {
+            meta.wsl_distro = wsl_distro;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = wsl_distro;
+        }
         meta
     }
 }
@@ -178,6 +205,20 @@ impl FileLock {
         self.file.write_all(content).map_err(|_| ())?;
         self.file.flush().map_err(|_| ())?;
         Ok(())
+    }
+
+    /// Read and parse the [`LockMetadata`] currently stored in the file.
+    ///
+    /// Intended to be called while holding the lock (e.g. just after
+    /// [`try_lock_exist`](Self::try_lock_exist) reclaimed it from a dead owner),
+    /// so the contents are stable. Returns `None` if the file is empty or does
+    /// not parse — e.g. a torn write from a process killed mid-update.
+    pub fn read_metadata(&self) -> Option<LockMetadata> {
+        let mut file = &self.file;
+        file.seek(SeekFrom::Start(0)).ok()?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).ok()?;
+        serde_json::from_str(&contents).ok()
     }
 
     /// Try to acquire a flock on an existing file without creating it.

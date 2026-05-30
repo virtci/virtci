@@ -3,11 +3,13 @@
 
 use std::{path::Path, process::Child};
 
+use anyhow::Context;
 use colored::Colorize;
 
 use crate::{
     backend::{VmBackend, VmStartConfig},
     file_lock::FileLock,
+    global_paths::VciGlobalPaths,
     vm_image::{GuestOs, ImageDescription},
 };
 
@@ -39,8 +41,8 @@ impl TartBackend {
         base_image: ImageDescription,
         cpus: u32,
         memory_mb: u64,
-        temp_path: &Path,
-    ) -> Result<Self, ()> {
+        paths: &VciGlobalPaths,
+    ) -> anyhow::Result<Self> {
         let mut backend = TartBackend {
             name,
             base_image,
@@ -51,7 +53,7 @@ impl TartBackend {
             runner: None,
         };
 
-        backend.setup_clone(temp_path)?;
+        backend.setup_clone(paths)?;
 
         Ok(backend)
     }
@@ -63,8 +65,8 @@ impl TartBackend {
         cpus: u32,
         memory_mb: u64,
         nographics: bool,
-        temp_path: &Path,
-    ) -> Result<Self, ()> {
+        paths: &VciGlobalPaths,
+    ) -> anyhow::Result<Self> {
         let mut backend = TartBackend {
             name,
             base_image,
@@ -74,32 +76,30 @@ impl TartBackend {
             graphics: !nographics,
             runner: None,
         };
-        backend.setup_base(temp_path)?;
+        backend.setup_base(paths)?;
         Ok(backend)
     }
 
-    fn setup_base(&mut self, temp_path: &Path) -> Result<(), ()> {
+    fn setup_base(&mut self, paths: &VciGlobalPaths) -> anyhow::Result<()> {
         assert!(self.runner.is_none());
+
+        let temp_path = &paths.temp;
 
         let image_lock = {
             let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
             FileLock::try_new(lock_path).map_err(|_| {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "Image '{}' is currently in use by another virtci process — \
-                         cannot boot for modification while it is running.",
-                        self.base_image.name
-                    )
-                    .red()
-                );
+                anyhow::anyhow!(
+                    "Image '{}' is currently in use by another virtci process — \
+                     cannot boot for modification while it is running.",
+                    self.base_image.name
+                )
             })?
         };
 
         let tart_config = self.base_image.backend.as_tart().unwrap();
         let vm_name = tart_config.vm_name.clone();
         let (slot_lock, _slot) =
-            get_slot_flock(temp_path).expect("Failed to acquire tart slot lock");
+            get_slot_flock(temp_path).context("Failed to acquire tart slot lock")?;
 
         let output = std::process::Command::new("tart")
             .args([
@@ -111,33 +111,28 @@ impl TartBackend {
                 &self.memory_mb.to_string(),
             ])
             .output()
-            .map_err(|e| {
-                eprintln!("{}", format!("Failed to run tart set: {e}").red());
-            })?;
+            .context("Failed to run tart set")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("{}", format!("tart set failed: {}", stderr.trim()).red());
-            return Err(());
+            anyhow::bail!("tart set failed: {}", stderr.trim());
         }
 
         // Brief headless boot to resolve DHCP IP (SHOULD be stable for 24h lease).
         let mut boot_process = std::process::Command::new("tart")
             .args(["run", &vm_name, "--no-graphics"])
             .spawn()
-            .map_err(|e| {
-                eprintln!(
-                    "{}",
-                    format!("Failed to boot tart VM for IP discovery: {e}").red()
-                );
-            })?;
+            .context("Failed to boot tart VM for IP discovery")?;
 
-        let Ok(ip) = resolve_tart_ip(&vm_name) else {
-            let _ = std::process::Command::new("tart")
-                .args(["stop", &vm_name])
-                .output();
-            let _ = boot_process.wait();
-            return Err(());
+        let ip = match resolve_tart_ip(&vm_name) {
+            Ok(ip) => ip,
+            Err(e) => {
+                let _ = std::process::Command::new("tart")
+                    .args(["stop", &vm_name])
+                    .output();
+                let _ = boot_process.wait();
+                return Err(e);
+            }
         };
 
         let _ = std::process::Command::new("tart")
@@ -155,7 +150,7 @@ impl TartBackend {
         });
 
         let ssh_target = self.ssh_target();
-        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target);
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target, None);
         if let Ok(json) = serde_json::to_string_pretty(&meta) {
             let _ = self
                 .runner
@@ -167,11 +162,11 @@ impl TartBackend {
 
         Ok(())
     }
-}
 
-impl VmBackend for TartBackend {
-    fn setup_clone(&mut self, temp_path: &Path) -> Result<(), ()> {
+    fn setup_clone(&mut self, paths: &VciGlobalPaths) -> anyhow::Result<()> {
         assert!(self.runner.is_none());
+
+        let temp_path = &paths.temp;
 
         // Shared lock: multiple CI runs on the same base image are allowed,
         // but an active `virtci boot` holding an exclusive lock will block this.
@@ -190,13 +185,13 @@ impl VmBackend for TartBackend {
                         self.base_image.name
                     ),
                 };
-                eprintln!("{}", msg.red());
+                anyhow::anyhow!(msg)
             })?
         };
 
         let tart_config = self.base_image.backend.as_tart().unwrap();
         let (slot_lock, slot) =
-            get_slot_flock(temp_path).expect("Failed to acquire tart slot lock");
+            get_slot_flock(temp_path).context("Failed to acquire tart slot lock")?;
 
         let clone_name = format!("vci-{}-{}", self.name, slot);
         let _ = std::process::Command::new("tart")
@@ -206,17 +201,14 @@ impl VmBackend for TartBackend {
         let output = std::process::Command::new("tart")
             .args(["clone", &tart_config.vm_name, &clone_name])
             .output()
-            .map_err(|e| {
-                eprintln!("{}", format!("Failed to run tart clone: {e}").red());
-            })?;
+            .context("Failed to run tart clone")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("{}", format!("tart clone failed: {}", stderr.trim()).red());
-            return Err(());
+            anyhow::bail!("tart clone failed: {}", stderr.trim());
         }
 
-        let output = std::process::Command::new("tart")
+        let output = match std::process::Command::new("tart")
             .args([
                 "set",
                 &clone_name,
@@ -226,44 +218,51 @@ impl VmBackend for TartBackend {
                 &self.memory_mb.to_string(),
             ])
             .output()
-            .map_err(|e| {
-                eprintln!("{}", format!("Failed to run tart set: {e}").red());
+        {
+            Ok(output) => output,
+            Err(e) => {
                 let _ = std::process::Command::new("tart")
                     .args(["delete", &clone_name])
                     .output();
-            })?;
+                return Err(anyhow::Error::new(e).context("Failed to run tart set"));
+            }
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("{}", format!("tart set failed: {}", stderr.trim()).red());
             let _ = std::process::Command::new("tart")
                 .args(["delete", &clone_name])
                 .output();
-            return Err(());
+            anyhow::bail!("tart set failed: {}", stderr.trim());
         }
 
         let mut boot_cmd = std::process::Command::new("tart");
         boot_cmd.args(["run", &clone_name, "--no-graphics"]);
 
-        let mut boot_process = boot_cmd.spawn().map_err(|e| {
-            eprintln!(
-                "{}",
-                format!("Failed to boot tart VM for IP discovery: {e}").red()
-            );
-            let _ = std::process::Command::new("tart")
-                .args(["delete", &clone_name])
-                .output();
-        })?;
+        let mut boot_process = match boot_cmd.spawn() {
+            Ok(boot_process) => boot_process,
+            Err(e) => {
+                let _ = std::process::Command::new("tart")
+                    .args(["delete", &clone_name])
+                    .output();
+                return Err(
+                    anyhow::Error::new(e).context("Failed to boot tart VM for IP discovery")
+                );
+            }
+        };
 
-        let Ok(ip) = resolve_tart_ip(&clone_name) else {
-            let _ = std::process::Command::new("tart")
-                .args(["stop", &clone_name])
-                .output();
-            let _ = boot_process.wait();
-            let _ = std::process::Command::new("tart")
-                .args(["delete", &clone_name])
-                .output();
-            return Err(());
+        let ip = match resolve_tart_ip(&clone_name) {
+            Ok(ip) => ip,
+            Err(e) => {
+                let _ = std::process::Command::new("tart")
+                    .args(["stop", &clone_name])
+                    .output();
+                let _ = boot_process.wait();
+                let _ = std::process::Command::new("tart")
+                    .args(["delete", &clone_name])
+                    .output();
+                return Err(e);
+            }
         };
 
         // got ip so just stop the vm
@@ -282,7 +281,7 @@ impl VmBackend for TartBackend {
         });
 
         let ssh_target = self.ssh_target();
-        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target);
+        let meta = crate::file_lock::LockMetadata::with_run_info(self.run_name(), ssh_target, None);
         if let Ok(json) = serde_json::to_string_pretty(&meta) {
             let _ = self
                 .runner
@@ -294,8 +293,10 @@ impl VmBackend for TartBackend {
 
         Ok(())
     }
+}
 
-    fn start_vm(&mut self, cfg: VmStartConfig) -> Result<(), ()> {
+impl VmBackend for TartBackend {
+    fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()> {
         if let Some(o) = cfg.offline {
             self.offline = o;
         }
@@ -320,14 +321,11 @@ impl VmBackend for TartBackend {
                     &self.memory_mb.to_string(),
                 ])
                 .output()
-                .map_err(|e| {
-                    eprintln!("{}", format!("Failed to run tart set: {e}").red());
-                })?;
+                .context("Failed to run tart set")?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!("{}", format!("tart set failed: {}", stderr.trim()).red());
-                return Err(());
+                anyhow::bail!("tart set failed: {}", stderr.trim());
             }
         }
 
@@ -348,9 +346,7 @@ impl VmBackend for TartBackend {
             );
         }
 
-        runner.tart_process = Some(cmd.spawn().map_err(|e| {
-            eprintln!("{}", format!("Failed to start tart VM: {e}").red());
-        })?);
+        runner.tart_process = Some(cmd.spawn().context("Failed to start tart VM")?);
 
         Ok(())
     }
@@ -436,7 +432,7 @@ impl Drop for TartBackend {
     }
 }
 
-fn resolve_tart_ip(clone_name: &str) -> Result<String, ()> {
+fn resolve_tart_ip(clone_name: &str) -> anyhow::Result<String> {
     const MAX_RETRIES: u32 = 30;
     const POLL_INTERVAL_S: u64 = 3;
 
@@ -458,19 +454,14 @@ fn resolve_tart_ip(clone_name: &str) -> Result<String, ()> {
         std::thread::sleep(std::time::Duration::from_secs(POLL_INTERVAL_S));
     }
 
-    eprintln!(
-        "{}",
-        format!(
-            "Failed to resolve IP for '{}' after {}s",
-            clone_name,
-            u64::from(MAX_RETRIES) * POLL_INTERVAL_S
-        )
-        .red()
-    );
-    Err(())
+    anyhow::bail!(
+        "Failed to resolve IP for '{}' after {}s",
+        clone_name,
+        u64::from(MAX_RETRIES) * POLL_INTERVAL_S
+    )
 }
 
-fn get_slot_flock(temp_path: &Path) -> Result<(FileLock, u32), ()> {
+fn get_slot_flock(temp_path: &Path) -> anyhow::Result<(FileLock, u32)> {
     const SLOT_RANGE_START: u32 = 0;
     const SLOT_RANGE_END: u32 = 10000;
 
@@ -480,7 +471,7 @@ fn get_slot_flock(temp_path: &Path) -> Result<(FileLock, u32), ()> {
             return Ok((lock, slot));
         }
     }
-    Err(())
+    anyhow::bail!("No free tart slot lock available in range {SLOT_RANGE_START}..={SLOT_RANGE_END}")
 }
 
 pub fn cleanup_stale_tart_clones(temp_path: &Path) {
