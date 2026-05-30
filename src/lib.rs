@@ -48,7 +48,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             if describe.is_empty() {
                 println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
             } else {
-                println!("VirtCI version: {}", describe);
+                println!("VirtCI version: {describe}");
             }
         }
         cli::Command::Run(run_args) => {
