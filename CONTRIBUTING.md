@@ -66,12 +66,6 @@ VirtCI depends on qemu and swtpm on linux.
 
 [Setup WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)
 
-Run the WSL SWTPM installer scripts. SWTPM cannot be built for windows natively at all, only working in WSL.
-
-```powershell
-.\scripts\install_swtpm_win.ps1
-```
-
 ## Building and Testing
 
 ```sh

@@ -40,13 +40,10 @@ jobs:
           tag_version="${tag#v}"
           tag_version="${tag_version%%~*}"
 
-          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
-
           echo "Tag: ${tag} (core: ${tag_version})"
-          echo "Cargo.toml: ${cargo_version}"
 
-          if [[ "${tag_version}" != "${cargo_version}" ]]; then
-            echo "::error::Cargo.toml version (${cargo_version}) does not match tag (${tag_version})."
+          if ! cargo pkgid "virtci@${tag_version}"; then
+            echo "::error::Cargo.toml version does not match tag (${tag_version})."
             exit 1
           fi
 
