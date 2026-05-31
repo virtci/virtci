@@ -40,6 +40,9 @@ pub struct RunArgs {
     /// path to workflow YAML file
     #[argh(positional)]
     pub workflow: PathBuf,
+    /// validate the workflow syntax and exit without running the workflow
+    #[argh(switch)]
+    pub validate: bool,
     /// VM image: --image <name>
     #[argh(option)]
     pub image: Option<String>,

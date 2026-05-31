@@ -56,11 +56,10 @@ pub fn running_inside_wsl() -> bool {
         {
             return true;
         }
-        std::fs::read_to_string("/proc/sys/kernel/osrelease")
-            .is_ok_and(|s| {
-                let s = s.to_ascii_lowercase();
-                s.contains("microsoft") || s.contains("wsl")
-            })
+        std::fs::read_to_string("/proc/sys/kernel/osrelease").is_ok_and(|s| {
+            let s = s.to_ascii_lowercase();
+            s.contains("microsoft") || s.contains("wsl")
+        })
     }
     #[cfg(not(target_os = "linux"))]
     {

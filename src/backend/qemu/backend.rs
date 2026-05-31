@@ -346,9 +346,7 @@ impl VmBackend for QemuBackend {
     fn wait_for_exit(&mut self) {
         if let Some(qemu) = self.qemu_process.clone() {
             loop {
-                let exited = qemu
-                    .lock()
-                    .map_or(true, |mut guard| guard.try_wait());
+                let exited = qemu.lock().map_or(true, |mut guard| guard.try_wait());
                 if exited {
                     break;
                 }

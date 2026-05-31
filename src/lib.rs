@@ -13,6 +13,7 @@ pub mod vm_image;
 pub mod web;
 pub mod yaml;
 
+use anyhow::Context;
 use global_paths::VciGlobalPaths;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -52,15 +53,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             }
         }
         cli::Command::Run(run_args) => {
-            std::fs::create_dir_all(&paths.temp).unwrap_or_else(|e| {
-                panic!(
-                    "Failed to create temp directory {}: {}",
-                    paths.temp.display(),
-                    e
-                )
-            });
-            let jobs = extract_yaml_workflows(&run_args, paths, &orphans);
-            run_jobs(jobs, paths);
+            run_workflow_command(&run_args, paths, &orphans);
         }
         cli::Command::Setup(setup_args) => {
             run_setup(&setup_args, paths);
@@ -396,121 +389,125 @@ async fn signal_handler(orphans: orphan::OrphanTracker) {
     }
 }
 
-fn load_image_description(image_name: &str, paths: &VciGlobalPaths) -> vm_image::ImageDescription {
-    let home = paths.resolve_image_home(image_name).unwrap_or_else(|| {
-        panic!(
+fn run_workflow_command(
+    args: &cli::RunArgs,
+    paths: &VciGlobalPaths,
+    orphans: &orphan::OrphanTracker,
+) {
+    use colored::Colorize;
+
+    let contents = std::fs::read_to_string(&args.workflow).unwrap_or_else(|e| {
+        eprintln!(
+            "{}",
+            format!(
+                "Failed to read workflow file {}: {e}",
+                args.workflow.display()
+            )
+            .red()
+        );
+        std::process::exit(1);
+    });
+
+    let diagnostics = run::validate::validate_workflow_str(&contents, paths);
+    run::validate::print_diagnostics(&diagnostics);
+    let has_errors = run::validate::has_errors(&diagnostics);
+
+    if args.validate {
+        std::process::exit(i32::from(has_errors));
+    }
+
+    if has_errors {
+        eprintln!(
+            "{}",
+            "Aborting run: fix the workflow errors above before running."
+                .red()
+                .bold()
+        );
+        std::process::exit(1);
+    }
+
+    std::fs::create_dir_all(&paths.temp).unwrap_or_else(|e| {
+        eprintln!(
+            "{}",
+            format!(
+                "Failed to create temp directory {}: {e}",
+                paths.temp.display()
+            )
+            .red()
+        );
+        std::process::exit(1);
+    });
+
+    let jobs = extract_yaml_workflows(args, &contents, paths, orphans).unwrap_or_else(|e| {
+        eprintln!("{}", format!("{e:?}").red());
+        std::process::exit(1);
+    });
+    run_jobs(jobs, paths);
+}
+
+fn load_image_description(
+    image_name: &str,
+    paths: &VciGlobalPaths,
+) -> anyhow::Result<vm_image::ImageDescription> {
+    let home = paths.resolve_image_home(image_name).with_context(|| {
+        format!(
             "Failed to load image description '{}' (looked at {} and {})",
             image_name,
             paths.user_home.display(),
             paths.system_home.display()
         )
-    });
+    })?;
     let vci_path = home.path;
-    let contents = std::fs::read_to_string(&vci_path).unwrap_or_else(|e| {
-        panic!(
-            "Failed to read image description at {}: {e}",
-            vci_path.display()
-        )
-    });
+    let contents = std::fs::read_to_string(&vci_path)
+        .with_context(|| format!("Failed to read image description at {}", vci_path.display()))?;
     let mut desc: vm_image::ImageDescription = serde_json::from_str(&contents)
-        .unwrap_or_else(|e| panic!("Failed to parse image description '{image_name}': {e}"));
+        .with_context(|| format!("Failed to parse image description '{image_name}'"))?;
     desc.name = image_name.to_string();
-    desc
+    Ok(desc)
 }
 
 fn extract_yaml_workflows(
     args: &cli::RunArgs,
+    contents: &str,
     paths: &VciGlobalPaths,
     orphans: &orphan::OrphanTracker,
-) -> Vec<run::Job> {
-    let file_contents = std::fs::read_to_string(&args.workflow)
-        .unwrap_or_else(|_| panic!("Failed to load workflow file: {}", args.workflow.display()));
-
-    let workflow: yaml::Workflow = yaml::parse_workflow(&file_contents)
-        .unwrap_or_else(|e| panic!("Failed to parse workflow YAML: {e}"));
-
-    // let image_overrides = cli::parse_overrides(&args.image);
-    // let cpus_overrides = cli::parse_overrides(&args.cpus);
-    // let mem_overrides = cli::parse_overrides(&args.mem);
+) -> anyhow::Result<Vec<run::Job>> {
+    let workflow: yaml::Workflow =
+        yaml::parse_workflow(contents).context("Failed to parse workflow YAML")?;
 
     let mut jobs = Vec::<run::Job>::new();
     for (name, yaml_job) in workflow {
-        // let image_name = cli::resolve_for_job(&image_overrides, &name)
-        //     .unwrap_or(&yaml_job.image)
-        //     .to_string();
         let image_name = if let Some(img) = &args.image {
             img
         } else {
             &yaml_job.image
         };
 
-        let image_desc = load_image_description(image_name, paths);
+        let image_desc = load_image_description(image_name, paths)?;
 
-        // let cpus: u32 = match cli::resolve_for_job(&cpus_overrides, &name) {
-        //     Some(s) => s.parse::<u32>().expect("Expected number for --cpus"),
-        //     None => yaml_job.cpus.unwrap_or(cli::default_cpus()),
-        // };
-        let cpus: u32 = yaml_job.cpus.unwrap_or(cli::default_cpus());
-        assert!(cpus > 0, "Expected positive, non-zero CPU count");
+        let cpus: u32 = yaml_job.cpus.unwrap_or_else(cli::default_cpus);
+        anyhow::ensure!(cpus > 0, "Job '{name}': cpus must be positive and non-zero");
 
-        // let memory_mb: u64 = match cli::resolve_for_job(&mem_overrides, &name) {
-        //     Some(s) => {
-        //         cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {}", s))
-        //     }
-        //     None => match yaml_job.memory.as_deref() {
-        //         Some(s) => {
-        //             cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {}", s))
-        //         }
-        //         None => cli::DEFAULT_MEM_MB,
-        //     },
-        // };
         let memory_mb = match yaml_job.memory.as_deref() {
-            Some(s) => {
-                cli::parse_mem_mb(s).unwrap_or_else(|| panic!("Failed to parse memory: {s}"))
-            }
+            Some(s) => cli::parse_mem_mb(s)
+                .with_context(|| format!("Job '{name}': failed to parse memory '{s}'"))?,
             None => cli::DEFAULT_MEM_MB,
         };
-        assert!(memory_mb > 0, "Expected positive, non-zero memory amount");
+        anyhow::ensure!(
+            memory_mb > 0,
+            "Job '{name}': memory must be positive and non-zero"
+        );
 
-        let steps: Vec<run::Step> = yaml_job
+        let steps = yaml_job
             .steps
             .iter()
-            .map(|step| {
-                let kind = match step.validate() {
-                    Ok(sk) => match sk {
-                        yaml::StepKind::Run(s) => run::StepKind::Run(s),
-                        yaml::StepKind::Copy(c) => run::StepKind::Copy(c),
-                        yaml::StepKind::Restart(r) => {
-                            let memory_mb = r.memory.as_deref().map(|s| {
-                                cli::parse_mem_mb(s).unwrap_or_else(|| {
-                                    panic!("Failed to parse restart memory: {s}")
-                                })
-                            });
-                            run::StepKind::Restart(yaml::ResolvedRestart {
-                                offline: r.offline,
-                                cpus: r.cpus,
-                                memory_mb,
-                            })
-                        }
-                    },
-                    Err(e) => panic!("{}", e),
-                };
-                let timeout = match &step.timeout {
-                    Some(s) => yaml::parse_timeout_seconds(s),
-                    None => run::MAX_TIMEOUT,
-                };
-                run::Step {
-                    name: step.name.clone(),
-                    kind,
-                    workdir: step.workdir.clone(),
-                    timeout,
-                    env: step.env.clone(),
-                    continue_on_error: step.continue_on_error,
-                }
-            })
-            .collect();
+            .map(|step| resolve_step(&name, step))
+            .collect::<anyhow::Result<Vec<run::Step>>>()?;
 
-        assert!(!steps.is_empty(), "Expected at least 1 step");
+        anyhow::ensure!(
+            !steps.is_empty(),
+            "Job '{name}': must have at least one step"
+        );
 
         let backend: Box<dyn backend::VmBackend> = match &image_desc.backend {
             vm_image::BackendConfig::Qemu(_) => {
@@ -523,16 +520,14 @@ fn extract_yaml_workflows(
                     false,
                     orphans.clone(),
                 )
-                .unwrap_or_else(|e| panic!("Failed to create QEMU backend for job '{name}': {e}"));
+                .with_context(|| format!("Failed to create QEMU backend for job '{name}'"))?;
                 b.start_config.cpus = Some(cpus);
                 b.start_config.memory_mb = Some(memory_mb);
                 Box::new(b)
             }
             vm_image::BackendConfig::Tart(_) => Box::new(
                 backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb, paths)
-                    .unwrap_or_else(|e| {
-                        panic!("Failed to create Tart backend for job '{name}': {e}")
-                    }),
+                    .with_context(|| format!("Failed to create Tart backend for job '{name}'"))?,
             ),
         };
 
@@ -544,5 +539,41 @@ fn extract_yaml_workflows(
         });
     }
 
-    jobs
+    Ok(jobs)
+}
+
+/// Resolve a parsed YAML step into an executable [`run::Step`].
+fn resolve_step(job_name: &str, step: &yaml::Step) -> anyhow::Result<run::Step> {
+    let kind = match step
+        .validate()
+        .map_err(|e| anyhow::anyhow!("Job '{job_name}': {e}"))?
+    {
+        yaml::StepKind::Run(s) => run::StepKind::Run(s),
+        yaml::StepKind::Copy(c) => run::StepKind::Copy(c),
+        yaml::StepKind::Restart(r) => {
+            let memory_mb = match r.memory.as_deref() {
+                Some(s) => Some(cli::parse_mem_mb(s).with_context(|| {
+                    format!("Job '{job_name}': failed to parse restart memory '{s}'")
+                })?),
+                None => None,
+            };
+            run::StepKind::Restart(yaml::ResolvedRestart {
+                offline: r.offline,
+                cpus: r.cpus,
+                memory_mb,
+            })
+        }
+    };
+    let timeout = match &step.timeout {
+        Some(s) => yaml::parse_timeout_seconds(s),
+        None => run::MAX_TIMEOUT,
+    };
+    Ok(run::Step {
+        name: step.name.clone(),
+        kind,
+        workdir: step.workdir.clone(),
+        timeout,
+        env: step.env.clone(),
+        continue_on_error: step.continue_on_error,
+    })
 }
