@@ -198,12 +198,13 @@ fn validate_job_semantics(
     }
 }
 
-/// A scalar (string or number) rendered as a string, mirroring the coercion in
+/// A scalar (string, number, or bool) rendered as a string, mirroring the coercion in
 /// [`crate::yaml`]. Returns `None` for absent, null, or non-scalar values.
 fn scalar_string(v: Option<&Value>) -> Option<String> {
     match v {
         Some(Value::String(s)) => Some(s.clone()),
         Some(Value::Number(n)) => Some(n.to_string()),
+        Some(Value::Bool(b)) => Some(b.to_string()),
         _ => None,
     }
 }
@@ -436,6 +437,20 @@ job:
         cpus: 0
 ";
         assert!(error_blob(&validate(yaml)).contains("restart.cpus"));
+    }
+
+    #[test]
+    fn bool_memory_is_caught_like_the_run_would() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  memory: true
+  steps:
+    - run: echo hi
+";
+        let blob = error_blob(&validate(yaml));
+        assert!(blob.contains("job.memory"), "{blob}");
+        assert!(blob.contains("not a valid memory size"), "{blob}");
     }
 
     #[test]
