@@ -450,12 +450,13 @@ fn load_image_description(
     paths: &VciGlobalPaths,
 ) -> anyhow::Result<vm_image::ImageDescription> {
     let home = paths.resolve_image_home(image_name).with_context(|| {
-        format!(
-            "Failed to load image description '{}' (looked at {} and {})",
-            image_name,
-            paths.user_home.display(),
-            paths.system_home.display()
-        )
+        let searched = paths
+            .image_homes()
+            .iter()
+            .map(|h| h.path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("Failed to load image description '{image_name}' (looked in: {searched})")
     })?;
     let vci_path = home.path;
     let contents = std::fs::read_to_string(&vci_path)

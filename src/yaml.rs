@@ -127,14 +127,26 @@ pub enum StepKind {
     Restart(RestartSpec),
 }
 
+pub fn validate_copy_direction(from: &str, to: &str) -> Result<(), &'static str> {
+    match (from.starts_with("vm:"), to.starts_with("vm:")) {
+        (true, true) => Err("copy cannot have both `from` and `to` prefixed with `vm:`"),
+        (false, false) => Err("copy requires exactly one of `from`/`to` to be prefixed with `vm:`"),
+        _ => Ok(()),
+    }
+}
+
 pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yaml_ng::Error> {
     serde_yaml_ng::from_str(contents)
 }
 
 pub fn parse_timeout_seconds(s: &str) -> u64 {
+    try_parse_timeout_seconds(s).unwrap_or(MAX_TIMEOUT)
+}
+
+pub fn try_parse_timeout_seconds(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
-        return MAX_TIMEOUT;
+        return Some(MAX_TIMEOUT);
     }
 
     let (num, unit) = if s.ends_with('S') || s.ends_with('s') {
@@ -148,7 +160,7 @@ pub fn parse_timeout_seconds(s: &str) -> u64 {
         (s, 1u64)
     };
 
-    num.parse::<u64>().ok().map_or(MAX_TIMEOUT, |n| n * unit)
+    num.parse::<u64>().ok().map(|n| n * unit)
 }
 
 #[cfg(test)]

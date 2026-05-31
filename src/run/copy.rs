@@ -58,7 +58,8 @@ pub async fn copy_files_tar(
         }
     };
 
-    let (direction, local_path, remote_path) = parse_copy_paths(from, to);
+    let (direction, local_path, remote_path) =
+        parse_copy_paths(from, to).map_err(|e| e.to_string())?;
     let remote_path = expand_remote_tilde(remote_path, &ssh.cred.user, os);
 
     match direction {
@@ -750,22 +751,19 @@ fn expand_remote_tilde(path: &str, username: &str, os: GuestOs) -> String {
     path.to_string()
 }
 
-fn parse_copy_paths<'a>(from: &'a str, to: &'a str) -> (CopyDirection, &'a str, &'a str) {
-    let to_starts = to.starts_with("vm:");
-    let from_starts = from.starts_with("vm:");
-    assert!(
-        !(to_starts && from_starts),
-        "Cannot use SFTP to copy files from the VM to itself!"
-    );
-    assert!(
-        !(!to_starts && !from_starts),
-        "Cannot use SFTP to copy files from the host to itself!"
-    );
+fn parse_copy_paths<'a>(
+    from: &'a str,
+    to: &'a str,
+) -> anyhow::Result<(CopyDirection, &'a str, &'a str)> {
+    crate::yaml::validate_copy_direction(from, to).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    if to_starts {
-        (CopyDirection::HostToVm, from, &to[3..])
+    // Exactly one side is `vm:`-prefixed (guaranteed above).
+    if let Some(to_path) = to.strip_prefix("vm:") {
+        Ok((CopyDirection::HostToVm, from, to_path))
+    } else if let Some(from_path) = from.strip_prefix("vm:") {
+        Ok((CopyDirection::VmToHost, to, from_path))
     } else {
-        (CopyDirection::VmToHost, to, &from[3..])
+        unreachable!("validate_copy_direction guarantees exactly one `vm:` prefix")
     }
 }
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use crate::global_paths::VciGlobalPaths;
-use crate::yaml::{Job, Step};
+use crate::yaml::{self, Job, Step, StepKind};
 use serde_yaml_ng::{Mapping, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +78,18 @@ pub fn print_diagnostics(diags: &[Diagnostic]) {
 /// A missing image is a warning, never an error, since the run may target a remote server.
 pub fn validate_workflow_str(contents: &str, paths: &VciGlobalPaths) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
+
+    // On Windows hosts, CRLF line endings are common and usually fine. This is
+    // a heads-up, not an error: copy steps can set `crlf: true` to convert line
+    // endings to/from the VM automatically.
+    #[cfg(target_os = "windows")]
+    if contents.contains("\r\n") {
+        diags.push(Diagnostic::warning(
+            "<file>",
+            "workflow uses CRLF line endings; copy steps can set `crlf: true` to convert \
+             line endings to/from the VM automatically",
+        ));
+    }
 
     // If the document is not even well-formed YAML, that's the only thing we
     // can report; deeper validation is impossible.
@@ -197,16 +209,37 @@ fn scalar_string(v: Option<&Value>) -> Option<String> {
 }
 
 fn validate_step(loc: &str, step_v: &Value, diags: &mut Vec<Diagnostic>) {
-    // serde handles structure (types, unknown fields). It cannot enforce the
-    // "exactly one of run/copy/restart" rule, since each is independently
-    // optional, so we layer that on via the existing `Step::validate`.
-    match serde_yaml_ng::from_value::<Step>(step_v.clone()) {
-        Ok(step) => {
-            if let Err(msg) = step.validate() {
-                diags.push(Diagnostic::error(loc, msg));
+    // serde handles structure (types, unknown fields). Anything beyond that is
+    // a semantic rule it cannot express, layered on below.
+    let step = match serde_yaml_ng::from_value::<Step>(step_v.clone()) {
+        Ok(step) => step,
+        Err(e) => {
+            diags.push(Diagnostic::error(loc, e.to_string()));
+            return;
+        }
+    };
+
+    // Exactly one of run/copy/restart (each is independently optional, so serde
+    // can't enforce it), plus the copy `vm:` direction rule.
+    match step.validate() {
+        Ok(StepKind::Copy(spec)) => {
+            if let Err(e) = yaml::validate_copy_direction(&spec.from, &spec.to) {
+                diags.push(Diagnostic::error(format!("{loc}.copy"), e));
             }
         }
-        Err(e) => diags.push(Diagnostic::error(loc, e.to_string())),
+        Ok(StepKind::Run(_) | StepKind::Restart(_)) => {}
+        Err(msg) => diags.push(Diagnostic::error(loc, msg)),
+    }
+
+    // A timeout that won't parse would silently fall back to the default at
+    // runtime, which is surprising; treat it as an error.
+    if let Some(t) = &step.timeout {
+        if yaml::try_parse_timeout_seconds(t).is_none() {
+            diags.push(Diagnostic::error(
+                format!("{loc}.timeout"),
+                format!("`{t}` is not a valid timeout (e.g. `30s`, `5M`, `2H`)"),
+            ));
+        }
     }
 }
 
@@ -303,5 +336,68 @@ job:
     - {}
 ";
         assert!(error_blob(&validate(yaml)).contains("one of: run, copy, restart"));
+    }
+
+    #[test]
+    fn copy_without_vm_prefix_is_error() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - copy:
+        from: ./
+        to: ./out
+";
+        assert!(error_blob(&validate(yaml)).contains("exactly one of `from`/`to`"));
+    }
+
+    #[test]
+    fn copy_with_both_vm_prefix_is_error() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - copy:
+        from: vm:~/a
+        to: vm:~/b
+";
+        assert!(error_blob(&validate(yaml)).contains("both"));
+    }
+
+    #[test]
+    fn valid_copy_direction_has_no_errors() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - copy:
+        from: ./
+        to: vm:~/
+";
+        assert!(!has_errors(&validate(yaml)));
+    }
+
+    #[test]
+    fn invalid_timeout_is_an_error() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - run: echo hi
+      timeout: soon
+";
+        assert!(error_blob(&validate(yaml)).contains("not a valid timeout"));
+    }
+
+    #[test]
+    fn valid_timeout_has_no_errors() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - run: echo hi
+      timeout: 5M
+";
+        assert!(!has_errors(&validate(yaml)));
     }
 }
