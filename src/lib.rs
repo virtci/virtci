@@ -413,6 +413,7 @@ fn run_workflow_command(
     let has_errors = run::validate::has_errors(&diagnostics);
 
     if args.validate {
+        // Exit non-zero only when validation found errors, warnings are fine and just exit 0.
         std::process::exit(i32::from(has_errors));
     }
 

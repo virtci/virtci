@@ -227,7 +227,18 @@ fn validate_step(loc: &str, step_v: &Value, diags: &mut Vec<Diagnostic>) {
                 diags.push(Diagnostic::error(format!("{loc}.copy"), e));
             }
         }
-        Ok(StepKind::Run(_) | StepKind::Restart(_)) => {}
+        Ok(StepKind::Restart(r)) => {
+            if r.cpus == Some(0) {
+                diags.push(Diagnostic::error(
+                    format!("{loc}.restart.cpus"),
+                    "must be a positive, non-zero integer",
+                ));
+            }
+            if let Some(mem) = &r.memory {
+                check_memory(&format!("{loc}.restart.memory"), mem, diags);
+            }
+        }
+        Ok(StepKind::Run(_)) => {}
         Err(msg) => diags.push(Diagnostic::error(loc, msg)),
     }
 
@@ -397,6 +408,45 @@ job:
   steps:
     - run: echo hi
       timeout: 5M
+";
+        assert!(!has_errors(&validate(yaml)));
+    }
+
+    #[test]
+    fn invalid_restart_memory_is_an_error() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - restart:
+        memory: bad
+";
+        let blob = error_blob(&validate(yaml));
+        assert!(blob.contains("restart.memory"), "{blob}");
+        assert!(blob.contains("not a valid memory size"), "{blob}");
+    }
+
+    #[test]
+    fn restart_cpus_zero_is_an_error() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - restart:
+        cpus: 0
+";
+        assert!(error_blob(&validate(yaml)).contains("restart.cpus"));
+    }
+
+    #[test]
+    fn valid_restart_has_no_errors() {
+        let yaml = r"
+job:
+  image: ubuntu-server-x64
+  steps:
+    - restart:
+        cpus: 4
+        memory: 8G
 ";
         assert!(!has_errors(&validate(yaml)));
     }

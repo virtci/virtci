@@ -2,6 +2,12 @@
 
 VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Validate YAML run workflow without actually running it with `virtci run <workflow_yaml> --validate`.
+
 ## Version 0.2.0 - 2026-05-30
 
 ### Added
