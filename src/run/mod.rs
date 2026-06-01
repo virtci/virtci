@@ -4,6 +4,7 @@
 mod command;
 mod copy;
 pub mod run_id;
+pub mod validate;
 
 use std::{
     collections::HashMap,
