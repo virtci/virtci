@@ -23,6 +23,7 @@ pub enum Command {
     Import(ImportArgs),
     Active(ActiveArgs),
     Remove(RemoveArgs),
+    Clone(CloneArgs),
     Boot(BootArgs),
     Shell(ShellArgs),
     Serve(ServeArgs),
@@ -164,6 +165,23 @@ pub struct RemoveArgs {
     /// delete without confirmation
     #[argh(switch)]
     pub force: bool,
+}
+
+/// Make a full, persistent copy of a VM image under a new name
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "clone")]
+pub struct CloneArgs {
+    /// name of the existing VM image to clone
+    #[argh(positional)]
+    pub name: String,
+
+    /// name for the new cloned VM image
+    #[argh(positional)]
+    pub new_name: String,
+
+    /// register the clone into the system-wide image directory (requires elevated privileges)
+    #[argh(switch)]
+    pub system: bool,
 }
 
 /// Boot a base VM image to modify it, found using `virtci list`

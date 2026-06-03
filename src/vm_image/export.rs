@@ -168,7 +168,7 @@ pub fn parse_drive_file_path(drive_str: &str) -> Option<String> {
     None
 }
 
-fn rewrite_drive_file_path(drive_str: &str, new_filename: &str) -> String {
+pub(crate) fn rewrite_drive_file_path(drive_str: &str, new_filename: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for part in drive_str.split(',') {
         if part.starts_with("file=") {

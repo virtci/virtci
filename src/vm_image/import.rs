@@ -411,7 +411,7 @@ fn wsl_tar_extract(
     Ok(())
 }
 
-fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) {
+pub(crate) fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) {
     match &mut desc.backend {
         BackendConfig::Qemu(ref mut qemu) => {
             qemu.image = managed_dir.join(&qemu.image).to_string_lossy().to_string();
@@ -455,7 +455,7 @@ fn rewrite_drive_file_to_managed(drive_str: &str, managed_dir: &Path) -> String 
 /// WSL counterpart of [`rewrite_paths_to_managed`]. Builds WSL-namespace paths with `/`.
 /// Never `PathBuf::join`, which would corrupt them on the Windows host).
 #[cfg(target_os = "windows")]
-fn rewrite_paths_to_managed_wsl(desc: &mut ImageDescription, wsl_managed_dir: &str) {
+pub(crate) fn rewrite_paths_to_managed_wsl(desc: &mut ImageDescription, wsl_managed_dir: &str) {
     let BackendConfig::Qemu(ref mut qemu) = desc.backend else {
         return;
     };
