@@ -17,6 +17,7 @@ use crate::VciGlobalPaths;
 pub const DEFAULT_REMOTE_TTL_SECS: u32 = 86400;
 
 pub mod boot;
+pub mod clone;
 pub mod export;
 pub mod import;
 pub mod list;
@@ -43,6 +44,23 @@ pub enum HostExecTarget {
     WindowsNative,
     /// Stores the distro
     WSL2(String),
+}
+
+impl HostExecTarget {
+    pub fn native() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            HostExecTarget::MacOS
+        }
+        #[cfg(target_os = "linux")]
+        {
+            HostExecTarget::Linux
+        }
+        #[cfg(target_os = "windows")]
+        {
+            HostExecTarget::WindowsNative
+        }
+    }
 }
 
 #[must_use]

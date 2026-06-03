@@ -86,6 +86,12 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
         cli::Command::Remove(remove_args) => {
             vm_image::remove::run_remove(&remove_args, paths);
         }
+        cli::Command::Clone(clone_args) => {
+            if let Err(e) = vm_image::clone::run_clone(&clone_args, paths) {
+                eprintln!("Clone failed: {e}");
+                std::process::exit(1);
+            }
+        }
         cli::Command::Boot(boot_args) => {
             vm_image::boot::run_boot(&boot_args, paths, &orphans);
         }

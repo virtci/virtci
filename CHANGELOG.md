@@ -7,6 +7,8 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Validate YAML run workflow without actually running it with `virtci run <workflow_yaml> --validate`.
+- Do a full VM clone with `virtci clone <image> <new_image>`.
+  - Useful for persisting modifications in a VM without having to change the base.
 
 ## Version 0.2.0 - 2026-05-30
 
