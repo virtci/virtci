@@ -20,6 +20,61 @@ use crate::vm_image::{
 };
 use crate::VciGlobalPaths;
 
+/// What a partially-created clone left behind, so it can be torn down if a later step fails.
+enum CloneArtifacts {
+    Dir(std::path::PathBuf),
+    #[cfg(target_os = "macos")]
+    Tart {
+        vm_name: String,
+        dir: Option<std::path::PathBuf>,
+    },
+    #[cfg(target_os = "windows")]
+    Wsl {
+        distro: String,
+        dir: String,
+    },
+}
+
+/// Best-effort teardown of a half-finished clone. Armed once we start creating destination
+/// artifacts and [`CleanupGuard::disarm`] once the clone is fully registered. If the clone
+/// returns early via `?`, `Drop` removes whatever we created. The flattened disk, copied
+/// firmware/drives/ISOs, and (for Tart) the cloned VM, so no orphans are left with no `.vci`
+/// pointing at them. It never touches a directory that already existed before the clone began.
+struct CleanupGuard(Option<CloneArtifacts>);
+
+impl CleanupGuard {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            None => {}
+            Some(CloneArtifacts::Dir(dir)) => {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            #[cfg(target_os = "macos")]
+            Some(CloneArtifacts::Tart { vm_name, dir }) => {
+                let _ = std::process::Command::new("tart")
+                    .arg("delete")
+                    .arg(&vm_name)
+                    .output();
+                if let Some(dir) = dir {
+                    let _ = std::fs::remove_dir_all(&dir);
+                }
+            }
+            #[cfg(target_os = "windows")]
+            Some(CloneArtifacts::Wsl { distro, dir }) => {
+                let _ = std::process::Command::new("wsl")
+                    .args(["-d", &distro, "--", "rm", "-rf", &dir])
+                    .output();
+            }
+        }
+    }
+}
+
 pub fn run_clone(args: &CloneArgs, paths: &VciGlobalPaths) -> anyhow::Result<()> {
     let src_name = &args.name;
     let new_name = &args.new_name;
@@ -135,14 +190,19 @@ fn clone_tart(
         anyhow::bail!("tart clone failed: {}", stderr.trim());
     }
 
+    let mut guard = CleanupGuard(Some(CloneArtifacts::Tart {
+        vm_name: new_name.to_string(),
+        dir: None,
+    }));
+
     let dest_home = if system {
         paths.system_home.clone()
     } else {
         paths.user_home.clone()
     };
 
-    // An empty managed dir so `virtci remove` cleans up symmetrically with imported tart images.
     let managed_dir = dest_home.join(new_name);
+    let dir_existed = managed_dir.exists();
     std::fs::create_dir_all(&managed_dir).map_err(|e| {
         anyhow::anyhow!(
             "Failed to create {}: {e}{}",
@@ -150,6 +210,12 @@ fn clone_tart(
             permission_hint(&e)
         )
     })?;
+    if !dir_existed {
+        guard.0 = Some(CloneArtifacts::Tart {
+            vm_name: new_name.to_string(),
+            dir: Some(managed_dir.clone()),
+        });
+    }
     if system {
         ensure_world_readable_dir(&managed_dir)
             .with_context(|| format!("Failed to set permissions on {}", managed_dir.display()))?;
@@ -164,6 +230,7 @@ fn clone_tart(
     });
 
     save_config(&new_desc, &dest_home, system).map_err(|e| anyhow::anyhow!("{e}"))?;
+    guard.disarm();
     Ok(())
 }
 
@@ -183,6 +250,7 @@ fn clone_qemu_native(
 
     let home_existed = dest_home.exists();
     let managed_dir = dest_home.join(new_name);
+    let dir_existed = managed_dir.exists();
     std::fs::create_dir_all(&managed_dir).map_err(|e| {
         anyhow::anyhow!(
             "Failed to create {}: {e}{}",
@@ -190,6 +258,12 @@ fn clone_qemu_native(
             permission_hint(&e)
         )
     })?;
+
+    let guard = if dir_existed {
+        CleanupGuard(None)
+    } else {
+        CleanupGuard(Some(CloneArtifacts::Dir(managed_dir.clone())))
+    };
     if system {
         if !home_existed {
             ensure_world_readable_dir(&dest_home)
@@ -264,6 +338,7 @@ fn clone_qemu_native(
     rewrite_paths_to_managed(&mut new_desc, &managed_dir);
 
     save_config(&new_desc, &dest_home, system).map_err(|e| anyhow::anyhow!("{e}"))?;
+    guard.disarm();
     Ok(())
 }
 
@@ -281,7 +356,17 @@ fn clone_qemu_wsl(
     let wsl_home = wsl.user_home.trim_end_matches('/');
     let wsl_managed_dir = format!("{wsl_home}/{new_name}");
 
+    let dir_existed = wsl_path_to_unc(distro, &wsl_managed_dir).exists();
     crate::vm_image::import::wsl_mkdir_p(distro, &wsl_managed_dir)?;
+
+    let guard = if dir_existed {
+        CleanupGuard(None)
+    } else {
+        CleanupGuard(Some(CloneArtifacts::Wsl {
+            distro: distro.clone(),
+            dir: wsl_managed_dir.clone(),
+        }))
+    };
 
     let disk_filename = filename_of(&qemu.image);
     let disk_dst = format!("{wsl_managed_dir}/{disk_filename}");
@@ -360,6 +445,7 @@ fn clone_qemu_wsl(
         )
     })?;
 
+    guard.disarm();
     println!("  Config: {}", dest_vci.display());
     println!("  Files:  {wsl_managed_dir} (in WSL distro '{distro}')");
     Ok(())
