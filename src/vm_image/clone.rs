@@ -4,6 +4,8 @@
 use std::path::Path;
 
 use anyhow::Context;
+#[cfg(not(target_os = "macos"))]
+use colored::Colorize;
 
 use crate::backend::qemu::binaries::{qemu_image_binary, target_command};
 use crate::cli::CloneArgs;
@@ -47,11 +49,14 @@ pub fn run_clone(args: &CloneArgs, paths: &VciGlobalPaths) -> anyhow::Result<()>
         BackendConfig::Tart(tart) => {
             #[cfg(not(target_os = "macos"))]
             {
-                let _ = (image_desc, args, paths);
+                let _ = tart;
                 eprintln!("{}", "Tart backend is only supported on macOS".red());
                 std::process::exit(1);
             }
-            clone_tart(&src_desc, tart, new_name, paths, args.system)?;
+            #[cfg(target_os = "macos")]
+            {
+                clone_tart(&src_desc, tart, new_name, paths, args.system)?;
+            }
         }
         BackendConfig::Qemu(qemu) => {
             #[cfg(target_os = "windows")]
@@ -108,6 +113,7 @@ fn copy_native(src: &str, dst: &Path, system: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn clone_tart(
     src_desc: &ImageDescription,
     tart: &TartConfig,
