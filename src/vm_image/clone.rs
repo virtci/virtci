@@ -11,10 +11,12 @@ use crate::backend::qemu::binaries::{qemu_image_binary, target_command};
 use crate::cli::CloneArgs;
 use crate::vm_image::export::{filename_of, parse_drive_file_path, rewrite_drive_file_path};
 use crate::vm_image::import::rewrite_paths_to_managed;
+#[cfg(target_os = "macos")]
+use crate::vm_image::TartConfig;
 use crate::vm_image::{
     ensure_world_readable_dir, ensure_world_readable_file, load_image, permission_hint,
     save_config, validate_image_name, BackendConfig, HostExecTarget, ImageDescription, QemuConfig,
-    TartConfig, UefiSplit,
+    UefiSplit,
 };
 use crate::VciGlobalPaths;
 
