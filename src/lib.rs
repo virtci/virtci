@@ -42,6 +42,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
 
     backend::qemu::cleanup_stale_qemu_files(paths);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
+    vm_image::edit::reconcile(paths);
 
     match args.command {
         cli::Command::Version(_) => {
@@ -89,6 +90,12 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
         cli::Command::Clone(clone_args) => {
             if let Err(e) = vm_image::clone::run_clone(&clone_args, paths) {
                 eprintln!("Clone failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        cli::Command::Edit(edit_args) => {
+            if let Err(e) = vm_image::edit::run_edit(&edit_args, paths) {
+                eprintln!("Edit failed: {e}");
                 std::process::exit(1);
             }
         }

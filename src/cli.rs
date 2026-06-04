@@ -24,6 +24,7 @@ pub enum Command {
     Active(ActiveArgs),
     Remove(RemoveArgs),
     Clone(CloneArgs),
+    Edit(EditArgs),
     Boot(BootArgs),
     Shell(ShellArgs),
     Serve(ServeArgs),
@@ -182,6 +183,19 @@ pub struct CloneArgs {
     /// register the clone into the system-wide image directory (requires elevated privileges)
     #[argh(switch)]
     pub system: bool,
+}
+
+/// Edit an existing VM image. Currently supports renaming; more fields will be editable later.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "edit")]
+pub struct EditArgs {
+    /// name of the existing VM image to edit
+    #[argh(positional)]
+    pub image: String,
+
+    /// rename the image to this new name
+    #[argh(option)]
+    pub rename: Option<String>,
 }
 
 /// Boot a base VM image to modify it, found using `virtci list`
