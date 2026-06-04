@@ -18,6 +18,7 @@ pub const DEFAULT_REMOTE_TTL_SECS: u32 = 86400;
 
 pub mod boot;
 pub mod clone;
+pub mod edit;
 pub mod export;
 pub mod import;
 pub mod list;
