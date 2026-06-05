@@ -23,8 +23,15 @@ void unlock_file_native(int fd) { (void)flock(fd, LOCK_UN); }
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+// Turns out Windows LockFileEx strictly locks byte ranges.
+
+#define VCI_LOCK_OFFSET_LOW 0u
+#define VCI_LOCK_OFFSET_HIGH 0x1000000000u
+
 bool try_lock_file_exclusive_native(intptr_t handle) {
     OVERLAPPED overlapped = {0};
+    overlapped.Offset = VCI_LOCK_OFFSET_LOW;
+    overlapped.OffsetHigh = VCI_LOCK_OFFSET_HIGH;
     BOOL result = LockFileEx((HANDLE)handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0,
                              1, 0, &overlapped);
     return result != 0;
@@ -32,6 +39,8 @@ bool try_lock_file_exclusive_native(intptr_t handle) {
 
 bool try_lock_file_shared_native(intptr_t handle) {
     OVERLAPPED overlapped = {0};
+    overlapped.Offset = VCI_LOCK_OFFSET_LOW;
+    overlapped.OffsetHigh = VCI_LOCK_OFFSET_HIGH;
     // No LOCKFILE_EXCLUSIVE_LOCK is shared lock
     BOOL result = LockFileEx((HANDLE)handle, LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped);
     return result != 0;
@@ -39,6 +48,8 @@ bool try_lock_file_shared_native(intptr_t handle) {
 
 void unlock_file_native(intptr_t handle) {
     OVERLAPPED overlapped = {0};
+    overlapped.Offset = VCI_LOCK_OFFSET_LOW;
+    overlapped.OffsetHigh = VCI_LOCK_OFFSET_HIGH;
     UnlockFileEx((HANDLE)handle, 0, 1, 0, &overlapped);
 }
 

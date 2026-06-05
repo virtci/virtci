@@ -37,6 +37,10 @@ pub struct QemuBackend {
     /// and routed to stdio when `!graphics`, or to this file when `graphics`.
     pub serial_log: Option<TargetPath>,
     pub exec_target: HostExecTarget,
+    /// The host-reachable IP the forwarded SSH port lives on. `127.0.0.1` for native targets;
+    /// for a WSL2 target it's the distro's NAT IP, since QEMU's `hostfwd` binds inside WSL2 and
+    /// `127.0.0.1` only works there if WSL2 localhost forwarding is enabled.
+    pub ssh_ip: String,
     pub host_temp_dir: PathBuf,
     pub exec_target_temp_dir: TargetPath,
 
@@ -79,20 +83,19 @@ impl QemuBackend {
         let exec_target: HostExecTarget = {
             #[cfg(target_os = "windows")]
             {
-                let qemu = base_image.backend.as_qemu().expect("Expected QEMU config");
-                if qemu.requires_wsl2() {
-                    if let Some(wsl_paths) = &paths.wsl {
-                        HostExecTarget::WSL2(wsl_paths.distro.clone())
-                    } else {
-                        let reason = if qemu.tpm { "a TPM" } else { "UEFI firmware" };
+                // Where an image is stored is where it should run.
+                if let Some(distro) = &base_image.wsl_distro {
+                    HostExecTarget::WSL2(distro.clone())
+                } else {
+                    let qemu = base_image.backend.as_qemu().expect("Expected QEMU config");
+                    if qemu.tpm {
                         anyhow::bail!(
-                            "Image '{}' needs {reason}, which on Windows requires KVM via WSL2 \
-                             (native QEMU/WHPX cannot run TPM or UEFI guests), but no WSL2 distro \
-                             is configured.",
+                            "Image '{}' needs a TPM, which on Windows requires WSL2, but it is \
+                             stored on the Windows host. Re-import it with a WSL2 distro \
+                             configured.",
                             base_image.name
                         )
                     }
-                } else {
                     HostExecTarget::WindowsNative
                 }
             }
@@ -105,6 +108,24 @@ impl QemuBackend {
                 HostExecTarget::Linux
             }
         };
+
+        #[cfg(target_os = "windows")]
+        let ssh_ip: String = match &exec_target {
+            HostExecTarget::WSL2(distro) => match crate::backend::qemu::wsl_distro_ip(distro) {
+                Ok(ip) => ip,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: could not resolve the WSL2 distro IP ({e}); falling back to \
+                         127.0.0.1. SSH from the Windows host will fail unless WSL2 localhost \
+                         forwarding is enabled."
+                    );
+                    "127.0.0.1".to_string()
+                }
+            },
+            _ => "127.0.0.1".to_string(),
+        };
+        #[cfg(not(target_os = "windows"))]
+        let ssh_ip: String = "127.0.0.1".to_string();
 
         let setup = setup_run(
             &name,
@@ -129,6 +150,7 @@ impl QemuBackend {
             graphics,
             serial_log: setup.serial_log,
             exec_target,
+            ssh_ip,
             host_temp_dir,
             exec_target_temp_dir,
             image_lock: setup.image_lock,
@@ -263,6 +285,12 @@ impl VmBackend for QemuBackend {
             .host_temp_dir
             .join(format!("{}-qemu.stderr", self.run_marker()));
 
+        let qemu_io = if self.serial_log.is_some() && !self.graphics {
+            exec::ChildIo::Interactive(&stderr_log)
+        } else {
+            exec::ChildIo::StderrToFile(&stderr_log)
+        };
+
         let qemu = loop {
             let cmd = super::binaries::build_qemu_args(self)?;
 
@@ -277,7 +305,7 @@ impl VmBackend for QemuBackend {
                 &self.run_marker(),
                 &cmd.program,
                 &cmd.arguments,
-                exec::ChildIo::StderrToFile(&stderr_log),
+                qemu_io,
             )
             .context("Failed to spawn QEMU")?;
             self.orphans.add_child_process(&qemu);
@@ -325,7 +353,7 @@ impl VmBackend for QemuBackend {
 
     fn ssh_target(&self) -> crate::vm_image::SshTarget {
         crate::vm_image::SshTarget {
-            ip: "127.0.0.1".to_string(),
+            ip: self.ssh_ip.clone(),
             port: self
                 .host_port
                 .as_ref()

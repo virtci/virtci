@@ -39,22 +39,19 @@ pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> 
 
     warn_if_unsupported_secure_boot(&desc, paths);
 
-    // TPM and UEFI images on Windows MUST run inside of WSL2. WHPX cannot handle either, and QEMU on
-    // a windows host cannot do TPM whatsoever.
     #[cfg(target_os = "windows")]
-    if image_requires_wsl2(&desc) {
+    if image_requires_wsl2(&desc, paths) {
         let Some(wsl) = paths.wsl.as_ref() else {
             let reason = wsl_requirement_reason(&desc);
             anyhow::bail!(
-                "Image '{name}' needs {reason}, which on Windows requires KVM via WSL2 \
-                 (native QEMU/WHPX cannot run TPM or UEFI guests), but no WSL2 distro is \
-                 configured. Set up WSL2 and re-import."
+                "Image '{name}' needs {reason}, which on Windows requires KVM via WSL2, but no \
+                 WSL2 distro is configured. Set up WSL2 and re-import."
             );
         };
         if system {
             anyhow::bail!(
-                "Importing a TPM/UEFI image into WSL2 with --system is not yet supported; \
-                 import it into the user home (omit --system)."
+                "Importing a TPM/UEFI image into WSL2 with --system is not yet supported. \
+                 Import it into the user home (omit --system)."
             );
         }
         return import_into_wsl(archive_path, &mut desc, &name, wsl);
@@ -81,13 +78,17 @@ fn warn_if_unsupported_secure_boot(desc: &ImageDescription, paths: &VciGlobalPat
     }
 
     #[cfg(target_os = "windows")]
-    let exec_target = if qemu.requires_wsl2() {
-        match &paths.wsl {
-            Some(wsl) => crate::vm_image::HostExecTarget::WSL2(wsl.distro.clone()),
-            None => crate::vm_image::HostExecTarget::WindowsNative,
+    let exec_target = {
+        let in_wsl2 = crate::backend::qemu::image_runs_in_wsl2(
+            qemu.tpm,
+            qemu.uefi.is_some(),
+            desc.arch,
+            paths.wsl.as_ref(),
+        );
+        match (&paths.wsl, in_wsl2) {
+            (Some(wsl), true) => crate::vm_image::HostExecTarget::WSL2(wsl.distro.clone()),
+            _ => crate::vm_image::HostExecTarget::WindowsNative,
         }
-    } else {
-        crate::vm_image::HostExecTarget::WindowsNative
     };
     #[cfg(not(target_os = "windows"))]
     let exec_target = {
@@ -290,13 +291,15 @@ fn import_native(
     Ok(())
 }
 
-/// `Some(&WslPaths)` when this image must be imported into WSL2 if a TPM-requiring QEMU image on a
-/// Windows host with a usable WSL2 distro configured.
-/// Whether this image must be staged into WSL2 to be runnable on a Windows host (TPM or UEFI).
-/// See [`crate::vm_image::QemuConfig::requires_wsl2`].
 #[cfg(target_os = "windows")]
-fn image_requires_wsl2(desc: &ImageDescription) -> bool {
-    matches!(&desc.backend, BackendConfig::Qemu(qemu) if qemu.requires_wsl2())
+fn image_requires_wsl2(desc: &ImageDescription, paths: &VciGlobalPaths) -> bool {
+    matches!(&desc.backend, BackendConfig::Qemu(qemu)
+    if crate::backend::qemu::image_runs_in_wsl2(
+        qemu.tpm,
+        qemu.uefi.is_some(),
+        desc.arch,
+        paths.wsl.as_ref(),
+    ))
 }
 
 /// Human-readable reason an image needs WSL2, for error messages.

@@ -449,7 +449,14 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
             }
         }
         HostExecTarget::MacOS => push_arg(&mut args, "-accel", "hvf"),
-        HostExecTarget::WindowsNative => push_arg(&mut args, "-accel", "whpx"),
+        HostExecTarget::WindowsNative => {
+            // WHPX only accelerates same-architecture guests, and cannot emulate the OVMF pflash
+            // MMIO that UEFI needs (QEMU GitLab #513). In either case fall through to TCG below.
+            let has_uefi = backend.uefi_code.is_some() || backend.uefi_vars.is_some();
+            if !has_uefi && arch == Arch::host() {
+                push_arg(&mut args, "-accel", "whpx");
+            }
+        }
     }
     push_arg(&mut args, "-accel", "tcg");
 

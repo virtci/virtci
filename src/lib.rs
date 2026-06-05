@@ -472,12 +472,22 @@ fn load_image_description(
             .join(", ");
         format!("Failed to load image description '{image_name}' (looked in: {searched})")
     })?;
+
+    #[cfg(target_os = "windows")]
+    let home_wsl_distro = home.wsl_distro.clone();
+
     let vci_path = home.path;
     let contents = std::fs::read_to_string(&vci_path)
         .with_context(|| format!("Failed to read image description at {}", vci_path.display()))?;
     let mut desc: vm_image::ImageDescription = serde_json::from_str(&contents)
         .with_context(|| format!("Failed to parse image description '{image_name}'"))?;
     desc.name = image_name.to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        desc.wsl_distro = home_wsl_distro;
+    }
+
     Ok(desc)
 }
 

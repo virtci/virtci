@@ -11,6 +11,15 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
   - Useful for persisting modifications in a VM without having to change the base.
 - Rename a VM image locally with `virtci edit <image> --rename <new_name>`.
   - Crash safe, even for SIGKILL.
+- Support running UEFI VMs directly on Windows hosts, not just inside WSL2.
+  - Only used if WSL2 KVM acceleration isn't available, and disables WHPX acceleration, so uses much slower TCG emulation.
+  - Useful for running VMs inside of windows VMs.
+
+### Fixed
+
+- Fixed issue where Windows Host couldn't access VM-inside-WSL2 over SSH with various WSL2 configurations.
+- Fixed stdout/stderr formatting in some terminals during workflow runs.
+- Fixed `virtci active` not correctly tracking active workflows on Windows.
 
 ## Version 0.2.0 - 2026-05-30
 
