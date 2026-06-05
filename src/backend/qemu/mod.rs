@@ -128,6 +128,14 @@ impl PortFlock {
             let lock_path = temp_path.join(format!("vci-qemu-port-{port}.lock"));
             let res = FileLock::try_new(lock_path);
             if let Ok(lock) = res {
+                // Optimistic bind probe. Like 99% of the time, a successful TCP bind means the
+                // later QEMU TCP bind will succeed as the ports are rarely in use.
+                // A failed bind means the port is DEFINITELY not available though.
+                // WinNAT/Hyper-V can reserve ports within the PORT_RANGE_START -> PORT_RANGE_END
+                // range.
+                if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                    continue;
+                }
                 return Ok(PortFlock {
                     lock: Some(lock),
                     port,

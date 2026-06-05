@@ -20,6 +20,9 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Fixed issue where Windows Host couldn't access VM-inside-WSL2 over SSH with various WSL2 configurations.
 - Fixed stdout/stderr formatting in some terminals during workflow runs.
 - Fixed `virtci active` not correctly tracking active workflows on Windows.
+- Fixed Windows not finding system RISC-V64 UEFI files.
+- Fixed issue where VirtCI would take a while to find a valid QEMU TCP port due to WinNAT/Hyper-V reservation table.
+- Fixed issue where workflow run setting the VM offline did not work when running on a Windows host through WSL2.
 
 ## Version 0.2.0 - 2026-05-30
 

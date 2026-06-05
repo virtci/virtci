@@ -113,6 +113,9 @@ impl Job {
                 match tokio::time::timeout(tokio::time::Duration::from_secs(30), enforce_future)
                     .await
                 {
+                    Ok(Ok(res)) if res.exit_code != 0 => {
+                        anyhow::bail!("offline enforcement exited with code {}", res.exit_code)
+                    }
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => anyhow::bail!("offline enforcement failed: {e}"),
                     Err(_) => {
@@ -418,6 +421,12 @@ impl Job {
                             )
                             .await
                             {
+                                Ok(Ok(res)) if res.exit_code != 0 => {
+                                    anyhow::bail!(
+                                        "offline enforcement exited with code {}",
+                                        res.exit_code
+                                    )
+                                }
                                 Ok(Ok(_)) => {}
                                 Ok(Err(e)) => {
                                     anyhow::bail!("offline enforcement failed: {e}")

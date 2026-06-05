@@ -2630,6 +2630,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "argh",
+ "aws-lc-rs",
  "cc",
  "colored",
  "glob",

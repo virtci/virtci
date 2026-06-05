@@ -467,7 +467,9 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
         .port;
     let inside = backend.inside_vm_port;
     let offline = backend.start_config.offline.unwrap_or(false);
-    let netdev = if offline {
+    // slirp's `restrict=yes` is unusable on WSL2 from a Windows host.
+    let use_restrict = offline && !matches!(backend.exec_target, HostExecTarget::WSL2(_));
+    let netdev = if use_restrict {
         format!("user,id=net0,restrict=yes,hostfwd=tcp::{host_port}-:{inside}")
     } else {
         format!("user,id=net0,hostfwd=tcp::{host_port}-:{inside}")

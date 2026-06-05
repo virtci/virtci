@@ -294,7 +294,10 @@ impl VmBackend for QemuBackend {
         let qemu = loop {
             let cmd = super::binaries::build_qemu_args(self)?;
 
-            eprintln!("QEMU launch command:");
+            eprintln!(
+                "QEMU launch command... Attempting to bind QEMU to TCP port [{}]:",
+                self.host_port.as_ref().expect("what").port
+            );
             eprintln!(
                 "{}",
                 super::binaries::format_launch_command(&self.exec_target, &cmd)
@@ -365,6 +368,35 @@ impl VmBackend for QemuBackend {
 
     fn os(&self) -> crate::vm_image::GuestOs {
         self.base_image.os
+    }
+
+    fn is_offline(&self) -> bool {
+        self.start_config.offline.unwrap_or(false)
+    }
+
+    fn offline_enforce_cmd(&self) -> Option<&'static str> {
+        // slirp's `restrict=yes` breaks host->guest SSH on WSL2 (see `build_qemu_args`),
+        // so offline is enforced in-guest by deleting the default route.
+        // The tart backend does this. The subnet route remains, so SSH via the slirp gateway keeps
+        // working. Route tables are in-memory and reset on VM restart, so toggling works.
+        // Absolutely not as good as the restrict.
+        if !matches!(self.exec_target, HostExecTarget::WSL2(_)) {
+            return None;
+        }
+        match self.base_image.os {
+            crate::vm_image::GuestOs::Windows => Some(
+                "$peer = ($env:SSH_CONNECTION -split ' ')[0]; \
+                 route add $peer mask 255.255.255.255 10.0.2.2 2>&1 | Out-Null; \
+                 route delete 0.0.0.0 | Out-Null; \
+                 if ($LASTEXITCODE -ne 0) { exit 1 }; \
+                 route delete ::/0 2>&1 | Out-Null; exit 0",
+            ),
+            _ => Some(
+                "peer=\"${SSH_CONNECTION%% *}\" && \
+                 { sudo ip route add \"$peer/32\" via 10.0.2.2 2>/dev/null || true; } && \
+                 sudo ip route del default && (sudo ip -6 route del default || true)",
+            ),
+        }
     }
 
     fn run_name(&self) -> String {
