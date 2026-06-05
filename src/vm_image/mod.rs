@@ -30,10 +30,12 @@ pub mod setup_tart;
 
 // https://www.linux-kvm.org/downloads/lersek/ovmf-whitepaper-c770f8c.txt
 // https://github.com/tianocore/tianocore.github.io/wiki/How-to-run-OVMF
-// The UEFI firmware can be split into two sections
+// The UEFI firmware can be split into two sections.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UefiSplit {
+    /// Set to "auto" to force discovery in system directories.
     pub code: String,
+    /// Set to "auto" to force discovery in system directories.
     pub vars: String,
 }
 

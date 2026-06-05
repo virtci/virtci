@@ -629,6 +629,11 @@ pub fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
                 "/opt/homebrew/share/qemu/edk2-riscv-code.fd",
                 "/opt/homebrew/share/qemu/edk2-riscv-vars.fd",
             ),
+            // Windows
+            (
+                "C:\\Program Files\\qemu\\share\\edk2-riscv-code.fd",
+                "C:\\Program Files\\qemu\\share\\edk2-riscv-vars.fd",
+            ),
         ],
     };
 
