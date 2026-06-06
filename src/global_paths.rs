@@ -13,6 +13,22 @@ pub struct VciGlobalPaths {
     pub wsl: Option<WslPaths>,
 }
 
+/// macOS can't use [`std::env::temp_dir`] which is `$TMPDIR`. It prefixes it with ~50-char
+/// `/var/folders/<xx>/<hash>/T/` path, which can actually cause swtpm control socket
+/// path to exceed the 104-byte `sockaddr_un.sun_path` limit.
+#[cfg(target_os = "macos")]
+fn default_temp_path() -> PathBuf {
+    extern "C" {
+        fn getuid() -> u32;
+    }
+    PathBuf::from(format!("/tmp/vci-{}", unsafe { getuid() }))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_temp_path() -> PathBuf {
+    std::env::temp_dir().join("vci")
+}
+
 impl Default for VciGlobalPaths {
     fn default() -> Self {
         #[cfg(not(target_os = "windows"))]
@@ -20,7 +36,7 @@ impl Default for VciGlobalPaths {
             Self {
                 user_home: default_user_home_path(),
                 system_home: default_system_home_path(),
-                temp: std::env::temp_dir().join("vci"),
+                temp: default_temp_path(),
             }
         }
 
@@ -29,7 +45,7 @@ impl Default for VciGlobalPaths {
             Self {
                 user_home: default_user_home_path(),
                 system_home: default_system_home_path(),
-                temp: std::env::temp_dir().join("vci"),
+                temp: default_temp_path(),
                 wsl: None,
             }
         }
@@ -43,7 +59,7 @@ impl VciGlobalPaths {
         Ok(Self {
             user_home: default_user_home_path(),
             system_home: default_system_home_path(),
-            temp: std::env::temp_dir().join("vci"),
+            temp: default_temp_path(),
             wsl: Some(wsl_paths),
         })
     }

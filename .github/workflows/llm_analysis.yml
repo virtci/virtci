@@ -31,7 +31,7 @@ jobs:
       - self-hosted
       - Linux
       - X64
-    timeout-minutes: 15
+    timeout-minutes: 20
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -219,7 +219,7 @@ jobs:
 
           The diff (the complete change set), PR context (title, body, review comments, issue comments), and source context you previously requested are attached below. Consider any existing review feedback -- avoid repeating issues already raised, and acknowledge concerns that align with your findings.
 
-          Analyze the change set thoroughly and write out your complete analysis: every candidate issue with file:line and a severity (critical / potential / suggestion), the checks you performed that came up clean, and a brief overall assessment. Your analysis will be converted into a structured report by a later step, so completeness and correctness matter more than formatting.
+          Analyze the change set thoroughly and write out your complete analysis: every candidate issue with file:line and a severity (critical / potential / suggestion), the checks you performed that came up clean, and a brief overall assessment. Your analysis will be converted into a structured report by a later step, so completeness and correctness matter more than formatting. Budget your reasoning: leave enough of your token allowance to write the analysis itself as regular output before running out.
 
           Constraints (do not flag these as issues):
           - Spawning QEMU, Tart, swtpm, or other VM-backend processes is by design
@@ -252,11 +252,11 @@ jobs:
             messages: [{role: "user", content: ($prompt + "\n\n# diff.txt\n\n" + $diff + "\n\n# pr-comments.md\n\n" + $pr + "\n\n# requested source context\n\n" + $ctx)}],
             temperature: 0.6,
             top_p: 0.95,
-            max_tokens: 8192
+            max_tokens: 12288
           }' > pass2-request.json || fail "building pass 2 request"
 
           echo "Pass 2: deep analysis (thinking enabled)"
-          llm_call pass2-request.json pass2-response.json 480 || fail "pass 2 API call"
+          llm_call pass2-request.json pass2-response.json 600 || fail "pass 2 API call"
           jq -r '.choices[0].message.reasoning_content // ""' pass2-response.json > pass2-reasoning.md
           jq -r '.choices[0].message.content // ""' pass2-response.json > pass2-content.md
           echo "pass 2: $(wc -c < pass2-reasoning.md) bytes reasoning, $(wc -c < pass2-content.md) bytes content, finish_reason: $(jq -r '.choices[0].finish_reason' pass2-response.json)"

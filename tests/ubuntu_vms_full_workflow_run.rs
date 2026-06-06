@@ -8,7 +8,7 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
     format!(
         r#"first_job:
   image: {image}
-  cpus: 2
+  cpus: 3
   memory: 8G
   host_env:
     - VIRTCI_TEST_HOST_ENV
@@ -79,7 +79,7 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
     - name: Restart Offline With Fewer Resources
       restart:
         offline: true
-        cpus: 1
+        cpus: 2
         memory: 6G
 
     - name: Verify Restart State
@@ -98,7 +98,7 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
     - name: Restart Online
       restart:
         offline: false
-        cpus: 2
+        cpus: 3
         memory: 8G
 
     - name: Verify Online
@@ -123,8 +123,8 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
 
 second_job:
   image: {image}
-  cpus: 1
-  memory: 2G
+  cpus: 2
+  memory: 6G
   steps:
     - name: Second Job In Same File
       run: echo second job ran
