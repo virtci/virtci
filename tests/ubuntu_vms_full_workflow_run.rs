@@ -305,7 +305,7 @@ fn ubuntu_full_workflow_run_x64() {
 #[ignore = "System Test"]
 fn ubuntu_full_workflow_run_arm64() {
     run_thorough_system_test(
-        "ubuntu_full_workflow_run_x64",
+        "ubuntu_full_workflow_run_arm64",
         "ubuntu-arm64",
         ".ci/upstream/ubuntu_server_arm64.json",
         "resolute-server-cloudimg-arm64.img",
@@ -316,7 +316,7 @@ fn ubuntu_full_workflow_run_arm64() {
 #[ignore = "System Test"]
 fn ubuntu_full_workflow_run_riscv64() {
     run_thorough_system_test(
-        "ubuntu_full_workflow_run_x64",
+        "ubuntu_full_workflow_run_riscv64",
         "ubuntu-riscv64",
         ".ci/upstream/ubuntu_server_riscv64.json",
         "resolute-server-cloudimg-riscv64.img",

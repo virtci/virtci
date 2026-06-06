@@ -192,7 +192,7 @@ fn run_jobs(jobs: Vec<run::Job>, paths: &VciGlobalPaths) {
             Err(e) => {
                 eprintln!(
                     "{}",
-                    format!("=== Job {job_name} failed: {e} ===").red().bold()
+                    format!("=== Job {job_name} failed: {e:#} ===").red().bold()
                 );
                 failed = true;
                 break;

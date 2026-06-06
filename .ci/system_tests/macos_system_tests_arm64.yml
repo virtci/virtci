@@ -1,4 +1,4 @@
-macos-system-tests-x64:
+macos-system-tests-arm64:
   image: mac-arm64
   cpus: 4
   memory: 12G
@@ -15,7 +15,7 @@ macos-system-tests-x64:
           - .ci/upstream/*.img
 
     - name: Fetch Ubuntu Images
-      run: sudo bash ./virtci/.ci/upstream/fetch_ubuntu_images.sh
+      run: ./virtci/.ci/upstream/fetch_ubuntu_images.sh
 
     - name: Install Rust
       run: |

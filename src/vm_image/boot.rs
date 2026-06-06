@@ -88,7 +88,7 @@ fn boot_qemu(
             memory_mb: Some(memory_mb),
         })
         .unwrap_or_else(|e| {
-            eprintln!("{}", format!("Failed to start VM: {e}").red());
+            eprintln!("{}", format!("Failed to start VM: {e:#}").red());
             std::process::exit(1);
         });
 
@@ -160,7 +160,7 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
                 memory_mb: None,
             })
             .unwrap_or_else(|e| {
-                eprintln!("{}", format!("Failed to start VM: {e}").red());
+                eprintln!("{}", format!("Failed to start VM: {e:#}").red());
                 std::process::exit(1);
             });
 

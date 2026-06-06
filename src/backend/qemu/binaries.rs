@@ -92,9 +92,24 @@ pub fn qemu_machine(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
     }
 }
 
+/// Detect HVK (Hypervisor.framework) for a Mac host. Necessary for acceleration.
+/// Possible for `kern.hv_support` to not be a registered sysctl oid, still means
+/// no accel.
+pub fn hvf_available() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    std::process::Command::new("sysctl")
+        .args(["-n", "kern.hv_support"])
+        .output()
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1")
+}
+
+/// `hw_accel` is whether a same-arch hardware accelerator (KVM/HVF) is usable
+/// for this launch, NOT whether one was merely requested.
 #[allow(clippy::match_same_arms)]
-#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-pub fn qemu_cpu(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
+#[allow(unused_variables)]
+pub fn qemu_cpu(arch: Arch, exec_target: &HostExecTarget, hw_accel: bool) -> &'static str {
     match arch {
         Arch::X64 => {
             // WHPX is sensitive to CPUID values set during vCPU initialization.
@@ -114,10 +129,12 @@ pub fn qemu_cpu(arch: Arch, exec_target: &HostExecTarget) -> &'static str {
         }
         Arch::RISCV64 => "max",
         Arch::ARM64 => {
+            // `host` passes the host CPU through and only exists under KVM/HVF.
             #[cfg(target_arch = "aarch64")]
-            return "host";
-            #[cfg(not(target_arch = "aarch64"))]
-            return "max";
+            if hw_accel {
+                return "host";
+            }
+            "max"
         }
     }
 }
@@ -306,6 +323,15 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
 
     let mut args = Vec::<String>::new();
 
+    let hw_accel = match backend.exec_target {
+        HostExecTarget::Linux | HostExecTarget::WSL2(_) => {
+            kvm::check_kvm_access(&backend.exec_target).is_ok()
+        }
+        HostExecTarget::MacOS => binaries::hvf_available(),
+        // WHPX handled separately below
+        HostExecTarget::WindowsNative => false,
+    };
+
     push_arg(
         &mut args,
         "-machine",
@@ -314,7 +340,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
 
     let cpu = match &qemu_config.cpu_model {
         Some(model) => model.clone(),
-        None => binaries::qemu_cpu(arch, &backend.exec_target).to_string(),
+        None => binaries::qemu_cpu(arch, &backend.exec_target, hw_accel).to_string(),
     };
     push_arg(&mut args, "-cpu", cpu);
 
@@ -444,11 +470,15 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
 
     match backend.exec_target {
         HostExecTarget::Linux | HostExecTarget::WSL2(_) => {
-            if kvm::check_kvm_access(&backend.exec_target).is_ok() {
+            if hw_accel {
                 push_arg(&mut args, "-accel", "kvm");
             }
         }
-        HostExecTarget::MacOS => push_arg(&mut args, "-accel", "hvf"),
+        HostExecTarget::MacOS => {
+            if hw_accel {
+                push_arg(&mut args, "-accel", "hvf");
+            }
+        }
         HostExecTarget::WindowsNative => {
             // WHPX only accelerates same-architecture guests, and cannot emulate the OVMF pflash
             // MMIO that UEFI needs (QEMU GitLab #513). In either case fall through to TCG below.
