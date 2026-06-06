@@ -31,10 +31,11 @@ windows-system-tests-arm64:
     - name: Install cargo-deny
       run: cargo install cargo-deny
 
-    - name: Install TypeScript
+    - name: Install NPM Dependencies
+      workdir: virtci/web
       run: |
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-        npm install -g typescript
+        npm install
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
