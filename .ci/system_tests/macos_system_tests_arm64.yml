@@ -15,7 +15,7 @@ macos-system-tests-x64:
           - .ci/upstream/*.img
 
     - name: Fetch Ubuntu Images
-      run: .\virtci\.ci\upstream\fetch_ubuntu_images.ps1
+      run: ./virtci/.ci/upstream/fetch_ubuntu_images.sh
 
     - name: Install Rust
       run: |
@@ -29,6 +29,9 @@ macos-system-tests-x64:
 
     - name: Install cargo-deny
       run: . "$HOME/.cargo/env" && cargo install cargo-deny
+
+    - name: Install TypeScript
+      run: npm install -g typescript
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
