@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Run System Tests
-        run: exec cargo run -- run .ci/system_tests/mac_system_tests_arm64.yml
+        run: exec cargo run -- run .ci/system_tests/macos_system_tests_arm64.yml
 
   windows-x64-host-system-tests:
     runs-on:

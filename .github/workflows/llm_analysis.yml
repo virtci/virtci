@@ -190,7 +190,7 @@ jobs:
                  --file /workspace/diff.txt \
                  --file /workspace/pr-comments.md \
                  --model llamacpp/default \
-            2>&1 | tee llm-analysis-raw.md
+            2> >(tee opencode-debug.log >&2) | tee llm-analysis-raw.md
           EXIT=${PIPESTATUS[0]}
           echo "opencode exit code: $EXIT"
           if [ "$EXIT" = "143" ] || [ "$EXIT" = "124" ]; then
@@ -200,14 +200,19 @@ jobs:
           exit "$EXIT"
 
       - name: Generate report
+        id: report
         if: always()
         run: |
           touch llm-analysis-raw.md
           echo "raw output size: $(wc -c < llm-analysis-raw.md) bytes"
 
-          if grep -q '^## Critical Issues' llm-analysis-raw.md; then
-            sed -n '/^## Critical Issues/,$p' llm-analysis-raw.md > llm-analysis.md
+          sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' llm-analysis-raw.md > llm-analysis-clean.md
+
+          if grep -q '^## Critical Issues' llm-analysis-clean.md; then
+            sed -n '/^## Critical Issues/,$p' llm-analysis-clean.md > llm-analysis.md
+            echo "structured=true" >> "$GITHUB_OUTPUT"
           else
+            echo "structured=false" >> "$GITHUB_OUTPUT"
             {
               echo "## LLM Analysis (structured report not produced)"
               echo ""
@@ -218,7 +223,7 @@ jobs:
               echo "Raw output tail:"
               echo ""
               echo '```'
-              tail -c 4000 llm-analysis-raw.md
+              tail -c 4000 llm-analysis-clean.md
               echo '```'
             } > llm-analysis.md
           fi
@@ -232,7 +237,7 @@ jobs:
         run: docker rm -f "virtci-opencode-review-${{ github.run_id }}" 2>/dev/null || true
 
       - name: Post PR Comment
-        if: github.event_name == 'pull_request' && steps.llm_analysis.outcome == 'success'
+        if: github.event_name == 'pull_request' && steps.llm_analysis.outcome == 'success' && steps.report.outputs.structured == 'true'
         continue-on-error: true
         run: gh pr comment ${{ github.event.pull_request.number }} --body-file llm-analysis.md
         env:
@@ -262,14 +267,15 @@ jobs:
           path: |
             llm-analysis.md
             llm-analysis-raw.md
+            opencode-debug.log
           if-no-files-found: ignore
 
       - name: Post Warning on Failure
-        if: ${{ !cancelled() && steps.llm_analysis.outcome != 'success' }}
+        if: ${{ !cancelled() && (steps.llm_analysis.outcome != 'success' || steps.report.outputs.structured != 'true') }}
         continue-on-error: true
         run: |
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            gh pr comment ${{ github.event.pull_request.number }} --body "**LLM Analysis Warning**: The analysis didn't complete (timeout or Ollama unavailable). This is non-blocking and doesn't affect PR approval."
+            gh pr comment ${{ github.event.pull_request.number }} --body "**LLM Analysis Warning**: The analysis didn't complete or produced an unstructured report (see the run's job summary and artifacts). This is non-blocking and doesn't affect PR approval."
           else
             echo "::warning::LLM analysis didn't complete for this ${{ github.event_name }} event."
           fi

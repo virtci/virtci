@@ -15,7 +15,7 @@ ubuntu-system-tests-x64:
           - .ci/upstream/*.img
 
     - name: Fetch Ubuntu Images
-      run: ./virtci/.ci/upstream/fetch_ubuntu_images.sh
+      run: sudo ./virtci/.ci/upstream/fetch_ubuntu_images.sh
 
     - name: Install Rust
       run: |
