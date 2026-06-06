@@ -24,9 +24,9 @@ use crate::{
     yaml, VciGlobalPaths,
 };
 
-pub const SSH_WAIT_TIMEOUT: u64 = 300;
+pub const SSH_WAIT_TIMEOUT: u64 = 600;
 pub const SSH_POLL_INTERVAL: u64 = 2;
-pub const SSH_AUTH_RETRY_WINDOW: u64 = 30;
+pub const SSH_AUTH_RETRY_WINDOW: u64 = 120;
 /// I don't see why something would take longer than 2 hours realistically.
 /// I have definitely compiled gRPC for over an hour, but 2 hours is some lunacy.
 /// If it does, the user can specify it themselves.
@@ -450,7 +450,7 @@ pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
 
     let timeout = Duration::from_secs(timeout_secs);
     let poll_interval = Duration::from_secs(SSH_POLL_INTERVAL);
-    let connect_timeout = Duration::from_secs(5);
+    let connect_timeout = Duration::from_secs(30);
     let start = Instant::now();
     let addr: std::net::SocketAddr = format!("{}:{}", ssh.ip, ssh.port).parse().unwrap();
 
@@ -460,7 +460,7 @@ pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
         }
         match TcpStream::connect_timeout(&addr, connect_timeout) {
             Ok(stream) => {
-                stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+                stream.set_read_timeout(Some(Duration::from_secs(20))).ok();
                 let mut reader = BufReader::new(stream);
                 let mut banner = String::new();
                 if reader.read_line(&mut banner).is_ok() && banner.starts_with("SSH-") {
@@ -476,7 +476,7 @@ pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
 
     let auth_deadline = Instant::now() + Duration::from_secs(SSH_AUTH_RETRY_WINDOW);
     loop {
-        let attempt = tokio::time::timeout(Duration::from_secs(5), connect(ssh)).await;
+        let attempt = tokio::time::timeout(Duration::from_secs(20), connect(ssh)).await;
         if let Ok(Ok(handle)) = attempt {
             drop(handle);
             return Some(start.elapsed().as_secs());

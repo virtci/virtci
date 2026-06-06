@@ -40,6 +40,7 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Fixed Windows being unable to run TPM or UEFI enabled VMs.
   - Now, TPM or UEFI VMs are ran through WSL2, being invoked on the Windows host.
   - Secure Boot VMs are strictly not supported, and likely will never be as Windows Hosts and WSL2 lack SMM.
+- Longer timeout for emulated VMs to give them time to connect and boot.
 
 ## Version 0.1.0 - 2026-05-11
 
