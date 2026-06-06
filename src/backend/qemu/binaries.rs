@@ -105,6 +105,48 @@ pub fn hvf_available() -> bool {
         .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1")
 }
 
+/// Extract `(major, minor)` from the first line of `qemu-system-* --version`:
+/// `QEMU emulator version 10.2.0` -> `(10, 2)`. Distro builds append to the
+/// same line (`QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.7)`),
+/// so this handles that.
+fn parse_qemu_version(line: &str) -> Option<(u32, u32)> {
+    let token = line
+        .split_whitespace()
+        .find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()))?;
+    let mut parts = token.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+/// QEMU older than 9.2 has an incorrect assertion in it's ARM software page-table walker
+/// (`regime_is_user`, reached via `E10_*` translation regimes).
+///
+/// Some modern arm64 kernels can trigger this during boot, so you may see something like:
+///
+/// `ERROR:target/arm/internals.h:767:regime_is_user: code should not be reached`.
+///
+/// Only TCG code paths can encounter this. Only warn, not hard error.
+pub fn warn_arm64_tcg_on_old_qemu(version_line: &str) {
+    use colored::Colorize;
+
+    let Some((major, minor)) = parse_qemu_version(version_line) else {
+        return;
+    };
+    if (major, minor) < (9, 2) {
+        eprintln!(
+            "{}",
+            format!(
+                "Warning: QEMU {major}.{minor} runs this ARM64 guest under TCG emulation, which \
+                 before QEMU 9.2 can abort while booting modern arm64 kernels \
+                 (\"regime_is_user: code should not be reached\"). If the VM dies during boot, \
+                 upgrade QEMU to 9.2 or newer."
+            )
+            .yellow()
+        );
+    }
+}
+
 /// `hw_accel` is whether a same-arch hardware accelerator (KVM/HVF) is usable
 /// for this launch, NOT whether one was merely requested.
 #[allow(clippy::match_same_arms)]
@@ -318,19 +360,26 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
         .expect("Expected QEMU config");
     let arch = backend.base_image.arch;
 
-    let (program, _version) =
+    let (program, version) =
         binaries::qemu_system_binary(arch, &backend.exec_target, backend.is_tpm())?;
 
     let mut args = Vec::<String>::new();
 
-    let hw_accel = match backend.exec_target {
-        HostExecTarget::Linux | HostExecTarget::WSL2(_) => {
-            kvm::check_kvm_access(&backend.exec_target).is_ok()
-        }
-        HostExecTarget::MacOS => binaries::hvf_available(),
-        // WHPX handled separately below
-        HostExecTarget::WindowsNative => false,
-    };
+    // KVM/HVF only accelerate same-arch guests, so a cross-arch guest is
+    // always TCG even when the host hypervisor is available.
+    let hw_accel = arch == Arch::host()
+        && match backend.exec_target {
+            HostExecTarget::Linux | HostExecTarget::WSL2(_) => {
+                kvm::check_kvm_access(&backend.exec_target).is_ok()
+            }
+            HostExecTarget::MacOS => binaries::hvf_available(),
+            // WHPX handled separately below
+            HostExecTarget::WindowsNative => false,
+        };
+
+    if arch == Arch::ARM64 && !hw_accel {
+        binaries::warn_arm64_tcg_on_old_qemu(&version);
+    }
 
     push_arg(
         &mut args,
@@ -564,6 +613,33 @@ pub fn format_launch_command(exec_target: &HostExecTarget, cmd: &QemuBuiltComman
 pub enum QemuLaunchOutcome {
     Running,
     PortTaken,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_qemu_version;
+
+    #[test]
+    fn parse_qemu_version_upstream() {
+        assert_eq!(
+            parse_qemu_version("QEMU emulator version 10.2.0"),
+            Some((10, 2))
+        );
+    }
+
+    #[test]
+    fn parse_qemu_version_distro_suffix() {
+        assert_eq!(
+            parse_qemu_version("QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.7)"),
+            Some((8, 2))
+        );
+    }
+
+    #[test]
+    fn parse_qemu_version_no_version() {
+        assert_eq!(parse_qemu_version("not a version line"), None);
+        assert_eq!(parse_qemu_version(""), None);
+    }
 }
 
 /// Observe the launch for about 1.5 seconds to see if the port was taken.

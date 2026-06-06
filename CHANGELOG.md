@@ -7,6 +7,8 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - More useful logs for if a VM failed to boot, rather than just reporting it being unable to be SSH'd into.
+- Added warning when emualting arm64 VMs using older QEMU versions.
+  - QEMU versions before 9.2 can fail when TCG emulating newer arm64 kernels.
 
 ### Changed
 
