@@ -37,6 +37,9 @@ windows-system-tests-x64:
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
         npm install
 
+    - name: Install QEMU and UEFI Firmware
+      run: winget install -e --id SoftwareFreedomConservancy.QEMU
+
     - name: Fetch Cargo Dependencies
       workdir: virtci
       run: cargo fetch

@@ -34,6 +34,9 @@ ubuntu-system-tests-arm64:
       run: |
         npm install
 
+    - name: Install QEMU and UEFI Firmware
+      run: sudo apt update && sudo apt install -y qemu-kvm qemu-utils
+
     - name: Fetch Cargo Dependencies
       workdir: virtci
       run: . "$HOME/.cargo/env" && cargo fetch

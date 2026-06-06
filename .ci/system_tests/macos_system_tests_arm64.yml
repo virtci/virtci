@@ -30,6 +30,9 @@ macos-system-tests-x64:
     - name: Install cargo-deny
       run: . "$HOME/.cargo/env" && cargo install cargo-deny
 
+    - name: Install QEMU and UEFI Firmware
+      run: brew install qemu
+
     - name: Install NPM Dependencies
       workdir: virtci/web
       run: |
