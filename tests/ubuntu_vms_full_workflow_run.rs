@@ -85,7 +85,7 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
     - name: Verify Restart State
       run: |
         set -e
-        test "$(nproc)" = "1"
+        test "$(nproc)" = "2"
         mem_kb=$(grep MemTotal /proc/meminfo | tr -s ' ' | cut -d ' ' -f 2)
         test "$mem_kb" -gt 4194304
         test "$mem_kb" -lt 7340032

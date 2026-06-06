@@ -4,6 +4,11 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Changed
+
+- MacOS default temp path moved to `/tmp/vci-<user_id>`.
+  - Necessary due to swtpm socket path exceeding the maximum allowed on MacOS.
+
 ### Fixed
 
 - Fixed unconditional HVF acceleration on MacOS hosts, even if HVF acceleration isn't available.

@@ -37,6 +37,13 @@ pub fn run_virtci_cli(paths: &VciGlobalPaths) {
 }
 
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
+    if let Err(e) = std::fs::create_dir_all(&paths.temp) {
+        eprintln!(
+            "Warning: failed to create temp directory {}: {e}",
+            paths.temp.display()
+        );
+    }
+
     let orphans = orphan::OrphanTracker::new();
     setup_signal_handlers(orphans.clone());
 
