@@ -4,6 +4,10 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+- More useful logs for if a VM failed to boot, rather than just reporting it being unable to be SSH'd into.
+
 ### Changed
 
 - MacOS default temp path moved to `/tmp/vci-<user_id>`.

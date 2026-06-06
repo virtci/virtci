@@ -81,27 +81,22 @@ impl Job {
 
         let ssh_target = self.backend.ssh_target();
 
-        match wait_for_ssh(&ssh_target, SSH_WAIT_TIMEOUT).await {
-            Some(secs) => {
-                let ssh_cmd = match &ssh_target.cred.key {
-                    Some(key) => format!(
-                        "ssh -i {} {}@{} -p {}",
-                        key, ssh_target.cred.user, ssh_target.ip, ssh_target.port
-                    ),
-                    None => format!(
-                        "ssh {}@{} -p {}",
-                        ssh_target.cred.user, ssh_target.ip, ssh_target.port
-                    ),
-                };
-                println!(
-                    "{}",
-                    format!("SSH ready after {secs}s. [{ssh_cmd}]").dimmed()
-                );
-            }
-            None => {
-                anyhow::bail!("SSH not available after {SSH_WAIT_TIMEOUT}s");
-            }
-        }
+        let secs =
+            wait_for_ssh_watching(self.backend.as_mut(), &ssh_target, SSH_WAIT_TIMEOUT).await?;
+        let ssh_cmd = match &ssh_target.cred.key {
+            Some(key) => format!(
+                "ssh -i {} {}@{} -p {}",
+                key, ssh_target.cred.user, ssh_target.ip, ssh_target.port
+            ),
+            None => format!(
+                "ssh {}@{} -p {}",
+                ssh_target.cred.user, ssh_target.ip, ssh_target.port
+            ),
+        };
+        println!(
+            "{}",
+            format!("SSH ready after {secs}s. [{ssh_cmd}]").dimmed()
+        );
 
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
@@ -397,12 +392,10 @@ impl Job {
                     self.backend.start_vm(cfg).context("Failed to restart VM")?;
 
                     let ssh = self.backend.ssh_target();
-                    match wait_for_ssh(&ssh, SSH_WAIT_TIMEOUT).await {
-                        Some(secs) => {
-                            println!("{}", format!("  SSH ready after {secs}s").dimmed());
-                        }
-                        None => anyhow::bail!("SSH not available after restart"),
-                    }
+                    let secs = wait_for_ssh_watching(self.backend.as_mut(), &ssh, SSH_WAIT_TIMEOUT)
+                        .await
+                        .context("after restart")?;
+                    println!("{}", format!("  SSH ready after {secs}s").dimmed());
 
                     if self.backend.is_offline() {
                         if let Some(cmd) = self.backend.offline_enforce_cmd() {
@@ -442,6 +435,29 @@ impl Job {
         }
 
         Ok(())
+    }
+}
+
+/// Like [`wait_for_ssh`], but also does [`VmBackend::vm_exit_error`] checks so a VM process that
+/// has died fails immediately with  its actual error (such as QEMU's captured stderr) instead
+/// of silently waiting the whole SSH timeout. Returns the seconds until SSH was ready.
+pub async fn wait_for_ssh_watching(
+    backend: &mut dyn VmBackend,
+    ssh: &SshTarget,
+    timeout_secs: u64,
+) -> anyhow::Result<u64> {
+    const CHUNK_SECS: u64 = 15;
+    let start = Instant::now();
+    loop {
+        if let Some(err) = backend.vm_exit_error() {
+            anyhow::bail!("VM process exited while waiting for SSH: {err}");
+        }
+        if wait_for_ssh(ssh, CHUNK_SECS).await.is_some() {
+            return Ok(start.elapsed().as_secs());
+        }
+        if start.elapsed().as_secs() >= timeout_secs {
+            anyhow::bail!("SSH not available after {timeout_secs}s");
+        }
     }
 }
 

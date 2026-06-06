@@ -394,6 +394,15 @@ impl VmBackend for TartBackend {
         self.runner.as_ref().unwrap().clone_name.clone()
     }
 
+    fn vm_exit_error(&mut self) -> Option<String> {
+        let runner = self.runner.as_mut()?;
+        let process = runner.tart_process.as_mut()?;
+        match process.try_wait() {
+            Ok(Some(status)) => Some(format!("tart exited with {status}")),
+            _ => None,
+        }
+    }
+
     fn wait_for_exit(&mut self) {
         if let Some(ref mut runner) = self.runner {
             if let Some(ref mut process) = runner.tart_process {

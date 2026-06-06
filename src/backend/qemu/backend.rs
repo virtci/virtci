@@ -403,6 +403,24 @@ impl VmBackend for QemuBackend {
         self.run_marker()
     }
 
+    fn vm_exit_error(&mut self) -> Option<String> {
+        let qemu = self.qemu_process.as_ref()?;
+        let exited = qemu.lock().ok()?.try_wait();
+        if !exited {
+            return None;
+        }
+        let stderr_log = self
+            .host_temp_dir
+            .join(format!("{}-qemu.stderr", self.run_marker()));
+        let stderr = std::fs::read_to_string(stderr_log).unwrap_or_default();
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            Some("QEMU exited with no stderr output".to_string())
+        } else {
+            Some(format!("QEMU exited:\n{stderr}"))
+        }
+    }
+
     fn wait_for_exit(&mut self) {
         if let Some(qemu) = self.qemu_process.clone() {
             loop {

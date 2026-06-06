@@ -44,6 +44,12 @@ pub trait VmBackend {
 
     fn run_name(&self) -> String;
 
+    /// Some(String) if the VM processes exited with stderr.
+    /// Polled while waiting for SSH. None means alive or unknown.
+    fn vm_exit_error(&mut self) -> Option<String> {
+        None
+    }
+
     /// With `virtci boot` the user needs to shut down the VM internally.
     fn wait_for_exit(&mut self) {}
 
