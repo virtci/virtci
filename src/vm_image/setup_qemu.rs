@@ -40,17 +40,20 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Re
     let (tpm, nvme, cpu_model, additional_drives, additional_devices, readonly_isos) =
         prompt_advanced_options(guest_os, arch)?;
 
-    // On Windows, TPM or UEFI images must run via WSL2/KVM — native WHPX has no swtpm and cannot
-    // emulate the OVMF pflash MMIO (QEMU GitLab #513). BIOS, non-TPM images run natively.
     #[cfg(target_os = "windows")]
-    let needs_wsl2 = tpm || uefi.is_some();
+    let needs_wsl2 =
+        crate::backend::qemu::image_runs_in_wsl2(tpm, uefi.is_some(), arch, paths.wsl.as_ref());
+    #[cfg(target_os = "windows")]
+    if uefi.is_some() && !tpm && !needs_wsl2 {
+        eprintln!("UEFI image will run natively on the Windows host under TCG emulation.");
+    }
 
     #[cfg(target_os = "windows")]
     let wsl_distro: Option<String> = if needs_wsl2 {
         match &paths.wsl {
             None => anyhow::bail!(
-                "A WSL2 distro is required for TPM or UEFI VMs on Windows \
-                 (native QEMU/WHPX cannot run them)."
+                "A WSL2 distro is required for TPM VMs on Windows \
+                 (swtpm is unavailable on the Windows host)."
             ),
             Some(wsl_paths) => Some(wsl_paths.distro.clone()),
         }
@@ -625,6 +628,11 @@ pub fn find_uefi_firmware(arch: Arch) -> Option<(String, String)> {
             (
                 "/opt/homebrew/share/qemu/edk2-riscv-code.fd",
                 "/opt/homebrew/share/qemu/edk2-riscv-vars.fd",
+            ),
+            // Windows
+            (
+                "C:\\Program Files\\qemu\\share\\edk2-riscv-code.fd",
+                "C:\\Program Files\\qemu\\share\\edk2-riscv-vars.fd",
             ),
         ],
     };

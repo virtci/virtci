@@ -30,10 +30,12 @@ pub mod setup_tart;
 
 // https://www.linux-kvm.org/downloads/lersek/ovmf-whitepaper-c770f8c.txt
 // https://github.com/tianocore/tianocore.github.io/wiki/How-to-run-OVMF
-// The UEFI firmware can be split into two sections
+// The UEFI firmware can be split into two sections.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UefiSplit {
+    /// Set to "auto" to force discovery in system directories.
     pub code: String,
+    /// Set to "auto" to force discovery in system directories.
     pub vars: String,
 }
 
@@ -112,6 +114,19 @@ pub enum Arch {
     RISCV64,
 }
 
+impl Arch {
+    /// The architecture of the host running virtci.
+    #[must_use]
+    pub fn host() -> Arch {
+        match std::env::consts::ARCH {
+            "x86_64" => Arch::X64,
+            "aarch64" => Arch::ARM64,
+            "riscv64" => Arch::RISCV64,
+            other => panic!("Unsupported host CPU architecture: {other}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GuestOs {
     Linux,
@@ -155,20 +170,6 @@ pub struct QemuConfig {
     pub nvme: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly_isos: Option<Vec<String>>,
-}
-
-impl QemuConfig {
-    /// On a Windows host, whether this image must run through WSL2 (KVM) rather than native
-    /// QEMU/WHPX. Two independent reasons, both hard limitations of the Windows hypervisor stack:
-    /// - **TPM**: swtpm only exists in the WSL2 distro.
-    /// - **UEFI**: WHPX cannot emulate the OVMF `-pflash` MMIO (QEMU GitLab #513), so *any* UEFI
-    ///   guest fails on native WHPX. Legacy-BIOS guests (`uefi: None`) run fine natively.
-    ///
-    /// On non-Windows hosts this predicate is irrelevant (the exec target is chosen by OS).
-    #[must_use]
-    pub fn requires_wsl2(&self) -> bool {
-        self.tpm || self.uefi.is_some()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

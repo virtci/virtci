@@ -11,6 +11,18 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
   - Useful for persisting modifications in a VM without having to change the base.
 - Rename a VM image locally with `virtci edit <image> --rename <new_name>`.
   - Crash safe, even for SIGKILL.
+- Support running UEFI VMs directly on Windows hosts, not just inside WSL2.
+  - Only used if WSL2 KVM acceleration isn't available, and disables WHPX acceleration, so uses much slower TCG emulation.
+  - Useful for running VMs inside of windows VMs.
+
+### Fixed
+
+- Fixed issue where Windows Host couldn't access VM-inside-WSL2 over SSH with various WSL2 configurations.
+- Fixed stdout/stderr formatting in some terminals during workflow runs.
+- Fixed `virtci active` not correctly tracking active workflows on Windows.
+- Fixed Windows not finding system RISC-V64 UEFI files.
+- Fixed issue where VirtCI would take a while to find a valid QEMU TCP port due to WinNAT/Hyper-V reservation table.
+- Fixed issue where workflow run setting the VM offline did not work when running on a Windows host through WSL2.
 
 ## Version 0.2.0 - 2026-05-30
 
@@ -28,6 +40,7 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Fixed Windows being unable to run TPM or UEFI enabled VMs.
   - Now, TPM or UEFI VMs are ran through WSL2, being invoked on the Windows host.
   - Secure Boot VMs are strictly not supported, and likely will never be as Windows Hosts and WSL2 lack SMM.
+- Longer timeout for emulated VMs to give them time to connect and boot.
 
 ## Version 0.1.0 - 2026-05-11
 

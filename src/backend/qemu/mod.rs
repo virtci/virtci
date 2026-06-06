@@ -15,6 +15,70 @@ pub mod backend;
 pub mod binaries;
 pub mod kvm;
 
+/// On a Windows host, deciding whether a QEMU image should run natively or inside WSL2 (optionally
+/// with KVM) depends on a few factors:
+/// - **TPM**: Always on WSL2, not avoidable.
+/// - **UEFI**: forces WSL2 ONLY WHEN WSL2 can actually accelerate it. WHPX cannot emulate OVMF
+///   `-pflash` MMIO (QEMU GitLab #513), so a native UEFI VM would have to use TCG. That fallback
+///   is only worth avoiding if KVM acceleration is present. Cross-arch VM is TCG regardless.
+/// - **Legacy BIOS**: Run on the Windows host.
+#[cfg(target_os = "windows")]
+#[must_use]
+pub fn image_runs_in_wsl2(
+    tpm: bool,
+    has_uefi: bool,
+    arch: crate::vm_image::Arch,
+    wsl: Option<&crate::global_paths::WslPaths>,
+) -> bool {
+    use crate::vm_image::Arch;
+
+    if tpm {
+        return true;
+    }
+    if !has_uefi {
+        return false;
+    }
+
+    if arch != Arch::host() {
+        // Cross-arch always runs under TCG so KVM in WSL2 would not help. Keep it on the host.
+        return false;
+    }
+    let Some(wsl) = wsl else {
+        return false;
+    };
+    kvm::check_kvm_access(&HostExecTarget::WSL2(wsl.distro.clone())).is_ok()
+}
+
+/// Resolve the IPv4 address of a WSL2 distro's primary interface, as seen from the Windows host.
+///
+/// When the Windows host drives QEMU inside WSL2, QEMU's `hostfwd` binds the forwarded SSH port
+/// *inside the WSL2 network namespace*, not on the Windows host. Reaching it via `127.0.0.1`
+/// depends on WSL2 localhost forwarding, which is unreliable (and disabled outright in some
+/// configurations). The distro's NAT IP is always directly reachable from the host, so we dial
+/// that instead. The IP is stable for the lifetime of the distro but can change across a
+/// `wsl --shutdown`, so callers resolve it per run rather than caching it on disk.
+#[cfg(target_os = "windows")]
+pub fn wsl_distro_ip(distro: &str) -> anyhow::Result<String> {
+    let output = std::process::Command::new("wsl")
+        .args(["-d", distro, "--", "hostname", "-I"])
+        .output()
+        .context("failed to run `wsl` to resolve the distro IP")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "`wsl hostname -I` failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    // `hostname -I` lists every address; the first is the primary eth0 NAT IP.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+        .context("`wsl hostname -I` returned no IP address")
+}
+
 pub struct PortFlock {
     /// Needs to be Option for drop semantics
     lock: Option<FileLock>,
@@ -64,6 +128,14 @@ impl PortFlock {
             let lock_path = temp_path.join(format!("vci-qemu-port-{port}.lock"));
             let res = FileLock::try_new(lock_path);
             if let Ok(lock) = res {
+                // Optimistic bind probe. Like 99% of the time, a successful TCP bind means the
+                // later QEMU TCP bind will succeed as the ports are rarely in use.
+                // A failed bind means the port is DEFINITELY not available though.
+                // WinNAT/Hyper-V can reserve ports within the PORT_RANGE_START -> PORT_RANGE_END
+                // range.
+                if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                    continue;
+                }
                 return Ok(PortFlock {
                     lock: Some(lock),
                     port,

@@ -239,11 +239,21 @@ fn load_image(name: &str, paths: &VciGlobalPaths) -> Result<ImageDescription, St
             paths.system_home.display()
         )
     })?;
+
+    #[cfg(target_os = "windows")]
+    let home_wsl_distro = home.wsl_distro.clone();
+
     let vci_path = home.path;
     let contents = std::fs::read_to_string(&vci_path)
         .map_err(|e| format!("Failed to read {}: {e}", vci_path.display()))?;
     let mut desc: ImageDescription = serde_json::from_str(&contents)
         .map_err(|e| format!("Failed to parse image description '{name}': {e}"))?;
     desc.name = name.to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        desc.wsl_distro = home_wsl_distro;
+    }
+
     Ok(desc)
 }

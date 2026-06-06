@@ -20,13 +20,23 @@ use anyhow::Context;
 use crate::vm_image::HostExecTarget;
 
 /// How a spawned child's standard streams are wired.
+///
+/// Every variant except [`ChildIo::Interactive`] detaches the child from virtci's console on
+/// Windows (`CREATE_NO_WINDOW`). This matters because the child can be `wsl.exe`, which
+/// reconfigures whatever console it inherits into VT/raw mode which disables automatic
+/// carriage-return on newline. This can make the print outputs render like a staircase (bad).
+/// A detached child gets its own hidden console instead and leaves virtci's untouched.
 #[derive(Clone, Copy)]
 pub enum ChildIo<'a> {
     /// Discard stdin/stdout/stderr. For background daemons like swtpm.
     Quiet,
-    /// Inherit stdin/stdout (so a guest serial console reaches the terminal) but redirect stderr
-    /// to `path`. For QEMU, so an early launch failure — notably the host-forwarding bind — can
-    /// be read back from the file while the console still works.
+    /// Inherit stdin/stdout (so a guest serial console reaches the terminal) and redirect stderr
+    /// to `path`. For interactive `virtci boot` with `-serial stdio`, the child intentionally
+    /// shares the host console.
+    Interactive(&'a std::path::Path),
+    /// Discard stdin/stdout and redirect stderr to `path`, detached from the console. For
+    /// non-interactive `virtci run` QEMU: an early launch failure (notably the host-forwarding
+    /// bind) can still be read back from the file, without the relay clobbering the console.
     StderrToFile(&'a std::path::Path),
 }
 
@@ -78,6 +88,25 @@ impl Drop for TargetChildProcess {
     }
 }
 
+/// Give a child its own hidden console instead of inheriting virtci's, so it cannot reconfigure
+/// the host console (see [`ChildIo`]). No-op when `detached` is false or off Windows.
+#[cfg_attr(
+    not(target_os = "windows"),
+    allow(unused_variables, clippy::needless_pass_by_ref_mut)
+)]
+fn detach_from_console(cmd: &mut Command, detached: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        if detached {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW: run the console child with a fresh, invisible console rather than
+            // attaching to virtci's, so wsl.exe/QEMU can't flip our console into VT/raw mode.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+    }
+}
+
 enum TargetChild {
     Host(Child),
     #[cfg(target_os = "windows")]
@@ -92,12 +121,18 @@ impl TargetChild {
         args: &[String],
         io: ChildIo,
     ) -> anyhow::Result<Self> {
+        let detached = !matches!(io, ChildIo::Interactive(_));
         let (stdin, stdout, stderr) = match io {
             ChildIo::Quiet => (Stdio::null(), Stdio::null(), Stdio::null()),
-            ChildIo::StderrToFile(path) => {
+            ChildIo::Interactive(path) => {
                 let file = std::fs::File::create(path)
                     .with_context(|| format!("failed to create stderr log {}", path.display()))?;
                 (Stdio::inherit(), Stdio::inherit(), Stdio::from(file))
+            }
+            ChildIo::StderrToFile(path) => {
+                let file = std::fs::File::create(path)
+                    .with_context(|| format!("failed to create stderr log {}", path.display()))?;
+                (Stdio::null(), Stdio::null(), Stdio::from(file))
             }
         };
 
@@ -108,6 +143,7 @@ impl TargetChild {
                 cmd.args(["-d", distro.as_str(), "--", program]);
                 cmd.args(args);
                 cmd.stdin(stdin).stdout(stdout).stderr(stderr);
+                detach_from_console(&mut cmd, detached);
                 let relay = cmd
                     .spawn()
                     .with_context(|| format!("failed to spawn `{program}` via WSL2"))?;
@@ -121,6 +157,7 @@ impl TargetChild {
                 let _ = marker;
                 let mut cmd = Command::new(program);
                 cmd.args(args).stdin(stdin).stdout(stdout).stderr(stderr);
+                detach_from_console(&mut cmd, detached);
                 let child = cmd
                     .spawn()
                     .with_context(|| format!("failed to spawn `{program}`"))?;

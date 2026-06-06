@@ -449,7 +449,14 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
             }
         }
         HostExecTarget::MacOS => push_arg(&mut args, "-accel", "hvf"),
-        HostExecTarget::WindowsNative => push_arg(&mut args, "-accel", "whpx"),
+        HostExecTarget::WindowsNative => {
+            // WHPX only accelerates same-architecture guests, and cannot emulate the OVMF pflash
+            // MMIO that UEFI needs (QEMU GitLab #513). In either case fall through to TCG below.
+            let has_uefi = backend.uefi_code.is_some() || backend.uefi_vars.is_some();
+            if !has_uefi && arch == Arch::host() {
+                push_arg(&mut args, "-accel", "whpx");
+            }
+        }
     }
     push_arg(&mut args, "-accel", "tcg");
 
@@ -460,7 +467,9 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
         .port;
     let inside = backend.inside_vm_port;
     let offline = backend.start_config.offline.unwrap_or(false);
-    let netdev = if offline {
+    // slirp's `restrict=yes` is unusable on WSL2 from a Windows host.
+    let use_restrict = offline && !matches!(backend.exec_target, HostExecTarget::WSL2(_));
+    let netdev = if use_restrict {
         format!("user,id=net0,restrict=yes,hostfwd=tcp::{host_port}-:{inside}")
     } else {
         format!("user,id=net0,hostfwd=tcp::{host_port}-:{inside}")
