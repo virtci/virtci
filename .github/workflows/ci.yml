@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-x64-host-system-tests:
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run System Tests
+        run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_x64.yml
+
+  ubuntu-arm64-host-system-tests:
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run System Tests
+        run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_arm64.yml
+
+  macos-arm64-host-system-tests:
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run System Tests
+        run: exec cargo run -- run .ci/system_tests/mac_system_tests_arm64.yml
+
+  windows-x64-host-system-tests:
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run System Tests
+        run: exec cargo run -- run .ci/system_tests/windows_system_tests_x64.yml
+
+  windows-arm64-host-system-tests:
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run System Tests
+        run: exec cargo run -- run .ci/system_tests/windows_system_tests_arm64.yml

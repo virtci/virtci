@@ -8,3 +8,5 @@ web/dist
 scripts/swtpm
 scripts/libtpms
 tests/temp/
+.ci/upstream/*.img
+.ci/temp/

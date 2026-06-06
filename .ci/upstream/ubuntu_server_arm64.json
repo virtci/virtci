@@ -3,7 +3,7 @@
   "arch": "ARM64",
   "backend": {
     "type": "qemu",
-    "image": "tests/upstream_image/debian-12-genericcloud-arm64.qcow2",
+    "image": ".ci/upstream/resolute-server-cloudimg-arm64.img",
     "uefi": {
       "code": "auto",
       "vars": "auto"
@@ -13,12 +13,10 @@
     "additional_devices": null,
     "tpm": false,
     "nvme": false,
-    "readonly_isos": [
-      "tests/upstream_image/seed.iso"
-    ]
+    "readonly_isos": [".ci/upstream/seed.iso"]
   },
   "ssh": {
-    "user": "debian",
+    "user": "virtci",
     "pass": "virtci",
     "key": null
   }

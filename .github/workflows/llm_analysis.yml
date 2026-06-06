@@ -1,55 +1,38 @@
-name: 'Smoke Tests'
+name: LLM Analysis
 
 on:
   workflow_dispatch:
   workflow_call:
-  # pull_request:
-  #   branches:
-  #     - main
-  #   paths-ignore:
-  #     - '**/*.md'
-  # push:
-  #   branches:
-  #     - main
-  #   paths-ignore:
-  #     - '**/*.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
+  contents: read # read repo
+  pull-requests: write # post comments
 
 jobs:
-  # Needs manual approval before it can run.
-  # Skipped for push and workflow_dispatch.
-  gate:
-    if: github.event_name == 'pull_request'
-    environment: ci-protected
-    runs-on: ubuntu-latest
-    steps:
-      - name: Approved
-        run: echo "CI approved"
-
-  check:
-    needs: gate
-    if: always() && (needs.gate.result == 'success' || needs.gate.result == 'skipped')
-    runs-on:
-      - self-hosted
-      - Linux
-      - X64
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Run CI checks
-        run: cargo run -- run tests/virtci/smoke_tests.yml
-
   virtci-llm-analysis:
-    needs: gate
-    if: always() && (needs.gate.result == 'success' || needs.gate.result == 'skipped')
+    # Skip LLM analysis for fork PRs for now. Open to changing in the future, putting in a separate
+    # workflow YAML file under pull_request_target with HIGHLY specific checkout settings.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       - self-hosted
       - Linux
       - X64
     timeout-minutes: 15
     continue-on-error: true
-    permissions: # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
-      contents: read # read repo
-      pull-requests: write # post comments
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -61,14 +44,64 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             git diff origin/${{ github.base_ref }}...HEAD > diff.txt
+          elif [ "${{ github.event_name }}" == "push" ]; then
+            # Diff the full push range, not just the tip commit. Fall back to
+            # HEAD~1 when 'before' is unusable (force-push to a deleted commit,
+            # or the all-zeros sha of a newly created branch).
+            BEFORE="${{ github.event.before }}"
+            if [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
+              git diff "$BEFORE"..HEAD > diff.txt
+            else
+              git diff HEAD~1 > diff.txt
+            fi
           else
             git diff HEAD~1 > diff.txt
           fi
 
-      - name: Pull opencode image
+      - name: Create empty PR Comments file
+        if: github.event_name != 'pull_request'
+        run: echo "## PR Comments (not a PR event)" > pr-comments.md
+
+      - name: Fetch PR Comments
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          PR_NUM=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+
+          ERRORS=$(mktemp)
+          # On any fetch failure fall back to an annotated pr-comments.md, warn, and
+          # exit 0 so the review still runs with the fallback file.
+          trap 'if [ -s "$ERRORS" ]; then { echo "## PR Comments (error fetching)"; echo ""; cat "$ERRORS"; } > pr-comments.md; echo "::warning::PR comment fetch failed: $(tr "\n" " " < "$ERRORS")"; fi; rm -f "$ERRORS"; exit 0' EXIT
+
+          {
+            gh pr view "$PR_NUM" --json title,body --jq '"## PR Title\n\n" + .title + "\n\n## PR Body\n\n" + (.body // "")' 2>>"$ERRORS" || { echo "FAILED: gh pr view title/body" >> "$ERRORS"; exit 1; }
+            echo ""
+            echo "## Review Comments"
+            echo ""
+            COMMENTS=$(gh api --paginate repos/$REPO/pulls/$PR_NUM/comments --jq '.[] | "### " + "@\(.user.login)" + " on \(.path):\(.line // .position // "unknown")" + "\n---\n" + .body' 2>>"$ERRORS") || { echo "FAILED: fetch review comments" >> "$ERRORS"; exit 1; }
+            if [ -z "$COMMENTS" ]; then
+              echo "No review comments on this PR."
+            else
+              echo "$COMMENTS"
+            fi
+            echo ""
+            echo "## Issue Comments"
+            echo ""
+            ISSUES=$(gh api --paginate repos/$REPO/issues/$PR_NUM/comments --jq '.[] | "### " + "@\(.user.login)" + "\n---\n" + .body' 2>>"$ERRORS") || { echo "FAILED: fetch issue comments" >> "$ERRORS"; exit 1; }
+            if [ -z "$ISSUES" ]; then
+              echo "No issue comments on this PR."
+            else
+              echo "$ISSUES"
+            fi
+          } > pr-comments.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Pull OpenCode image
         run: docker pull -q ghcr.io/anomalyco/opencode:latest
 
-      - name: Run opencode Review
+      - name: Run OpenCode Review
         id: llm_analysis
         continue-on-error: true
         env:
@@ -87,6 +120,8 @@ jobs:
 
           The diff to review is in the attached file diff.txt. Treat it as the complete change set.
 
+          PR context (title, body, review comments, issue comments) is in the attached file pr-comments.md. Consider any existing review feedback when forming your analysis -- avoid repeating issues already raised, and acknowledge concerns that align with your findings.
+
           This is a one-shot review. There is no user to respond to. Your final message must contain exactly these four sections and nothing else:
 
           ## Critical Issues
@@ -96,7 +131,7 @@ jobs:
 
           Cite file:line for each finding. Write "None found" for empty sections. Any other output is a failure. Do not ask questions. Do not request approval. Do not request next steps. Do not propose to apply the diff.
 
-          You may use Read, Glob, or Grep to look up source files referenced by the diff if you need additional context, BUT you have a hard budget of at most 5 tool calls total across the entire review. After 5 tool calls (or sooner) you must immediately write the four sections, do not exceed this budget under any circumstances. Do not create todo lists, multi-step plans, or staged work. Do not attempt to Read or page through diff.txt, its contents are already attached.
+          You may use Read, Glob, or Grep to look up source files referenced by the diff if you need additional context, BUT you have a hard budget of at most 8 tool calls total across the entire review. After 8 tool calls (or sooner) you must immediately write the four sections, do not exceed this budget under any circumstances. Do not create todo lists, multi-step plans, or staged work. Do not attempt to Read or page through diff.txt, its contents are already attached.
 
           Constraints (do not flag these as issues):
           - Spawning QEMU, Tart, swtpm, or other VM-backend processes is by design
@@ -129,6 +164,9 @@ jobs:
 
           # add `--print-logs --log-level DEBUG \` before run to get debug logs
 
+          # Handle GitHub cancellation.
+          trap 'docker kill "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
+
           timeout --preserve-status --signal=TERM --kill-after=30s 840 \
             docker run --rm --name "$CONTAINER_NAME" \
               --add-host=host.docker.internal:host-gateway \
@@ -147,9 +185,10 @@ jobs:
               -e LLAMA_CPP_API_KEY \
               ghcr.io/anomalyco/opencode:latest \
               run \
-                "$PROMPT" \
-                --file /workspace/diff.txt \
-                --model llamacpp/default \
+                 "$PROMPT" \
+                 --file /workspace/diff.txt \
+                 --file /workspace/pr-comments.md \
+                 --model llamacpp/default \
             2>&1 | tee llm-analysis-raw.md
           EXIT=${PIPESTATUS[0]}
           echo "opencode exit code: $EXIT"
@@ -157,6 +196,7 @@ jobs:
             echo "::warning::opencode timed out (exit $EXIT)"
           fi
           echo "llm_exit=$EXIT" >> "$GITHUB_OUTPUT"
+          exit "$EXIT"
 
       - name: Generate report
         if: always()
@@ -217,14 +257,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: llm-analysis-${{ github.run_id }}
+          name: llm-analysis-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             llm-analysis.md
             llm-analysis-raw.md
           if-no-files-found: ignore
 
       - name: Post Warning on Failure
-        if: always() && steps.llm_analysis.outcome != 'success'
+        if: ${{ !cancelled() && steps.llm_analysis.outcome != 'success' }}
         continue-on-error: true
         run: |
           if [ "${{ github.event_name }}" == "pull_request" ]; then

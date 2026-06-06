@@ -1,21 +1,22 @@
 {
   "os": "Linux",
-  "arch": "X64",
+  "arch": "RISCV64",
   "backend": {
     "type": "qemu",
-    "image": "tests/upstream_image/debian-12-genericcloud-amd64.qcow2",
-    "uefi": null,
+    "image": ".ci/upstream/resolute-server-cloudimg-riscv64.img",
+    "uefi": {
+      "code": "auto",
+      "vars": "auto"
+    },
     "cpu_model": null,
     "additional_drives": null,
     "additional_devices": null,
     "tpm": false,
     "nvme": false,
-    "readonly_isos": [
-      "tests/upstream_image/seed.iso"
-    ]
+    "readonly_isos": [".ci/upstream/seed.iso"]
   },
   "ssh": {
-    "user": "debian",
+    "user": "virtci",
     "pass": "virtci",
     "key": null
   }

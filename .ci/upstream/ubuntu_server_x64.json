@@ -1,0 +1,23 @@
+{
+  "os": "Linux",
+  "arch": "X64",
+  "backend": {
+    "type": "qemu",
+    "image": ".ci/upstream/resolute-server-cloudimg-amd64.img",
+    "uefi": {
+      "code": "auto",
+      "vars": "auto"
+    },
+    "cpu_model": null,
+    "additional_drives": null,
+    "additional_devices": null,
+    "tpm": false,
+    "nvme": false,
+    "readonly_isos": [".ci/upstream/seed.iso"]
+  },
+  "ssh": {
+    "user": "virtci",
+    "pass": "virtci",
+    "key": null
+  }
+}

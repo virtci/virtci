@@ -1,0 +1,72 @@
+windows-system-tests-x64:
+  image: win-11-x64
+  cpus: 4
+  memory: 12G
+  steps:
+    - name: Copy Files
+      copy:
+        from: ./
+        to: vm:~/virtci
+        exclude:
+          - .git
+          - .github
+          - docs
+          - target
+          - .ci/upstream/*.img
+
+    - name: Fetch Ubuntu Images
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        .\virtci\.ci\upstream\fetch_ubuntu_images.ps1
+
+    - name: Install Rust
+      run: winget install Rustlang.Rustup --silent
+
+    - name: Install Node and NPM
+      run: choco install nodejs -y --quiet
+
+    - name: Install clang-format
+      run: winget install --id=LLVM.ClangFormat -e --silent
+
+    - name: Install cargo-deny
+      run: cargo install cargo-deny
+
+    - name: Fetch Cargo Dependencies
+      workdir: virtci
+      run: cargo fetch
+
+    - name: Security and License Check
+      workdir: virtci
+      run: cargo deny check
+
+    - name: Go Offline and More Memory
+      restart:
+        offline: true
+        memory: 16G
+
+    - name: Check Formatting
+      workdir: virtci
+      run: |
+        cargo fmt --check
+        Get-ChildItem -Recurse -Include *.c | ForEach-Object { clang-format --dry-run $_.FullName }
+      continue_on_error: true
+
+    - name: Clippy
+      workdir: virtci
+      run: cargo clippy -- -D warnings
+
+    - name: Build
+      workdir: virtci
+      run: cargo build
+
+    - name: Unit Tests
+      workdir: virtci
+      run: cargo test
+
+    - name: Go Online For Full CI/CD Workflow Run Tests
+      restart:
+        offline: false
+
+    - name: Full CI/CD Workflow Run Tests
+      workdir: virtci
+      run: cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture
