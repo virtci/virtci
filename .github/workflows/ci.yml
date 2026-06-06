@@ -14,8 +14,11 @@ on:
     paths-ignore:
       - '**/*.md'
 
+# PR runs share a per-PR group so a new commit cancels the in-progress run.
+# Everything else like a push to main or workflow dispatch gets a unique group per run, so
+# main pushes never queue behind or cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
