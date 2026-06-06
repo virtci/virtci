@@ -41,21 +41,23 @@ jobs:
           fetch-depth: 0
 
       - name: Generate diff
+        # -U15 gives the model generous surrounding context, reducing how much
+        # source it needs to request in pass 1.
         run: |
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            git diff origin/${{ github.base_ref }}...HEAD > diff.txt
+            git diff -U15 origin/${{ github.base_ref }}...HEAD > diff.txt
           elif [ "${{ github.event_name }}" == "push" ]; then
             # Diff the full push range, not just the tip commit. Fall back to
             # HEAD~1 when 'before' is unusable (force-push to a deleted commit,
             # or the all-zeros sha of a newly created branch).
             BEFORE="${{ github.event.before }}"
             if [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
-              git diff "$BEFORE"..HEAD > diff.txt
+              git diff -U15 "$BEFORE"..HEAD > diff.txt
             else
-              git diff HEAD~1 > diff.txt
+              git diff -U15 HEAD~1 > diff.txt
             fi
           else
-            git diff HEAD~1 > diff.txt
+            git diff -U15 HEAD~1 > diff.txt
           fi
 
       - name: Create empty PR Comments file
@@ -98,40 +100,126 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Pull OpenCode image
-        run: docker pull -q ghcr.io/anomalyco/opencode:latest
-
-      - name: Run OpenCode Review
+      # 3 direct calls to llama.cpp server, no agent.
+      # Pass 1: Thinking off, json_schema. Model maps the relevant source files.
+      # Pass 2: Thinking on, free-form. Review of the diff and the provided context.
+      # Pass 3: Thinking off, json_schema. Generate proper report.
+      - name: Run LLM Review
         id: llm_analysis
         continue-on-error: true
         env:
-          # https://opencode.ai/docs/config/ -- no GITHUB_TOKEN in container; diff is pre-generated at /workspace/diff.txt
-          # --network none cannot be used: Ollama requires host.docker.internal connectivity.
-          # All other available isolation is applied instead.
-          # https://github.com/anomalyco/opencode
           LLAMA_CPP_API_KEY: ${{ secrets.LLAMA_CPP_API_KEY }}
-          OPENCODE_CONFIG_CONTENT: '{"$schema":"https://opencode.ai/config.json","provider":{"llamacpp":{"npm":"@ai-sdk/openai-compatible","name":"llama.cpp","options":{"baseURL":"http://host.docker.internal:11433/v1","apiKey":"{env:LLAMA_CPP_API_KEY}","timeout":900000,"chunkTimeout":180000},"models":{"default":{"name":"llama.cpp default","limit":{"context":131072,"output":32768},"options":{"chat_template_kwargs":{"enable_thinking":false}}}}}},"compaction":{"auto":true,"prune":true,"reserved":15000},"permission":{"read":"allow","glob":"allow","grep":"allow","list":"deny","lsp":"deny","codesearch":"deny","edit":"deny","bash":"deny","task":"deny","skill":"deny","webfetch":"deny","websearch":"deny","question":"deny","external_directory":"deny","doom_loop":"deny"}}'
-          CONTAINER_NAME: virtci-opencode-review-${{ github.run_id }}
+          LLAMA_API_URL: http://localhost:11433/v1/chat/completions
         run: |
           set +e
 
-          PROMPT=$(cat <<'PROMPT_END'
+          command -v jq >/dev/null 2>&1 || { echo "::error::jq is required on the runner"; echo "llm_exit=1" >> "$GITHUB_OUTPUT"; exit 1; }
+
+          fail() {
+            echo "::warning::LLM review failed: $1"
+            echo "LLM review failed: $1" > llm-analysis-raw.md
+            echo "llm_exit=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+
+          # $1: request body file, $2: response file, $3: timeout seconds
+          llm_call() {
+            local code
+            code=$(curl -sS --max-time "$3" -w '%{http_code}' \
+              -H "Authorization: Bearer $LLAMA_CPP_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d @"$1" -o "$2" "$LLAMA_API_URL") || return 1
+            if [ "$code" != "200" ]; then
+              echo "::warning::llama-server returned HTTP $code: $(head -c 300 "$2" 2>/dev/null)"
+              return 1
+            fi
+          }
+
+          # Keep the prompt comfortably within the model's 128k context even for huge diffs.
+          if [ "$(wc -c < diff.txt)" -gt 262144 ]; then
+            head -c 262144 diff.txt > diff-capped.txt
+            printf '\n\n[diff truncated at 256KB for context-window safety]\n' >> diff-capped.txt
+            mv diff-capped.txt diff.txt
+            echo "::warning::diff.txt truncated to 256KB"
+          fi
+
+          ########################## PASS 1: context request ##########################
+          # Repo map: lets the model pick real paths instead of guessing them.
+          git ls-files | head -n 4000 > repo-files.txt
+
+          PASS1_PROMPT=$(cat <<'P1_END'
+          You are preparing to review a code diff for VirtCI: a self-hosted CI/CD runner that orchestrates real OS VMs across multiple CPU architectures. The Rust backend (under src/) drives QEMU and Tart VM lifecycles and exposes S3-compatible storage APIs; the React/TypeScript frontend lives under web/.
+
+          The complete list of repository files and the diff are attached below. To review the diff well you may need surrounding source context. List up to 8 repository files (with optional 1-based line ranges) you want to read -- prefer call sites, definitions, and modules referenced by the diff. Choose paths only from the repository file list. If the diff is self-contained, return an empty files array.
+
+          Respond with JSON only, matching: {"files":[{"path":"src/example.rs","start_line":1,"end_line":200}]}
+          P1_END
+          )
+
+          jq -n --rawfile diff diff.txt --rawfile repolist repo-files.txt --arg prompt "$PASS1_PROMPT" '{
+            messages: [{role: "user", content: ($prompt + "\n\n# repository file list\n\n" + $repolist + "\n\n# diff.txt\n\n" + $diff)}],
+            chat_template_kwargs: {enable_thinking: false},
+            temperature: 0.3,
+            max_tokens: 1024,
+            response_format: {type: "json_schema", json_schema: {name: "context_request", schema: {
+              type: "object",
+              properties: {files: {type: "array", maxItems: 8, items: {
+                type: "object",
+                properties: {
+                  path: {type: "string"},
+                  start_line: {type: "integer", minimum: 1},
+                  end_line: {type: "integer", minimum: 1}
+                },
+                required: ["path"]
+              }}},
+              required: ["files"]
+            }}}
+          }' > pass1-request.json || fail "building pass 1 request"
+
+          echo "Pass 1: requesting context file list"
+          if llm_call pass1-request.json pass1-response.json 120 \
+             && jq -e '.choices[0].message.content | fromjson | .files' pass1-response.json > /dev/null 2>&1; then
+            jq '.choices[0].message.content | fromjson | {files: .files[:8]}' pass1-response.json > files-requested.json
+          else
+            # Pass 1 is best-effort: a failure here degrades the review, not kills it.
+            echo "::warning::pass 1 failed; continuing without extra source context"
+            echo '{"files":[]}' > files-requested.json
+          fi
+
+          # Materialize the requested context. The script -- not the model -- enforces
+          # the budget: workspace-only paths, no .git (checkout credentials live there),
+          # text files only, max 400 lines per file.
+          : > context.txt
+          while IFS=$'\t' read -r path start end; do
+            real=$(realpath -m -- "$path" 2>/dev/null) || continue
+            case "$real" in
+              "$GITHUB_WORKSPACE/.git"|"$GITHUB_WORKSPACE/.git/"*) continue ;;
+              "$GITHUB_WORKSPACE"/*) ;;
+              *) continue ;;
+            esac
+            [ -f "$real" ] || continue
+            grep -Iq . "$real" 2>/dev/null || continue
+            total=$(wc -l < "$real")
+            s=$(( start > 0 ? start : 1 ))
+            e=$(( end >= s ? end : s + 399 ))
+            [ $(( e - s )) -gt 399 ] && e=$(( s + 399 ))
+            [ "$e" -gt "$total" ] && e=$total
+            {
+              echo "=== ${real#"$GITHUB_WORKSPACE"/} (lines $s-$e of $total) ==="
+              sed -n "${s},${e}p" "$real"
+              echo ""
+            } >> context.txt
+          done < <(jq -r '.files[] | [.path, (.start_line // 0), (.end_line // 0)] | @tsv' files-requested.json)
+          truncate -s '<300K' context.txt 2>/dev/null || true
+          echo "context.txt: $(wc -c < context.txt) bytes from $(jq '.files | length' files-requested.json) requested files"
+
+          ########################## PASS 2: deep analysis ##########################
+          PASS2_PROMPT=$(cat <<'P2_END'
           You are reviewing a diff for VirtCI: a self-hosted CI/CD runner that orchestrates real OS VMs across multiple CPU architectures. The Rust backend drives QEMU and Tart (macOS arm64 only) VM lifecycles, exposes S3-compatible storage APIs, and is paired with a React/TypeScript frontend. Targets Linux, macOS, and Windows hosts.
 
-          The diff to review is in the attached file diff.txt. Treat it as the complete change set.
+          The diff (the complete change set), PR context (title, body, review comments, issue comments), and source context you previously requested are attached below. Consider any existing review feedback -- avoid repeating issues already raised, and acknowledge concerns that align with your findings.
 
-          PR context (title, body, review comments, issue comments) is in the attached file pr-comments.md. Consider any existing review feedback when forming your analysis -- avoid repeating issues already raised, and acknowledge concerns that align with your findings.
-
-          This is a one-shot review. There is no user to respond to. Your final message must contain exactly these four sections and nothing else:
-
-          ## Critical Issues
-          ## Potential Issues
-          ## Suggestions
-          ## Summary
-
-          Cite file:line for each finding. Write "None found" for empty sections. Any other output is a failure. Do not ask questions. Do not request approval. Do not request next steps. Do not propose to apply the diff.
-
-          You may use Read, Glob, or Grep to look up source files referenced by the diff if you need additional context, BUT you have a hard budget of at most 8 tool calls total across the entire review. After 8 tool calls (or sooner) you must immediately write the four sections, do not exceed this budget under any circumstances. Do not create todo lists, multi-step plans, or staged work. Do not attempt to Read or page through diff.txt, its contents are already attached.
+          Analyze the change set thoroughly and write out your complete analysis: every candidate issue with file:line and a severity (critical / potential / suggestion), the checks you performed that came up clean, and a brief overall assessment. Your analysis will be converted into a structured report by a later step, so completeness and correctness matter more than formatting.
 
           Constraints (do not flag these as issues):
           - Spawning QEMU, Tart, swtpm, or other VM-backend processes is by design
@@ -157,47 +245,66 @@ jobs:
           - Missing doc comments
           - Test coverage gaps unless the change clearly breaks an existing tested invariant
           - Generic "consider using crate X instead" suggestions
-
-          Output the four sections now and stop.
-          PROMPT_END
+          P2_END
           )
 
-          # add `--print-logs --log-level DEBUG \` before run to get debug logs
+          jq -n --rawfile diff diff.txt --rawfile pr pr-comments.md --rawfile ctx context.txt --arg prompt "$PASS2_PROMPT" '{
+            messages: [{role: "user", content: ($prompt + "\n\n# diff.txt\n\n" + $diff + "\n\n# pr-comments.md\n\n" + $pr + "\n\n# requested source context\n\n" + $ctx)}],
+            temperature: 0.6,
+            top_p: 0.95,
+            max_tokens: 8192
+          }' > pass2-request.json || fail "building pass 2 request"
 
-          # Handle GitHub cancellation.
-          trap 'docker kill "$CONTAINER_NAME" >/dev/null 2>&1 || true' INT TERM
-
-          timeout --preserve-status --signal=TERM --kill-after=30s 840 \
-            docker run --rm --name "$CONTAINER_NAME" \
-              --add-host=host.docker.internal:host-gateway \
-              --user 65534:65534 \
-              --cap-drop ALL \
-              --security-opt no-new-privileges:true \
-              --read-only \
-              --tmpfs /tmp:rw,nosuid,size=2g,mode=1777 \
-              --pids-limit 64 \
-              --memory 8g \
-              -v "${{ github.workspace }}:/workspace:ro" \
-              -w /workspace \
-              -e HOME=/tmp \
-              -e XDG_DATA_HOME=/tmp/.local/share \
-              -e OPENCODE_CONFIG_CONTENT \
-              -e LLAMA_CPP_API_KEY \
-              ghcr.io/anomalyco/opencode:latest \
-              --print-logs --log-level DEBUG \
-              run \
-                 "$PROMPT" \
-                 --file /workspace/diff.txt \
-                 --file /workspace/pr-comments.md \
-                 --model llamacpp/default \
-            2> >(tee opencode-debug.log >&2) | tee llm-analysis-raw.md
-          EXIT=${PIPESTATUS[0]}
-          echo "opencode exit code: $EXIT"
-          if [ "$EXIT" = "143" ] || [ "$EXIT" = "124" ]; then
-            echo "::warning::opencode timed out (exit $EXIT)"
+          echo "Pass 2: deep analysis (thinking enabled)"
+          llm_call pass2-request.json pass2-response.json 480 || fail "pass 2 API call"
+          jq -r '.choices[0].message.reasoning_content // ""' pass2-response.json > pass2-reasoning.md
+          jq -r '.choices[0].message.content // ""' pass2-response.json > pass2-content.md
+          echo "pass 2: $(wc -c < pass2-reasoning.md) bytes reasoning, $(wc -c < pass2-content.md) bytes content, finish_reason: $(jq -r '.choices[0].finish_reason' pass2-response.json)"
+          if [ ! -s pass2-reasoning.md ] && [ ! -s pass2-content.md ]; then
+            fail "pass 2 returned no analysis"
           fi
-          echo "llm_exit=$EXIT" >> "$GITHUB_OUTPUT"
-          exit "$EXIT"
+
+          ###################### PASS 3: structured transcription ######################
+          PASS3_PROMPT=$(cat <<'P3_END'
+          Below are an analyst's complete notes (their reasoning followed by their conclusions) from reviewing a diff for VirtCI, then the diff itself. Produce the final structured review.
+
+          Rules: base every finding strictly on the analyst's notes -- do not invent new findings, and drop anything the analyst investigated and dismissed as fine. Each finding must be one self-contained string citing file:line. Use empty arrays for sections with no findings. The summary is 2-4 sentences.
+
+          Respond with JSON only, matching: {"critical_issues":["src/foo.rs:42 -- description"],"potential_issues":[],"suggestions":[],"summary":"..."}
+          P3_END
+          )
+
+          jq -n --rawfile reasoning pass2-reasoning.md --rawfile content pass2-content.md --rawfile diff diff.txt --arg prompt "$PASS3_PROMPT" '{
+            messages: [{role: "user", content: ($prompt + "\n\n# analyst reasoning\n\n" + $reasoning + "\n\n# analyst conclusions\n\n" + $content + "\n\n# diff.txt\n\n" + $diff)}],
+            chat_template_kwargs: {enable_thinking: false},
+            temperature: 0.2,
+            max_tokens: 4096,
+            response_format: {type: "json_schema", json_schema: {name: "review_report", schema: {
+              type: "object",
+              properties: {
+                critical_issues: {type: "array", items: {type: "string"}},
+                potential_issues: {type: "array", items: {type: "string"}},
+                suggestions: {type: "array", items: {type: "string"}},
+                summary: {type: "string"}
+              },
+              required: ["critical_issues", "potential_issues", "suggestions", "summary"]
+            }}}
+          }' > pass3-request.json || fail "building pass 3 request"
+
+          echo "Pass 3: structured transcription (json_schema constrained)"
+          llm_call pass3-request.json pass3-response.json 300 || fail "pass 3 API call"
+          jq -e '.choices[0].message.content | fromjson' pass3-response.json > review.json 2>/dev/null \
+            || fail "pass 3 returned unparseable JSON (finish_reason: $(jq -r '.choices[0].finish_reason' pass3-response.json))"
+
+          jq -r '
+            def section(items): if (items | length) == 0 then "None found" else (items | map("- " + .) | join("\n")) end;
+            "## Critical Issues\n\n" + section(.critical_issues)
+            + "\n\n## Potential Issues\n\n" + section(.potential_issues)
+            + "\n\n## Suggestions\n\n" + section(.suggestions)
+            + "\n\n## Summary\n\n" + .summary
+          ' review.json > llm-analysis-raw.md || fail "rendering markdown report"
+
+          echo "llm_exit=0" >> "$GITHUB_OUTPUT"
 
       - name: Generate report
         id: report
@@ -228,13 +335,9 @@ jobs:
             } > llm-analysis.md
           fi
 
-      - name: Show raw opencode output
+      - name: Show review output
         if: always()
         run: cat llm-analysis-raw.md
-
-      - name: Cleanup container
-        if: always()
-        run: docker rm -f "virtci-opencode-review-${{ github.run_id }}" 2>/dev/null || true
 
       - name: Post PR Comment
         if: github.event_name == 'pull_request' && steps.llm_analysis.outcome == 'success' && steps.report.outputs.structured == 'true'
@@ -250,7 +353,7 @@ jobs:
           cat llm-analysis.md >> "$GITHUB_STEP_SUMMARY"
           {
             echo ""
-            echo "<details><summary>Raw opencode output</summary>"
+            echo "<details><summary>Raw review output</summary>"
             echo ""
             echo '```'
             cat llm-analysis-raw.md
@@ -267,7 +370,11 @@ jobs:
           path: |
             llm-analysis.md
             llm-analysis-raw.md
-            opencode-debug.log
+            files-requested.json
+            context.txt
+            pass2-reasoning.md
+            pass2-content.md
+            review.json
           if-no-files-found: ignore
 
       - name: Post Warning on Failure
