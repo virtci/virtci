@@ -13,6 +13,7 @@ windows-system-tests-x64:
           - docs
           - target
           - .ci/upstream/*.img
+          - .ci/temp
 
     - name: Fetch Ubuntu Images
       run: |

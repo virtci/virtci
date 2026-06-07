@@ -53,11 +53,15 @@ pub fn qemu_system_binary(
     // same shape: Rosetta 2, and Linux binfmt_misc handlers (FEX/box64/qemu-user, the latter
     // often registered globally by Docker multi-arch tooling), silently run wrong-arch QEMU
     // with hardware acceleration broken and TCG doubly emulated.
-    //
-    // WSL2 is excluded for now: the binary lives inside the distro, so sniffing it requires
-    // in-distro probing, and it must match the distro environment rather than the Windows host.
-    if !matches!(exec_target, HostExecTarget::WSL2(_)) {
-        ensure_built_for_native_host(&binary)?;
+    // WSL2 needs the same check but in-distro.
+    match exec_target {
+        #[cfg(target_os = "windows")]
+        HostExecTarget::WSL2(distro) => {
+            ensure_built_for_wsl2_distro(distro, &binary)?;
+        }
+        #[cfg(not(target_os = "windows"))]
+        HostExecTarget::WSL2(_) => {}
+        _ => ensure_built_for_native_host(&binary)?,
     }
 
     let version = query_version(&binary, exec_target)
@@ -311,6 +315,65 @@ fn ensure_built_for_native_host(binary: &str) -> anyhow::Result<()> {
     );
 
     anyhow::bail!(message)
+}
+
+/// WSL2 variant of [`ensure_built_for_native_host`].
+fn ensure_built_for_wsl2_distro(distro: &str, binary: &str) -> anyhow::Result<()> {
+    let script = format!(
+        "p=\"$(command -v '{binary}')\" || exit 9; \
+         printf '%s\\n' \"$p\"; \
+         cat /proc/sys/kernel/arch 2>/dev/null || uname -m; \
+         od -An -tx1 -N20 \"$p\""
+    );
+
+    let Ok(output) = Command::new("wsl")
+        .args(["-d", distro, "--exec", "sh", "-c", &script])
+        .output()
+    else {
+        return Ok(());
+    };
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some((path, built_for, host)) = parse_wsl2_arch_probe(&stdout) else {
+        return Ok(());
+    };
+    if built_for == host {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "QEMU binary '{path}' in WSL2 distro '{distro}' is built for {} but the distro's \
+         kernel runs {}. A binfmt_misc handler (qemu-user, registered kernel-wide for ALL \
+         distros by Docker Desktop's multi-arch container support) can silently emulate it, \
+         with KVM unusable and TCG doubly emulated. Please install the distro's native QEMU \
+         package, or point VIRTCI_QEMU_BINARY to a native build.",
+        built_for.name(),
+        host.name()
+    )
+}
+
+/// Parse the WSL2 arch probe output. Line 1 is the resolved binary path, line 2 the
+/// kernel machine name, and the remaining lines are `od -An -tx1` hex bytes of the
+/// ELF header. `None` when anything is missing or unrecognized (skips the check).
+/// On `Some`, `(path inside the distro, arch the binary is built for, kernel arch)`.
+#[cfg(target_os = "windows")]
+fn parse_wsl2_arch_probe(stdout: &str) -> Option<(String, Arch, Arch)> {
+    let mut lines = stdout.lines();
+    let path = lines.next()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let host = Arch::from_linux_machine_name(lines.next()?)?;
+    let header: Vec<u8> = lines
+        .flat_map(str::split_whitespace)
+        .map(|hex| u8::from_str_radix(hex, 16))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let built_for = Arch::from_elf_header(&header)?;
+    Some((path.to_string(), built_for, host))
 }
 
 /// Find the file a bare program name resolves to, approximating the CreateProcess /
@@ -739,4 +802,76 @@ pub fn qemu_launch_outcome(
     }
 
     Ok(QemuLaunchOutcome::Running)
+}
+
+// The WSL2 probe helpers only exist on Windows builds.
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::parse_wsl2_arch_probe;
+    use crate::util::cpu_arch::Arch;
+
+    /// Real shape of the probe output: `command -v` path, machine name, then
+    /// `od -An -tx1 -N20` (16 bytes per line, leading space).
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wsl2_probe_native_aarch64() {
+        let stdout = "/usr/bin/qemu-system-aarch64\n\
+                      aarch64\n \
+                      7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00\n \
+                      03 00 b7 00\n";
+        assert_eq!(
+            parse_wsl2_arch_probe(stdout),
+            Some((
+                "/usr/bin/qemu-system-aarch64".to_string(),
+                Arch::ARM64,
+                Arch::ARM64
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wsl2_probe_foreign_binary() {
+        // x86_64 ELF (e_machine 0x003e) on an aarch64 kernel: the Docker Desktop
+        // binfmt scenario.
+        let stdout = "/usr/local/bin/qemu-system-aarch64\n\
+                      aarch64\n \
+                      7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00\n \
+                      03 00 3e 00\n";
+        assert_eq!(
+            parse_wsl2_arch_probe(stdout),
+            Some((
+                "/usr/local/bin/qemu-system-aarch64".to_string(),
+                Arch::X64,
+                Arch::ARM64
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wsl2_probe_malformed() {
+        // Empty.
+        assert_eq!(parse_wsl2_arch_probe(""), None);
+        // Missing machine name and header.
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu-system-aarch64\n"),
+            None
+        );
+        // Unrecognized machine name.
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu\narmv7l\n 7f 45 4c 46\n"),
+            None
+        );
+        // Header bytes not hex (od missing / errored into stdout).
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu\naarch64\nod: not found\n"),
+            None
+        );
+        // Truncated header.
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu\naarch64\n 7f 45 4c 46 02 01\n"),
+            None
+        );
+    }
 }

@@ -180,16 +180,6 @@ static int open_executable(const char *executable_path, size_t path_len) {
     return fd;
 }
 
-static uint32_t read_le32(const uint8_t *bytes) {
-    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16) |
-           ((uint32_t)bytes[3] << 24);
-}
-
-static uint32_t read_be32(const uint8_t *bytes) {
-    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) | ((uint32_t)bytes[2] << 8) |
-           (uint32_t)bytes[3];
-}
-
 #if defined(__APPLE__)
 
 #include <sys/sysctl.h>
@@ -199,6 +189,16 @@ static uint32_t read_be32(const uint8_t *bytes) {
 #define VCI_FAT_MAGIC_64 0xCAFEBABFu // universal binary with 64-bit slice offsets
 #define VCI_CPU_TYPE_X86_64 0x01000007u
 #define VCI_CPU_TYPE_ARM64 0x0100000Cu
+
+static uint32_t read_le32(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) | ((uint32_t)bytes[2] << 16) |
+           ((uint32_t)bytes[3] << 24);
+}
+
+static uint32_t read_be32(const uint8_t *bytes) {
+    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) | ((uint32_t)bytes[2] << 8) |
+           (uint32_t)bytes[3];
+}
 
 static CpuArch macho_cputype_to_arch(uint32_t cputype) {
     switch (cputype) {

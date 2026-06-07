@@ -62,6 +62,40 @@ impl Arch {
         })
     }
 
+    /// [`Arch`] from the leading bytes (at least 20) of an ELF file. Mirrors the ELF
+    /// logic in `src/util/exec_built_cpu_arch.c`, which only compiles on Linux hosts, but
+    /// this exists for WSL2 probing, where the header bytes arrive over a `wsl -- od` pipe instead
+    ///  of a file the Windows side could sniff itself.
+    /// `None` for non-ELF, non-64-bit, non-little-endian, or unrecognized machines.
+    #[must_use]
+    pub fn from_elf_header(header: &[u8]) -> Option<Arch> {
+        if header.len() < 0x14 || header[0..4] != *b"\x7fELF" {
+            return None;
+        }
+        // EI_CLASS must be ELFCLASS64 (2) and EI_DATA must be ELFDATA2LSB (1), same
+        // as the C sniffer. This also keeps EM_RISCV below unambiguously 64-bit.
+        if header[4] != 2 || header[5] != 1 {
+            return None;
+        }
+        match u16::from_le_bytes([header[0x12], header[0x13]]) {
+            62 => Some(Arch::X64),      // EM_X86_64
+            183 => Some(Arch::ARM64),   // EM_AARCH64
+            243 => Some(Arch::RISCV64), // EM_RISCV
+            _ => None,
+        }
+    }
+
+    /// [`Arch`] from a machine name as printed by `uname -m` or `/proc/sys/kernel/arch`.
+    #[must_use]
+    pub fn from_linux_machine_name(name: &str) -> Option<Arch> {
+        match name.trim() {
+            "x86_64" => Some(Arch::X64),
+            "aarch64" | "arm64" => Some(Arch::ARM64),
+            "riscv64" => Some(Arch::RISCV64),
+            _ => None,
+        }
+    }
+
     /// Human readable name, for error messages.
     #[must_use]
     pub fn name(self) -> &'static str {
@@ -111,5 +145,55 @@ mod tests {
         // The test binary's header is by definition the compile-time architecture, which
         // matches `Arch::host()` whenever tests run natively (which CI does).
         assert_eq!(Arch::of_executable(&exe), Some(Arch::host()));
+    }
+
+    /// First 20 bytes of a valid 64-bit little-endian ELF with the given e_machine.
+    fn elf_header(e_machine: u16) -> [u8; 20] {
+        let mut header = [0u8; 20];
+        header[0..4].copy_from_slice(b"\x7fELF");
+        header[4] = 2; // ELFCLASS64
+        header[5] = 1; // ELFDATA2LSB
+        header[6] = 1; // EV_CURRENT
+        header[0x12..0x14].copy_from_slice(&e_machine.to_le_bytes());
+        header
+    }
+
+    #[test]
+    fn elf_header_machines() {
+        assert_eq!(Arch::from_elf_header(&elf_header(62)), Some(Arch::X64));
+        assert_eq!(Arch::from_elf_header(&elf_header(183)), Some(Arch::ARM64));
+        assert_eq!(Arch::from_elf_header(&elf_header(243)), Some(Arch::RISCV64));
+        // EM_ARM (32-bit arm) is not a supported host.
+        assert_eq!(Arch::from_elf_header(&elf_header(40)), None);
+    }
+
+    #[test]
+    fn elf_header_rejects_malformed() {
+        // Too short.
+        assert_eq!(Arch::from_elf_header(&elf_header(62)[..0x12]), None);
+        // Wrong magic.
+        let mut not_elf = elf_header(62);
+        not_elf[0] = b'M';
+        assert_eq!(Arch::from_elf_header(&not_elf), None);
+        // ELFCLASS32: rv32 etc. must not be reported as a 64-bit arch.
+        let mut elf32 = elf_header(243);
+        elf32[4] = 1;
+        assert_eq!(Arch::from_elf_header(&elf32), None);
+        // Big-endian.
+        let mut elf_be = elf_header(62);
+        elf_be[5] = 2;
+        assert_eq!(Arch::from_elf_header(&elf_be), None);
+    }
+
+    #[test]
+    fn linux_machine_names() {
+        assert_eq!(Arch::from_linux_machine_name("x86_64\n"), Some(Arch::X64));
+        assert_eq!(Arch::from_linux_machine_name("aarch64"), Some(Arch::ARM64));
+        assert_eq!(
+            Arch::from_linux_machine_name("riscv64"),
+            Some(Arch::RISCV64)
+        );
+        assert_eq!(Arch::from_linux_machine_name("armv7l"), None);
+        assert_eq!(Arch::from_linux_machine_name(""), None);
     }
 }
