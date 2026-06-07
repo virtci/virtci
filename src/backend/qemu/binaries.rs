@@ -8,10 +8,7 @@ use std::{path::Path, sync::Mutex};
 use anyhow::Context;
 
 use crate::util::bin_version::BinVersion;
-use crate::{
-    backend::exec::TargetChildProcess,
-    vm_image::{Arch, HostExecTarget},
-};
+use crate::{backend::exec::TargetChildProcess, util::cpu_arch::Arch, vm_image::HostExecTarget};
 
 /// Build a [`Command`] that runs `program` on `exec_target`, wrapping through
 /// `wsl -d <distro> --` (the target's own distro, not necessarily the default) when the
@@ -49,6 +46,20 @@ pub fn qemu_system_binary(
     }
 
     let binary = resolve_system_binary(arch, exec_target);
+
+    // winget installs x86_64-only QEMU, which on a Windows ARM64 host installs AND
+    // prints to stdout with `--version` perfectly fine under Prism emulation, but crashes in the
+    // Windows unwinder silently the moment TCG executes guest code. macOS and Linux have the
+    // same shape: Rosetta 2, and Linux binfmt_misc handlers (FEX/box64/qemu-user, the latter
+    // often registered globally by Docker multi-arch tooling), silently run wrong-arch QEMU
+    // with hardware acceleration broken and TCG doubly emulated.
+    //
+    // WSL2 is excluded for now: the binary lives inside the distro, so sniffing it requires
+    // in-distro probing, and it must match the distro environment rather than the Windows host.
+    if !matches!(exec_target, HostExecTarget::WSL2(_)) {
+        ensure_built_for_native_host(&binary)?;
+    }
+
     let version = query_version(&binary, exec_target)
         .with_context(|| format!("QEMU binary '{binary}' is not functional"))?;
 
@@ -247,6 +258,86 @@ fn resolve_img_binary(exec_target: &HostExecTarget) -> String {
     return base.to_string();
 }
 
+/// SUPER hard error if the executable at `binary` was built for a CPU architecture
+/// other than the one this is ACTUALLY running on.
+fn ensure_built_for_native_host(binary: &str) -> anyhow::Result<()> {
+    let Some(path) = locate_on_path(binary) else {
+        return Ok(());
+    };
+    let Some(built_for) = Arch::of_executable(&path) else {
+        return Ok(());
+    };
+    let host = Arch::host();
+    if built_for == host {
+        return Ok(());
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut message = format!(
+        "QEMU binary '{}' is built for {} but this host natively runs {}.",
+        path.display(),
+        built_for.name(),
+        host.name()
+    );
+
+    #[cfg(target_os = "windows")]
+    if host == Arch::ARM64 && built_for == Arch::X64 {
+        message.push_str(
+            " QEMU installed from winget on Windows as of June 7th 2026 is built for \
+        x86_64 hosts only. It may appear functional under Prism emulation, as --version will \
+        succeed, but it will crash when the VM starts actually executing. Please install the \
+        actual native Windows-on-ARM build at `https://qemu.weilnetz.de/aarch64/`, \
+        or point VIRTCI_QEMU_BINARY to the right one.",
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    if host == Arch::ARM64 && built_for == Arch::X64 {
+        message.push_str(
+            " An x86_64 QEMU runs under Rosetta 2, where Hypervisor.framework acceleration \
+        is unavailable and TCG is doubly emulated. This usually means QEMU came from an \
+        x86_64 Homebrew prefix (/usr/local) migrated from an Intel Mac. Please reinstall \
+        QEMU with native arm64 Homebrew (/opt/homebrew), or point VIRTCI_QEMU_BINARY to a \
+        native build.",
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    message.push_str(
+        " At best a binfmt_misc handler (FEX/box64/qemu-user, often registered globally by \
+        Docker multi-arch tooling or Steam Frame) would silently emulate this QEMU, with KVM \
+        unusable and TCG doubly emulated (or straight up fail). Please install the \
+        distro's native QEMU package, or point VIRTCI_QEMU_BINARY to a native build.",
+    );
+
+    anyhow::bail!(message)
+}
+
+/// Find the file a bare program name resolves to, approximating the CreateProcess /
+/// execvp PATH search. Paths that already contain a directory component are returned
+/// as-is (when they exist), matching how [`resolve_system_binary`] produces them.
+fn locate_on_path(binary: &str) -> Option<std::path::PathBuf> {
+    let path = Path::new(binary);
+    if path.components().count() > 1 {
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    let dirs = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&dirs) {
+        let candidate = dir.join(path);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+
+        if cfg!(target_os = "windows") && path.extension().is_none() {
+            let with_exe = candidate.with_extension("exe");
+            if with_exe.is_file() {
+                return Some(with_exe);
+            }
+        }
+    }
+    None
+}
+
 fn query_version(binary: &str, exec_target: &HostExecTarget) -> anyhow::Result<String> {
     let output = target_command(exec_target, binary)
         .arg("--version")
@@ -360,7 +451,7 @@ pub fn push_arg(args: &mut Vec<String>, flag: &str, value: impl Into<String>) {
 /// `start_config`.
 pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<QemuBuiltCommand> {
     use super::{binaries, kvm};
-    use crate::vm_image::{Arch, GuestOs};
+    use crate::vm_image::GuestOs;
 
     let qemu_config = backend
         .base_image

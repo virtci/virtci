@@ -11,6 +11,7 @@ use serde_with::{serde_as, DisplayFromStr};
 
 use anyhow::Context;
 
+use crate::util::cpu_arch::Arch;
 use crate::VciGlobalPaths;
 
 /// TTL for remote images if 24 hours by default
@@ -105,26 +106,6 @@ pub fn is_maybe_secure_boot_firmware(uefi: &UefiSplit) -> bool {
         uefi.vars.to_ascii_lowercase()
     );
     haystack.contains("secboot") || haystack.contains(".ms.") || haystack.contains("snakeoil")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Arch {
-    X64,
-    ARM64,
-    RISCV64,
-}
-
-impl Arch {
-    /// The architecture of the host running virtci.
-    #[must_use]
-    pub fn host() -> Arch {
-        match std::env::consts::ARCH {
-            "x86_64" => Arch::X64,
-            "aarch64" => Arch::ARM64,
-            "riscv64" => Arch::RISCV64,
-            other => panic!("Unsupported host CPU architecture: {other}"),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

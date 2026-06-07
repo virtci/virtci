@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
+use crate::util::cpu_arch::Arch;
 use crate::{file_lock::FileLock, global_paths::VciGlobalPaths, vm_image::HostExecTarget};
 
 pub mod backend;
@@ -27,11 +28,9 @@ pub mod kvm;
 pub fn image_runs_in_wsl2(
     tpm: bool,
     has_uefi: bool,
-    arch: crate::vm_image::Arch,
+    arch: Arch,
     wsl: Option<&crate::global_paths::WslPaths>,
 ) -> bool {
-    use crate::vm_image::Arch;
-
     if tpm {
         return true;
     }

@@ -7,10 +7,12 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=src/file_lock/process_time.c");
     println!("cargo:rerun-if-changed=src/file_lock/flock.c");
+    println!("cargo:rerun-if-changed=src/util/exec_built_cpu_arch.c");
 
     cc::Build::new()
         .file("src/file_lock/process_time.c")
         .file("src/file_lock/flock.c")
+        .file("src/util/exec_built_cpu_arch.c")
         // .warnings(true)
         // .extra_warnings(true)
         // .cargo_warnings(true)

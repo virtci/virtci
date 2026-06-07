@@ -9,11 +9,15 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - More useful logs for if a VM failed to boot, rather than just reporting it being unable to be SSH'd into.
 - Added warning when emualting arm64 VMs using older QEMU versions.
   - QEMU versions before 9.2 can fail when TCG emulating newer arm64 kernels.
+- Added check for if using a QEMU binary built for a different host architecture.
+  - It can fail for seemingly no reason under emulators like Prism, Rosetta 2, or FEX, but `qemu-system-* --version` works, leading to very confusing situations.
+  - As of June 7th 2026, winget installs x86_64 built QEMU binaries (intended to run on x86_64 host) even on a Windows arm64 host.
 
 ### Changed
 
 - MacOS default temp path moved to `/tmp/vci-<user_id>`.
   - Necessary due to swtpm socket path exceeding the maximum allowed on MacOS.
+- Running a QEMU binary built for a different host architecture, running under translation layers is a fatal error and stops `virtci run` and `virtci boot` execution.
 
 ### Fixed
 
