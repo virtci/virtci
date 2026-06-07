@@ -318,6 +318,7 @@ fn ensure_built_for_native_host(binary: &str) -> anyhow::Result<()> {
 }
 
 /// WSL2 variant of [`ensure_built_for_native_host`].
+#[cfg(target_os = "windows")]
 fn ensure_built_for_wsl2_distro(distro: &str, binary: &str) -> anyhow::Result<()> {
     let script = format!(
         "p=\"$(command -v '{binary}')\" || exit 9; \
