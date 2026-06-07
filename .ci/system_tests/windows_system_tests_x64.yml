@@ -38,6 +38,7 @@ windows-system-tests-x64:
         npm install
 
     - name: Install QEMU and UEFI Firmware
+      # winget only has x64 binaries seemingly
       run: winget install -e --id SoftwareFreedomConservancy.QEMU
 
     - name: Fetch Cargo Dependencies
