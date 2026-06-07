@@ -9,6 +9,7 @@ pub mod orphan;
 pub mod run;
 pub mod run_state;
 pub mod transfer_lock;
+pub mod util;
 pub mod vm_image;
 pub mod web;
 pub mod yaml;

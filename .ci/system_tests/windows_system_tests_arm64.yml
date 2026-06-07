@@ -31,6 +31,9 @@ windows-system-tests-arm64:
         winget install -e --id LLVM.LLVM --silent
         [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';C:\Program Files\LLVM\bin', 'Machine')
 
+    - name: Install Git
+      run: winget install -e --id Git.Git
+
     - name: Install cargo-deny
       run: cargo install cargo-deny
 

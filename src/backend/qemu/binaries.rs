@@ -7,6 +7,7 @@ use std::{path::Path, sync::Mutex};
 
 use anyhow::Context;
 
+use crate::util::bin_version::BinVersion;
 use crate::{
     backend::exec::TargetChildProcess,
     vm_image::{Arch, HostExecTarget},
@@ -42,7 +43,7 @@ pub fn qemu_system_binary(
     arch: Arch,
     exec_target: &HostExecTarget,
     check_tpm: bool,
-) -> anyhow::Result<(String, String)> {
+) -> anyhow::Result<(String, BinVersion)> {
     if check_tpm {
         assert!(!matches!(exec_target, HostExecTarget::WindowsNative));
     }
@@ -54,6 +55,8 @@ pub fn qemu_system_binary(
     if check_tpm {
         ensure_tpm_support(&binary, exec_target)?;
     }
+
+    let version = BinVersion::from_qemu_version_string(&version)?;
 
     Ok((binary, version))
 }
@@ -105,20 +108,6 @@ pub fn hvf_available() -> bool {
         .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "1")
 }
 
-/// Extract `(major, minor)` from the first line of `qemu-system-* --version`:
-/// `QEMU emulator version 10.2.0` -> `(10, 2)`. Distro builds append to the
-/// same line (`QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.7)`),
-/// so this handles that.
-fn parse_qemu_version(line: &str) -> Option<(u32, u32)> {
-    let token = line
-        .split_whitespace()
-        .find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()))?;
-    let mut parts = token.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    Some((major, minor))
-}
-
 /// QEMU older than 9.2 has an incorrect assertion in it's ARM software page-table walker
 /// (`regime_is_user`, reached via `E10_*` translation regimes).
 ///
@@ -127,20 +116,23 @@ fn parse_qemu_version(line: &str) -> Option<(u32, u32)> {
 /// `ERROR:target/arm/internals.h:767:regime_is_user: code should not be reached`.
 ///
 /// Only TCG code paths can encounter this. Only warn, not hard error.
-pub fn warn_arm64_tcg_on_old_qemu(version_line: &str) {
+pub fn warn_arm64_tcg_on_old_qemu(version: &BinVersion) {
     use colored::Colorize;
 
-    let Some((major, minor)) = parse_qemu_version(version_line) else {
-        return;
+    let min_fixed_version = BinVersion {
+        major: 9,
+        minor: 2,
+        patch: 0,
     };
-    if (major, minor) < (9, 2) {
+    if (*version) < min_fixed_version {
         eprintln!(
             "{}",
             format!(
-                "Warning: QEMU {major}.{minor} runs this ARM64 guest under TCG emulation, which \
-                 before QEMU 9.2 can abort while booting modern arm64 kernels \
+                "Warning: QEMU {}.{}.{} runs this ARM64 guest under TCG emulation, which \
+                 before QEMU 9.2.0 can abort while booting modern arm64 kernels \
                  (\"regime_is_user: code should not be reached\"). If the VM dies during boot, \
-                 upgrade QEMU to 9.2 or newer."
+                 upgrade QEMU to 9.2.0 or newer.",
+                version.major, version.minor, version.patch
             )
             .yellow()
         );
@@ -151,7 +143,12 @@ pub fn warn_arm64_tcg_on_old_qemu(version_line: &str) {
 /// for this launch, NOT whether one was merely requested.
 #[allow(clippy::match_same_arms)]
 #[allow(unused_variables)]
-pub fn qemu_cpu(arch: Arch, exec_target: &HostExecTarget, hw_accel: bool) -> &'static str {
+pub fn qemu_cpu(
+    arch: Arch,
+    exec_target: &HostExecTarget,
+    hw_accel: bool,
+    version: &BinVersion,
+) -> &'static str {
     match arch {
         Arch::X64 => {
             // WHPX is sensitive to CPUID values set during vCPU initialization.
@@ -176,7 +173,19 @@ pub fn qemu_cpu(arch: Arch, exec_target: &HostExecTarget, hw_accel: bool) -> &'s
             if hw_accel {
                 return "host";
             }
-            "max"
+            let min_version_with_neoverse_n1 = BinVersion {
+                major: 7,
+                minor: 0,
+                patch: 0,
+            };
+            if (*version) < min_version_with_neoverse_n1 {
+                eprintln!("You are using QEMU {}.{}.{} which doesn't support `-cpu neoverse-n1`. \
+                You may encounter issues using more recent arm64 UEFI firmware while using `-cpu max`. \
+                If so, please update to QEMU 7.0.0 or higher.", version.major, version.minor, version.patch);
+                "max"
+            } else {
+                "neoverse-n1"
+            }
         }
     }
 }
@@ -389,7 +398,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
 
     let cpu = match &qemu_config.cpu_model {
         Some(model) => model.clone(),
-        None => binaries::qemu_cpu(arch, &backend.exec_target, hw_accel).to_string(),
+        None => binaries::qemu_cpu(arch, &backend.exec_target, hw_accel, &version).to_string(),
     };
     push_arg(&mut args, "-cpu", cpu);
 
@@ -613,33 +622,6 @@ pub fn format_launch_command(exec_target: &HostExecTarget, cmd: &QemuBuiltComman
 pub enum QemuLaunchOutcome {
     Running,
     PortTaken,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_qemu_version;
-
-    #[test]
-    fn parse_qemu_version_upstream() {
-        assert_eq!(
-            parse_qemu_version("QEMU emulator version 10.2.0"),
-            Some((10, 2))
-        );
-    }
-
-    #[test]
-    fn parse_qemu_version_distro_suffix() {
-        assert_eq!(
-            parse_qemu_version("QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.7)"),
-            Some((8, 2))
-        );
-    }
-
-    #[test]
-    fn parse_qemu_version_no_version() {
-        assert_eq!(parse_qemu_version("not a version line"), None);
-        assert_eq!(parse_qemu_version(""), None);
-    }
 }
 
 /// Observe the launch for about 1.5 seconds to see if the port was taken.

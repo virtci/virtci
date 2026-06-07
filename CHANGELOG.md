@@ -18,6 +18,8 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Fixed unconditional HVF acceleration on MacOS hosts, even if HVF acceleration isn't available.
+- Fixed arm64 TCG emulation CPU selection unconditionally using `max`, which has issues on some host environments emulating newer kernels.
+  - Default to `neoverse-n1` if the `qemu-system-aarch64` is version 7.0.0 or newer, otherwise fallback to `max` and warn.
 
 ## Version 0.3.0 - 2026-06-06
 
