@@ -8,10 +8,7 @@ use std::{path::Path, sync::Mutex};
 use anyhow::Context;
 
 use crate::util::bin_version::BinVersion;
-use crate::{
-    backend::exec::TargetChildProcess,
-    vm_image::{Arch, HostExecTarget},
-};
+use crate::{backend::exec::TargetChildProcess, util::cpu_arch::Arch, vm_image::HostExecTarget};
 
 /// Build a [`Command`] that runs `program` on `exec_target`, wrapping through
 /// `wsl -d <distro> --` (the target's own distro, not necessarily the default) when the
@@ -49,6 +46,24 @@ pub fn qemu_system_binary(
     }
 
     let binary = resolve_system_binary(arch, exec_target);
+
+    // winget installs x86_64-only QEMU, which on a Windows ARM64 host installs AND
+    // prints to stdout with `--version` perfectly fine under Prism emulation, but crashes in the
+    // Windows unwinder silently the moment TCG executes guest code. macOS and Linux have the
+    // same shape: Rosetta 2, and Linux binfmt_misc handlers (FEX/box64/qemu-user, the latter
+    // often registered globally by Docker multi-arch tooling), silently run wrong-arch QEMU
+    // with hardware acceleration broken and TCG doubly emulated.
+    // WSL2 needs the same check but in-distro.
+    match exec_target {
+        #[cfg(target_os = "windows")]
+        HostExecTarget::WSL2(distro) => {
+            ensure_built_for_wsl2_distro(distro, &binary)?;
+        }
+        #[cfg(not(target_os = "windows"))]
+        HostExecTarget::WSL2(_) => {}
+        _ => ensure_built_for_native_host(&binary)?,
+    }
+
     let version = query_version(&binary, exec_target)
         .with_context(|| format!("QEMU binary '{binary}' is not functional"))?;
 
@@ -247,6 +262,146 @@ fn resolve_img_binary(exec_target: &HostExecTarget) -> String {
     return base.to_string();
 }
 
+/// SUPER hard error if the executable at `binary` was built for a CPU architecture
+/// other than the one this is ACTUALLY running on.
+fn ensure_built_for_native_host(binary: &str) -> anyhow::Result<()> {
+    let Some(path) = locate_on_path(binary) else {
+        return Ok(());
+    };
+    let Some(built_for) = Arch::of_executable(&path) else {
+        return Ok(());
+    };
+    let host = Arch::host();
+    if built_for == host {
+        return Ok(());
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut message = format!(
+        "QEMU binary '{}' is built for {} but this host natively runs {}.",
+        path.display(),
+        built_for.name(),
+        host.name()
+    );
+
+    #[cfg(target_os = "windows")]
+    if host == Arch::ARM64 && built_for == Arch::X64 {
+        message.push_str(
+            " QEMU installed from winget on Windows as of June 7th 2026 is built for \
+        x86_64 hosts only. It may appear functional under Prism emulation, as --version will \
+        succeed, but it will crash when the VM starts actually executing. Please install the \
+        actual native Windows-on-ARM build at `https://qemu.weilnetz.de/aarch64/`, \
+        or point VIRTCI_QEMU_BINARY to the right one.",
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    if host == Arch::ARM64 && built_for == Arch::X64 {
+        message.push_str(
+            " An x86_64 QEMU runs under Rosetta 2, where Hypervisor.framework acceleration \
+        is unavailable and TCG is doubly emulated. This usually means QEMU came from an \
+        x86_64 Homebrew prefix (/usr/local) migrated from an Intel Mac. Please reinstall \
+        QEMU with native arm64 Homebrew (/opt/homebrew), or point VIRTCI_QEMU_BINARY to a \
+        native build.",
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    message.push_str(
+        " At best a binfmt_misc handler (FEX/box64/qemu-user, often registered globally by \
+        Docker multi-arch tooling or Steam Frame) would silently emulate this QEMU, with KVM \
+        unusable and TCG doubly emulated (or straight up fail). Please install the \
+        distro's native QEMU package, or point VIRTCI_QEMU_BINARY to a native build.",
+    );
+
+    anyhow::bail!(message)
+}
+
+/// WSL2 variant of [`ensure_built_for_native_host`].
+#[cfg(target_os = "windows")]
+fn ensure_built_for_wsl2_distro(distro: &str, binary: &str) -> anyhow::Result<()> {
+    let script = format!(
+        "p=\"$(command -v '{binary}')\" || exit 9; \
+         printf '%s\\n' \"$p\"; \
+         cat /proc/sys/kernel/arch 2>/dev/null || uname -m; \
+         od -An -tx1 -N20 \"$p\""
+    );
+
+    let Ok(output) = Command::new("wsl")
+        .args(["-d", distro, "--exec", "sh", "-c", &script])
+        .output()
+    else {
+        return Ok(());
+    };
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some((path, built_for, host)) = parse_wsl2_arch_probe(&stdout) else {
+        return Ok(());
+    };
+    if built_for == host {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "QEMU binary '{path}' in WSL2 distro '{distro}' is built for {} but the distro's \
+         kernel runs {}. A binfmt_misc handler (qemu-user, registered kernel-wide for ALL \
+         distros by Docker Desktop's multi-arch container support) can silently emulate it, \
+         with KVM unusable and TCG doubly emulated. Please install the distro's native QEMU \
+         package, or point VIRTCI_QEMU_BINARY to a native build.",
+        built_for.name(),
+        host.name()
+    )
+}
+
+/// Parse the WSL2 arch probe output. Line 1 is the resolved binary path, line 2 the
+/// kernel machine name, and the remaining lines are `od -An -tx1` hex bytes of the
+/// ELF header. `None` when anything is missing or unrecognized (skips the check).
+/// On `Some`, `(path inside the distro, arch the binary is built for, kernel arch)`.
+#[cfg(target_os = "windows")]
+fn parse_wsl2_arch_probe(stdout: &str) -> Option<(String, Arch, Arch)> {
+    let mut lines = stdout.lines();
+    let path = lines.next()?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let host = Arch::from_linux_machine_name(lines.next()?)?;
+    let header: Vec<u8> = lines
+        .flat_map(str::split_whitespace)
+        .map(|hex| u8::from_str_radix(hex, 16))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let built_for = Arch::from_elf_header(&header)?;
+    Some((path.to_string(), built_for, host))
+}
+
+/// Find the file a bare program name resolves to, approximating the CreateProcess /
+/// execvp PATH search. Paths that already contain a directory component are returned
+/// as-is (when they exist), matching how [`resolve_system_binary`] produces them.
+fn locate_on_path(binary: &str) -> Option<std::path::PathBuf> {
+    let path = Path::new(binary);
+    if path.components().count() > 1 {
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    let dirs = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&dirs) {
+        let candidate = dir.join(path);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+
+        if cfg!(target_os = "windows") && path.extension().is_none() {
+            let with_exe = candidate.with_extension("exe");
+            if with_exe.is_file() {
+                return Some(with_exe);
+            }
+        }
+    }
+    None
+}
+
 fn query_version(binary: &str, exec_target: &HostExecTarget) -> anyhow::Result<String> {
     let output = target_command(exec_target, binary)
         .arg("--version")
@@ -360,7 +515,7 @@ pub fn push_arg(args: &mut Vec<String>, flag: &str, value: impl Into<String>) {
 /// `start_config`.
 pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<QemuBuiltCommand> {
     use super::{binaries, kvm};
-    use crate::vm_image::{Arch, GuestOs};
+    use crate::vm_image::GuestOs;
 
     let qemu_config = backend
         .base_image
@@ -648,4 +803,76 @@ pub fn qemu_launch_outcome(
     }
 
     Ok(QemuLaunchOutcome::Running)
+}
+
+// The WSL2 probe helpers only exist on Windows builds.
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::parse_wsl2_arch_probe;
+    use crate::util::cpu_arch::Arch;
+
+    /// Real shape of the probe output: `command -v` path, machine name, then
+    /// `od -An -tx1 -N20` (16 bytes per line, leading space).
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wsl2_probe_native_aarch64() {
+        let stdout = "/usr/bin/qemu-system-aarch64\n\
+                      aarch64\n \
+                      7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00\n \
+                      03 00 b7 00\n";
+        assert_eq!(
+            parse_wsl2_arch_probe(stdout),
+            Some((
+                "/usr/bin/qemu-system-aarch64".to_string(),
+                Arch::ARM64,
+                Arch::ARM64
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wsl2_probe_foreign_binary() {
+        // x86_64 ELF (e_machine 0x003e) on an aarch64 kernel: the Docker Desktop
+        // binfmt scenario.
+        let stdout = "/usr/local/bin/qemu-system-aarch64\n\
+                      aarch64\n \
+                      7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00\n \
+                      03 00 3e 00\n";
+        assert_eq!(
+            parse_wsl2_arch_probe(stdout),
+            Some((
+                "/usr/local/bin/qemu-system-aarch64".to_string(),
+                Arch::X64,
+                Arch::ARM64
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wsl2_probe_malformed() {
+        // Empty.
+        assert_eq!(parse_wsl2_arch_probe(""), None);
+        // Missing machine name and header.
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu-system-aarch64\n"),
+            None
+        );
+        // Unrecognized machine name.
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu\narmv7l\n 7f 45 4c 46\n"),
+            None
+        );
+        // Header bytes not hex (od missing / errored into stdout).
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu\naarch64\nod: not found\n"),
+            None
+        );
+        // Truncated header.
+        assert_eq!(
+            parse_wsl2_arch_probe("/usr/bin/qemu\naarch64\n 7f 45 4c 46 02 01\n"),
+            None
+        );
+    }
 }

@@ -16,6 +16,7 @@ use crate::{
     global_paths::{TargetPath, VciGlobalPaths},
     orphan::OrphanTracker,
     run::run_id::ReservedRunId,
+    util::cpu_arch::Arch,
     vm_image::{expand_path, HostExecTarget, ImageDescription},
 };
 
@@ -697,7 +698,7 @@ fn setup_uefi(
     exec_target: &HostExecTarget,
     temp_dir: &TargetPath,
     clone: bool,
-    arch: crate::vm_image::Arch,
+    arch: Arch,
 ) -> anyhow::Result<(Option<String>, Option<BackingFile>)> {
     let Some(uefi) = &qemu_config.uefi else {
         return Ok((None, None));

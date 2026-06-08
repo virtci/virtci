@@ -27,11 +27,10 @@ pub mod kvm;
 pub fn image_runs_in_wsl2(
     tpm: bool,
     has_uefi: bool,
-    arch: crate::vm_image::Arch,
+    arch: crate::util::cpu_arch::Arch,
     wsl: Option<&crate::global_paths::WslPaths>,
 ) -> bool {
-    use crate::vm_image::Arch;
-
+    use crate::util::cpu_arch::Arch;
     if tpm {
         return true;
     }

@@ -1,16 +1,13 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::path::{Path, PathBuf};
 
 pub mod exec;
 pub mod qemu;
 pub mod tart;
 
-use crate::vm_image::{Arch, GuestOs, SshTarget};
+use crate::vm_image::{GuestOs, SshTarget};
 
 #[derive(Debug, Clone, Default)]
 pub struct VmStartConfig {
@@ -55,30 +52,6 @@ pub trait VmBackend {
 
     fn serial_log_path(&self) -> Option<&Path> {
         None
-    }
-}
-
-impl FromStr for Arch {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, ()> {
-        match s.to_lowercase().as_str() {
-            "x86_64" | "X86_64" | "x64" | "X64" | "amd64" | "AMD64" => Ok(Arch::X64),
-            "aarch64" | "arm64" | "ARM64" => Ok(Arch::ARM64),
-            "riscv64" | "RISCV64" => Ok(Arch::RISCV64),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Default for Arch {
-    fn default() -> Self {
-        match std::env::consts::ARCH {
-            "x86_64" => Arch::X64,
-            "aarch64" => Arch::ARM64,
-            "riscv64" => Arch::RISCV64,
-            other => panic!("Unsupported host architecture: {other}"),
-        }
     }
 }
 
