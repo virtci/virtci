@@ -66,13 +66,7 @@ fn resolve_boot_timeouts(idle_raw: Option<&str>, max_raw: Option<&str>) -> (u64,
 pub fn boot_timeouts() -> (u64, u64) {
     fn warn_if_garbage(name: &str) -> Option<String> {
         let raw = std::env::var(name).ok()?;
-        if raw
-            .trim()
-            .parse::<u64>()
-            .ok()
-            .as_ref()
-            .is_none_or(|n| *n <= 0)
-        {
+        if raw.trim().parse::<u64>().ok().is_none_or(|n| n == 0) {
             eprintln!("Warning: {name}={raw:?} is not a positive integer; using the default.");
         }
         Some(raw)
@@ -647,21 +641,33 @@ pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
 /// Attempt to get last 4KB of serial log. Formatted for log output. Returns an
 /// empty string when there's no log or it can't be read.
 fn serial_tail(path: Option<&std::path::Path>) -> String {
-    const TAIL_BYTES: usize = 4096;
+    use std::io::{Read, Seek, SeekFrom};
+
+    const TAIL_BYTES: u64 = 4096;
     let Some(path) = path else {
         return String::new();
     };
-    let Ok(data) = std::fs::read(path) else {
+    let (Ok(mut file), Ok(len)) = (
+        std::fs::File::open(path),
+        std::fs::metadata(path).map(|m| m.len()),
+    ) else {
         return String::new();
     };
-    if data.is_empty() {
+    if len == 0 {
         return "\n(serial log is empty — the guest produced no console output)".to_string();
     }
-    let from = data.len().saturating_sub(TAIL_BYTES);
-    let tail = String::from_utf8_lossy(&data[from..]);
+    let from = len.saturating_sub(TAIL_BYTES);
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return String::new();
+    }
+    let mut buf = Vec::new();
+    if file.take(TAIL_BYTES).read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    let tail = String::from_utf8_lossy(&buf);
     format!(
         "[VirtCI] last {} bytes of serial log:\n{}",
-        data.len() - from,
+        buf.len(),
         tail.trim_end()
     )
 }
