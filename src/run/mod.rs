@@ -66,7 +66,13 @@ fn resolve_boot_timeouts(idle_raw: Option<&str>, max_raw: Option<&str>) -> (u64,
 pub fn boot_timeouts() -> (u64, u64) {
     fn warn_if_garbage(name: &str) -> Option<String> {
         let raw = std::env::var(name).ok()?;
-        if raw.trim().parse::<u64>().ok().filter(|n| *n > 0).is_none() {
+        if raw
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .as_ref()
+            .is_none_or(|n| *n <= 0)
+        {
             eprintln!("Warning: {name}={raw:?} is not a positive integer; using the default.");
         }
         Some(raw)
