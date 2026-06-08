@@ -510,6 +510,8 @@ fn extract_yaml_workflows(
 
     let mut jobs = Vec::<run::Job>::new();
     for (name, yaml_job) in workflow {
+        run::validate_run_name(&name)?;
+
         let image_name = if let Some(img) = &args.image {
             img
         } else {

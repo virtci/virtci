@@ -64,21 +64,51 @@ fn resolve_boot_timeouts(idle_raw: Option<&str>, max_raw: Option<&str>) -> (u64,
 /// Read and resolve the boot idle/max timeouts from the environment, warning (but not failing) on a
 /// value that is set but unusable.
 pub fn boot_timeouts() -> (u64, u64) {
-    fn warn_if_garbage(name: &str) -> Option<String> {
-        let raw = std::env::var(name).ok()?;
-        if raw.trim().parse::<u64>().ok().is_none_or(|n| n == 0) {
-            eprintln!("Warning: {name}={raw:?} is not a positive integer; using the default.");
+    static WARNED: std::sync::Once = std::sync::Once::new();
+
+    let idle = std::env::var("VIRTCI_VM_START_IDLE_TIMEOUT").ok();
+    let max = std::env::var("VIRTCI_VM_START_MAX_TIMEOUT").ok();
+
+    WARNED.call_once(|| {
+        for (name, raw) in [
+            ("VIRTCI_VM_START_IDLE_TIMEOUT", &idle),
+            ("VIRTCI_VM_START_MAX_TIMEOUT", &max),
+        ] {
+            if let Some(raw) = raw {
+                if raw.trim().parse::<u64>().ok().is_none_or(|n| n == 0) {
+                    eprintln!(
+                        "Warning: {name}={raw:?} is not a positive integer; using the default."
+                    );
+                }
+            }
         }
-        Some(raw)
-    }
-    let idle = warn_if_garbage("VIRTCI_VM_START_IDLE_TIMEOUT");
-    let max = warn_if_garbage("VIRTCI_VM_START_MAX_TIMEOUT");
+    });
+
     resolve_boot_timeouts(idle.as_deref(), max.as_deref())
 }
 
 /// Neat
 fn is_github_actions() -> bool {
     std::env::var("GITHUB_ACTIONS").is_ok()
+}
+
+pub fn validate_run_name(name: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!name.is_empty(), "job name must not be empty");
+    if let Some(bad) = name
+        .chars()
+        .find(|c| matches!(c, '/' | '\\' | ',' | '\0') || c.is_control())
+    {
+        anyhow::bail!(
+            "job name {name:?} contains an unsupported character ({bad:?}); it builds run file \
+             paths and the QEMU process name, so '/', '\\', ',', and control characters are not \
+             allowed"
+        );
+    }
+    anyhow::ensure!(
+        !name.contains(".."),
+        "job name {name:?} must not contain '..' (it builds run file paths)"
+    );
+    Ok(())
 }
 
 pub struct Job {
@@ -513,10 +543,14 @@ async fn probe_ssh(ssh: &SshTarget) -> SshProgress {
     let Ok(addr) = format!("{}:{}", ssh.ip, ssh.port).parse::<std::net::SocketAddr>() else {
         return SshProgress::NotReady;
     };
-    let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(10)) else {
+    // Kept short so the watcher loop stays responsive to `vm_exit_error` and serial-growth
+    // sampling: while not-ready, slirp accepts the connect immediately, so it's this banner-read
+    // timeout (not the connect) that paces the loop. A live sshd sends its banner at once, well
+    // within 5s.
+    let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(5)) else {
         return SshProgress::NotReady;
     };
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     let mut reader = BufReader::new(stream);
     let mut banner = String::new();
     if !(reader.read_line(&mut banner).is_ok() && banner.starts_with("SSH-")) {
@@ -767,5 +801,35 @@ mod tests {
     fn boot_timeouts_idle_clamped_to_max() {
         // An idle window larger than the ceiling could never fire, so it's clamped down.
         assert_eq!(resolve_boot_timeouts(Some("900"), Some("300")), (300, 300));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::validate_run_name;
+
+    #[test]
+    fn accepts_ordinary_names_including_spaces() {
+        for ok in ["ubuntu-x64", "build_job", "test 1", "v0.3.1"] {
+            assert!(validate_run_name(ok).is_ok(), "{ok:?} should be allowed");
+        }
+    }
+
+    #[test]
+    fn rejects_path_and_qemu_hostile_names() {
+        for bad in [
+            "",
+            "../../etc/cron.d/x",
+            "a/b",
+            "a\\b",
+            "a,b",
+            "a..b",
+            "a\nb",
+        ] {
+            assert!(
+                validate_run_name(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
     }
 }
