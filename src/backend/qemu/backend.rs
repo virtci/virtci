@@ -25,6 +25,28 @@ use anyhow::Context;
 const DEFAULT_CPUS: u32 = 2;
 const DEFAULT_MEMORY_MB: u64 = 8192;
 
+/// `File` determined later by the actual run setup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SerialKind {
+    /// No `-serial` at all.
+    Off,
+    /// `-serial stdio`. Uses console.
+    Console,
+    /// `-serial file:<path>`: The VM console is captured to a log file.
+    File,
+}
+
+#[derive(Debug)]
+pub enum SerialMode {
+    /// No `-serial` at all.
+    Off,
+    /// `-serial stdio`. Uses console.
+    Console,
+    /// `-serial file:<path>`. The VM console is captured to this file, the child detached.
+    /// `virtci run` tails the file's byte growth as a boot-liveness signal.
+    File(TargetPath),
+}
+
 pub struct QemuBackend {
     pub run_id: ReservedRunId,
     /// Workflow name.
@@ -34,9 +56,8 @@ pub struct QemuBackend {
     /// Basically always 22.
     pub inside_vm_port: u16,
     pub graphics: bool,
-    /// If None, there is no `-serial` at all. If Some, serial is captured,
-    /// and routed to stdio when `!graphics`, or to this file when `graphics`.
-    pub serial_log: Option<TargetPath>,
+    /// How the guest serial console is wired (see [`SerialMode`]).
+    pub serial: SerialMode,
     pub exec_target: HostExecTarget,
     /// The host-reachable IP the forwarded SSH port lives on. `127.0.0.1` for native targets;
     /// for a WSL2 target it's the distro's NAT IP, since QEMU's `hostfwd` binds inside WSL2 and
@@ -68,15 +89,16 @@ impl QemuBackend {
     /// - `clone` Whether to create a throwaway clone of `base_image` (writes discarded), or boot
     ///   the base itself (writes persist).
     /// - `graphics` Whether to display graphics.
-    /// - `serial` Whether to attach a guest serial (interactive `virtci boot`) routed to stdio
-    ///   when `!graphics`, or to a log file when `graphics`. `false` for `virtci run`.
+    /// - `serial` How to wire the guest serial console. `Console` routes to
+    ///   stdio for interactive `virtci boot --nographics` and `File` captures to a log file for
+    ///   `virtci boot` (graphics), and for `virtci run` boot-progress monitoring.
     pub fn new(
         name: String,
         base_image: ImageDescription,
         paths: &VciGlobalPaths,
         clone: bool,
         graphics: bool,
-        serial: bool,
+        serial: SerialKind,
         orphans: OrphanTracker,
     ) -> anyhow::Result<Self> {
         let run_id = ReservedRunId::new(paths)?;
@@ -149,7 +171,7 @@ impl QemuBackend {
             // Guest-side SSH port. The host-side forwarded port lives in `host_port`.
             inside_vm_port: 22,
             graphics,
-            serial_log: setup.serial_log,
+            serial: setup.serial,
             exec_target,
             ssh_ip,
             host_temp_dir,
@@ -286,10 +308,9 @@ impl VmBackend for QemuBackend {
             .host_temp_dir
             .join(format!("{}-qemu.stderr", self.run_marker()));
 
-        let qemu_io = if self.serial_log.is_some() && !self.graphics {
-            exec::ChildIo::Interactive(&stderr_log)
-        } else {
-            exec::ChildIo::StderrToFile(&stderr_log)
+        let qemu_io = match self.serial {
+            SerialMode::Console => exec::ChildIo::Interactive(&stderr_log),
+            SerialMode::Off | SerialMode::File(_) => exec::ChildIo::StderrToFile(&stderr_log),
         };
 
         let qemu = loop {
@@ -450,10 +471,10 @@ impl VmBackend for QemuBackend {
     }
 
     fn serial_log_path(&self) -> Option<&Path> {
-        if let Some(serial_log) = &self.serial_log {
-            return Some(serial_log.path.as_path());
+        match &self.serial {
+            SerialMode::File(serial_log) => Some(serial_log.path.as_path()),
+            SerialMode::Off | SerialMode::Console => None,
         }
-        None
     }
 }
 
@@ -483,7 +504,7 @@ impl Drop for QemuBackend {
                 files.push(p.path.clone());
             }
         }
-        if let Some(serial) = &self.serial_log {
+        if let SerialMode::File(serial) = &self.serial {
             files.push(serial.path.clone());
         }
         files.push(
@@ -550,7 +571,7 @@ struct RunSetup {
     uefi_vars: Option<BackingFile>,
     additional_drives: Vec<AdditionalDrive>,
     tpm_info: Option<TpmInfo>,
-    serial_log: Option<TargetPath>,
+    serial: SerialMode,
 }
 
 /// Acquire a flock on the image. Shared lock if `clone`, otherwise Exclusive.
@@ -600,7 +621,7 @@ fn setup_run(
     base_image: &ImageDescription,
     paths: &VciGlobalPaths,
     exec_target: &HostExecTarget,
-    serial: bool,
+    serial: SerialKind,
     clone: bool,
 ) -> anyhow::Result<RunSetup> {
     let qemu_config = base_image.backend.as_qemu().expect("Expected QEMU config");
@@ -649,7 +670,13 @@ fn setup_run(
         None
     };
 
-    let serial_log = serial.then(|| temp_dir.join(&format!("vci-{name}-{id:05}-serial.log")));
+    let serial = match serial {
+        SerialKind::Off => SerialMode::Off,
+        SerialKind::Console => SerialMode::Console,
+        SerialKind::File => {
+            SerialMode::File(temp_dir.join(&format!("vci-{name}-{id:05}-serial.log")))
+        }
+    };
 
     Ok(RunSetup {
         image_lock,
@@ -658,7 +685,7 @@ fn setup_run(
         uefi_vars,
         additional_drives,
         tpm_info,
-        serial_log,
+        serial,
     })
 }
 

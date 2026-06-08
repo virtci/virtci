@@ -26,11 +26,55 @@ use crate::{
 
 pub const SSH_WAIT_TIMEOUT: u64 = 600;
 pub const SSH_POLL_INTERVAL: u64 = 2;
-pub const SSH_AUTH_RETRY_WINDOW: u64 = 120;
 /// I don't see why something would take longer than 2 hours realistically.
 /// I have definitely compiled gRPC for over an hour, but 2 hours is some lunacy.
 /// If it does, the user can specify it themselves.
 pub const MAX_TIMEOUT: u64 = 7200;
+
+/// Default boot idle timeout: if neither the serial log grows nor SSH makes progress for this many
+/// seconds, the VM is presumed wedged and the boot fails. Overridable with
+/// `VIRTCI_VM_START_IDLE_TIMEOUT`. Catches a dead VM in ~2 min instead of waiting out the max.
+pub const DEFAULT_VM_START_IDLE_TIMEOUT: u64 = 120;
+/// Default boot maximum timeout: the absolute ceiling on how long a single VM boot may take, even
+/// while it keeps showing progress. Overridable with `VIRTCI_VM_START_MAX_TIMEOUT`. High enough to
+/// let a legitimately slow TCG boot finish, while still bounding a VM that fails *noisily* (one that
+/// keeps spewing to serial without ever reaching SSH, so the idle timer never trips).
+pub const DEFAULT_VM_START_MAX_TIMEOUT: u64 = 1800;
+
+/// How often, while waiting for SSH, to print a "still booting" progress line.
+const BOOT_STATUS_INTERVAL: u64 = 30;
+
+/// Resolve the boot idle/max timeouts from optional raw env-var strings (the values of
+/// `VIRTCI_VM_START_IDLE_TIMEOUT` / `VIRTCI_VM_START_MAX_TIMEOUT`). Pure so it can be unit-tested.
+///
+/// Lenient, matching the rest of virtci's env handling: an unparseable or zero value falls back to
+/// its default rather than erroring. The idle timeout is clamped to never exceed the max, since an
+/// idle window larger than the ceiling could never fire.
+fn resolve_boot_timeouts(idle_raw: Option<&str>, max_raw: Option<&str>) -> (u64, u64) {
+    fn parse(raw: Option<&str>, default: u64) -> u64 {
+        raw.and_then(|s| s.trim().parse::<u64>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(default)
+    }
+    let max = parse(max_raw, DEFAULT_VM_START_MAX_TIMEOUT);
+    let idle = parse(idle_raw, DEFAULT_VM_START_IDLE_TIMEOUT).min(max);
+    (idle, max)
+}
+
+/// Read and resolve the boot idle/max timeouts from the environment, warning (but not failing) on a
+/// value that is set but unusable.
+pub fn boot_timeouts() -> (u64, u64) {
+    fn warn_if_garbage(name: &str) -> Option<String> {
+        let raw = std::env::var(name).ok()?;
+        if raw.trim().parse::<u64>().ok().filter(|n| *n > 0).is_none() {
+            eprintln!("Warning: {name}={raw:?} is not a positive integer; using the default.");
+        }
+        Some(raw)
+    }
+    let idle = warn_if_garbage("VIRTCI_VM_START_IDLE_TIMEOUT");
+    let max = warn_if_garbage("VIRTCI_VM_START_MAX_TIMEOUT");
+    resolve_boot_timeouts(idle.as_deref(), max.as_deref())
+}
 
 /// Neat
 fn is_github_actions() -> bool {
@@ -64,6 +108,9 @@ impl Job {
     pub async fn run(&mut self, _paths: &VciGlobalPaths) -> anyhow::Result<()> {
         use colored::Colorize;
 
+        // Resolve once per job: the initial boot and every `Restart` step share these.
+        let (idle_timeout, max_timeout) = boot_timeouts();
+
         let (initial_cfg, skip_first) = match &self.steps[0].kind {
             StepKind::Restart(r) => (
                 VmStartConfig {
@@ -81,8 +128,13 @@ impl Job {
 
         let ssh_target = self.backend.ssh_target();
 
-        let secs =
-            wait_for_ssh_watching(self.backend.as_mut(), &ssh_target, SSH_WAIT_TIMEOUT).await?;
+        let secs = wait_for_ssh_watching(
+            self.backend.as_mut(),
+            &ssh_target,
+            idle_timeout,
+            max_timeout,
+        )
+        .await?;
         let ssh_cmd = match &ssh_target.cred.key {
             Some(key) => format!(
                 "ssh -i {} {}@{} -p {}",
@@ -391,10 +443,16 @@ impl Job {
                     self.backend.stop_vm();
                     self.backend.start_vm(cfg).context("Failed to restart VM")?;
 
+                    let (idle_timeout, max_timeout) = boot_timeouts();
                     let ssh = self.backend.ssh_target();
-                    let secs = wait_for_ssh_watching(self.backend.as_mut(), &ssh, SSH_WAIT_TIMEOUT)
-                        .await
-                        .context("after restart")?;
+                    let secs = wait_for_ssh_watching(
+                        self.backend.as_mut(),
+                        &ssh,
+                        idle_timeout,
+                        max_timeout,
+                    )
+                    .await
+                    .context("after restart")?;
                     println!("{}", format!("  SSH ready after {secs}s").dimmed());
 
                     if self.backend.is_offline() {
@@ -438,70 +496,168 @@ impl Job {
     }
 }
 
-/// Like [`wait_for_ssh`], but also does [`VmBackend::vm_exit_error`] checks so a VM process that
-/// has died fails immediately with  its actual error (such as QEMU's captured stderr) instead
-/// of silently waiting the whole SSH timeout. Returns the seconds until SSH was ready.
+enum SshProgress {
+    Ready,
+    /// sshd answered with an `SSH-` banner. Auth hasn't completed yet, but the VM is clearly up
+    /// and progressing, so this counts as progress and resets the idle timer.
+    Banner,
+    /// No SSH banner: either the forwarded port isn't answering, or whatever answered isn't sshd.
+    NotReady,
+}
+
+/// Forward port can have TCP connections accepted before sshd is actually up, so checks for
+/// SSH banner too.
+async fn probe_ssh(ssh: &SshTarget) -> SshProgress {
+    use std::io::{BufRead, BufReader};
+
+    let Ok(addr) = format!("{}:{}", ssh.ip, ssh.port).parse::<std::net::SocketAddr>() else {
+        return SshProgress::NotReady;
+    };
+    let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(10)) else {
+        return SshProgress::NotReady;
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    let mut reader = BufReader::new(stream);
+    let mut banner = String::new();
+    if !(reader.read_line(&mut banner).is_ok() && banner.starts_with("SSH-")) {
+        return SshProgress::NotReady;
+    }
+    // sshd is up; a single auth attempt tells us whether we're fully ready.
+    match tokio::time::timeout(Duration::from_secs(20), connect(ssh)).await {
+        Ok(Ok(handle)) => {
+            drop(handle);
+            SshProgress::Ready
+        }
+        _ => SshProgress::Banner,
+    }
+}
+
+/// Returns the seconds until SSH was ready.
+/// Wait for SSH to become reachable. Uses idle timeout of `idle_timeout_secs`. If the serial log
+/// of the VM is growing, then boot progress is considered "in progress", and the idle timeout
+/// resets. There is a hard cap timeout though of `max_timeout_secs`.
 pub async fn wait_for_ssh_watching(
     backend: &mut dyn VmBackend,
     ssh: &SshTarget,
-    timeout_secs: u64,
+    idle_timeout_secs: u64,
+    max_timeout_secs: u64,
 ) -> anyhow::Result<u64> {
-    const CHUNK_SECS: u64 = 15;
+    use colored::Colorize;
+
+    let serial_path = backend.serial_log_path().map(std::path::Path::to_path_buf);
+    let serial_size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).ok();
+
+    let mut last_size = serial_path.as_deref().and_then(serial_size).unwrap_or(0);
+    let mut status_size = last_size;
+
+    let idle_timeout = Duration::from_secs(idle_timeout_secs);
+    let max_timeout = Duration::from_secs(max_timeout_secs);
+    let poll = Duration::from_secs(SSH_POLL_INTERVAL);
+
     let start = Instant::now();
+    let mut last_progress = start;
+    let mut last_status = start;
+
     loop {
         if let Some(err) = backend.vm_exit_error() {
             anyhow::bail!("VM process exited while waiting for SSH: {err}");
         }
-        if wait_for_ssh(ssh, CHUNK_SECS).await.is_some() {
-            return Ok(start.elapsed().as_secs());
+
+        match probe_ssh(ssh).await {
+            SshProgress::Ready => return Ok(start.elapsed().as_secs()),
+            SshProgress::Banner => last_progress = Instant::now(),
+            SshProgress::NotReady => {}
         }
-        if start.elapsed().as_secs() >= timeout_secs {
-            anyhow::bail!("SSH not available after {timeout_secs}s");
+
+        if let Some(size) = serial_path.as_deref().and_then(serial_size) {
+            if size > last_size {
+                last_size = size;
+                last_progress = Instant::now();
+            }
         }
+
+        let now = Instant::now();
+        let idle = now.duration_since(last_progress);
+        let elapsed = now.duration_since(start);
+
+        if idle >= idle_timeout {
+            anyhow::bail!(
+                "VM appears wedged: no boot progress for {}s (no serial output and SSH not up). \
+                 Tune with VIRTCI_VM_START_IDLE_TIMEOUT.\n{}",
+                idle.as_secs(),
+                serial_tail(serial_path.as_deref()),
+            );
+        }
+        if elapsed >= max_timeout {
+            anyhow::bail!(
+                "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
+                 timeout. Tune with VIRTCI_VM_START_MAX_TIMEOUT.\n{}",
+                serial_tail(serial_path.as_deref()),
+            );
+        }
+
+        if last_status.elapsed() >= Duration::from_secs(BOOT_STATUS_INTERVAL) {
+            last_status = now;
+            let detail = if last_size > status_size {
+                format!("serial +{} bytes, still booting", last_size - status_size)
+            } else if serial_path.is_some() {
+                format!(
+                    "no serial output for {}s (gives up at {idle_timeout_secs}s idle)",
+                    idle.as_secs()
+                )
+            } else {
+                "still waiting for SSH".to_string()
+            };
+            status_size = last_size;
+            println!(
+                "{}",
+                format!(
+                    "[VirtCI] Waiting for VM: {}s elapsed, {detail}...",
+                    elapsed.as_secs()
+                )
+                .dimmed()
+            );
+        }
+
+        tokio::time::sleep(poll).await;
     }
 }
 
 pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
-    use std::io::{BufRead, BufReader};
-
-    let timeout = Duration::from_secs(timeout_secs);
-    let poll_interval = Duration::from_secs(SSH_POLL_INTERVAL);
-    let connect_timeout = Duration::from_secs(30);
     let start = Instant::now();
-    let addr: std::net::SocketAddr = format!("{}:{}", ssh.ip, ssh.port).parse().unwrap();
-
+    let timeout = Duration::from_secs(timeout_secs);
+    let poll = Duration::from_secs(SSH_POLL_INTERVAL);
     loop {
         if start.elapsed() >= timeout {
             return None;
         }
-        match TcpStream::connect_timeout(&addr, connect_timeout) {
-            Ok(stream) => {
-                stream.set_read_timeout(Some(Duration::from_secs(20))).ok();
-                let mut reader = BufReader::new(stream);
-                let mut banner = String::new();
-                if reader.read_line(&mut banner).is_ok() && banner.starts_with("SSH-") {
-                    break;
-                }
-                tokio::time::sleep(poll_interval).await;
-            }
-            Err(_) => {
-                tokio::time::sleep(poll_interval).await;
-            }
-        }
-    }
-
-    let auth_deadline = Instant::now() + Duration::from_secs(SSH_AUTH_RETRY_WINDOW);
-    loop {
-        let attempt = tokio::time::timeout(Duration::from_secs(20), connect(ssh)).await;
-        if let Ok(Ok(handle)) = attempt {
-            drop(handle);
+        if let SshProgress::Ready = probe_ssh(ssh).await {
             return Some(start.elapsed().as_secs());
         }
-        if Instant::now() >= auth_deadline {
-            return None;
-        }
-        tokio::time::sleep(poll_interval).await;
+        tokio::time::sleep(poll).await;
     }
+}
+
+/// Attempt to get last 4KB of serial log. Formatted for log output. Returns an
+/// empty string when there's no log or it can't be read.
+fn serial_tail(path: Option<&std::path::Path>) -> String {
+    const TAIL_BYTES: usize = 4096;
+    let Some(path) = path else {
+        return String::new();
+    };
+    let Ok(data) = std::fs::read(path) else {
+        return String::new();
+    };
+    if data.is_empty() {
+        return "\n(serial log is empty — the guest produced no console output)".to_string();
+    }
+    let from = data.len().saturating_sub(TAIL_BYTES);
+    let tail = String::from_utf8_lossy(&data[from..]);
+    format!(
+        "[VirtCI] last {} bytes of serial log:\n{}",
+        data.len() - from,
+        tail.trim_end()
+    )
 }
 
 pub struct ClientHandler;
@@ -560,4 +716,44 @@ pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, S
     }
 
     Ok(handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        resolve_boot_timeouts, DEFAULT_VM_START_IDLE_TIMEOUT, DEFAULT_VM_START_MAX_TIMEOUT,
+    };
+
+    #[test]
+    fn boot_timeouts_default_when_unset() {
+        assert_eq!(
+            resolve_boot_timeouts(None, None),
+            (DEFAULT_VM_START_IDLE_TIMEOUT, DEFAULT_VM_START_MAX_TIMEOUT)
+        );
+    }
+
+    #[test]
+    fn boot_timeouts_parse_valid() {
+        assert_eq!(resolve_boot_timeouts(Some("60"), Some("900")), (60, 900));
+        assert_eq!(resolve_boot_timeouts(Some(" 60 "), Some("900")), (60, 900));
+    }
+
+    #[test]
+    fn boot_timeouts_garbage_falls_back_to_default() {
+        assert_eq!(
+            resolve_boot_timeouts(Some("abc"), Some("")),
+            (DEFAULT_VM_START_IDLE_TIMEOUT, DEFAULT_VM_START_MAX_TIMEOUT)
+        );
+        // Zero is not a usable timeout, so it falls back too.
+        assert_eq!(
+            resolve_boot_timeouts(Some("0"), Some("0")),
+            (DEFAULT_VM_START_IDLE_TIMEOUT, DEFAULT_VM_START_MAX_TIMEOUT)
+        );
+    }
+
+    #[test]
+    fn boot_timeouts_idle_clamped_to_max() {
+        // An idle window larger than the ceiling could never fire, so it's clamped down.
+        assert_eq!(resolve_boot_timeouts(Some("900"), Some("300")), (300, 300));
+    }
 }

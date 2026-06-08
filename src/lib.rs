@@ -550,7 +550,7 @@ fn extract_yaml_workflows(
                     paths,
                     true,
                     false,
-                    false,
+                    backend::qemu::backend::SerialKind::File,
                     orphans.clone(),
                 )
                 .with_context(|| format!("Failed to create QEMU backend for job '{name}'"))?;

@@ -60,9 +60,18 @@ fn boot_qemu(
     paths: &VciGlobalPaths,
     orphans: &OrphanTracker,
 ) {
-    use crate::backend::{qemu::backend::QemuBackend, VmStartConfig};
+    use crate::backend::{
+        qemu::backend::{QemuBackend, SerialKind},
+        VmStartConfig,
+    };
 
     let (cpus, memory_mb) = resolve_cpus_and_memory(args);
+
+    let serial = if args.nographics {
+        SerialKind::Console
+    } else {
+        SerialKind::File
+    };
 
     let mut backend = QemuBackend::new(
         args.name.clone(),
@@ -70,7 +79,7 @@ fn boot_qemu(
         paths,
         args.clone,
         !args.nographics,
-        true,
+        serial,
         orphans.clone(),
     )
     .unwrap_or_else(|e| {
