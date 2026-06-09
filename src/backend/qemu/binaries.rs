@@ -8,7 +8,11 @@ use std::{path::Path, sync::Mutex};
 use anyhow::Context;
 
 use crate::util::bin_version::BinVersion;
-use crate::{backend::exec::TargetChildProcess, util::cpu_arch::Arch, vm_image::HostExecTarget};
+use crate::{
+    backend::{exec::TargetChildProcess, qemu::backend::SerialMode},
+    util::cpu_arch::Arch,
+    vm_image::HostExecTarget,
+};
 
 /// Build a [`Command`] that runs `program` on `exec_target`, wrapping through
 /// `wsl -d <distro> --` (the target's own distro, not necessarily the default) when the
@@ -667,16 +671,14 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
         push_arg(&mut args, "-display", "none");
     }
 
-    if let Some(serial_log) = &backend.serial_log {
-        if backend.graphics {
-            push_arg(
-                &mut args,
-                "-serial",
-                format!("file:{}", serial_log.native_path()),
-            );
-        } else {
-            push_arg(&mut args, "-serial", "stdio");
-        }
+    match &backend.serial {
+        SerialMode::Off => {}
+        SerialMode::Console => push_arg(&mut args, "-serial", "stdio"),
+        SerialMode::File(serial_log) => push_arg(
+            &mut args,
+            "-serial",
+            format!("file:{}", serial_log.native_path()),
+        ),
     }
 
     push_arg(&mut args, "-rtc", "base=utc");

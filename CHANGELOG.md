@@ -12,12 +12,19 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Added check for if using a QEMU binary built for a different host architecture.
   - It can fail for seemingly no reason under emulators like Prism, Rosetta 2, or FEX, but `qemu-system-* --version` works, leading to very confusing situations.
   - As of June 7th 2026, winget installs x86_64 built QEMU binaries (intended to run on x86_64 host) even on a Windows arm64 host.
+- `VIRTCI_VM_START_IDLE_TIMEOUT` environment variable to control the time required for a VM start to be considered hanging if no boot progress is being made in seconds. Defaults to 300.
+- `VIRTCI_VM_START_MAX_TIMEOUT` environment variable to control the maximum time a `virtci run` workflow can take to start a VM, aborting the run past that time in seconds. Defaults to 1800.
+- `VIRTCI_SSH_CONNECT_TIMEOUT` environment variable to control the maximum time a VirtCI will wait to establish connection to the VM over SSH seconds. Defaults to 60 per SSH attempt.
 
 ### Changed
 
 - MacOS default temp path moved to `/tmp/vci-<user_id>`.
   - Necessary due to swtpm socket path exceeding the maximum allowed on MacOS.
 - Running a QEMU binary built for a different host architecture, running under translation layers is a fatal error and stops `virtci run` and `virtci boot` execution.
+- The 600 second fixed VM boot to SSH detection has been replaced by a sliding window with maximum cutoff.
+  - Now reads the serial log to determine if boot progress is being made, aborting after `VIRTCI_VM_START_IDLE_TIMEOUT` seconds if no progress has been made.
+  - Has an absolute maximum cutoff seconds, configurable by the user of `VIRTCI_VM_START_MAX_TIMEOUT` only for `virtci run`, not for `virtci boot`.
+  - SSH detection itself uses a real attempt for SSH connection, configurable by the user of `VIRTCI_SSH_CONNECT_TIMEOUT` to determine if a VM is ready for use.
 
 ### Fixed
 

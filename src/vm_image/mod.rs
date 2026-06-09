@@ -171,6 +171,11 @@ pub struct SshTarget {
     pub ip: String,
     pub port: u16,
     pub cred: SshConfig,
+    /// Per-connect retry budget for [`crate::run::connect_resilient`]. It gets derived from the
+    /// actual boot time. This doesn't need to be persisted anywhere. Callers fall back to a fixed
+    /// value when this is `None`,
+    #[serde(skip)]
+    pub retry_budget: Option<std::time::Duration>,
 }
 
 // https://stackoverflow.com/a/75527280

@@ -8,7 +8,7 @@ use crate::{
     cli::BootArgs,
     orphan::OrphanTracker,
     run::{wait_for_ssh, SSH_WAIT_TIMEOUT},
-    vm_image::{BackendConfig, ImageDescription, SshTarget},
+    vm_image::{BackendConfig, GuestOs, ImageDescription, SshTarget},
     VciGlobalPaths,
 };
 
@@ -60,9 +60,18 @@ fn boot_qemu(
     paths: &VciGlobalPaths,
     orphans: &OrphanTracker,
 ) {
-    use crate::backend::{qemu::backend::QemuBackend, VmStartConfig};
+    use crate::backend::{
+        qemu::backend::{QemuBackend, SerialKind},
+        VmStartConfig,
+    };
 
     let (cpus, memory_mb) = resolve_cpus_and_memory(args);
+
+    let serial = if args.nographics {
+        SerialKind::Console
+    } else {
+        SerialKind::File
+    };
 
     let mut backend = QemuBackend::new(
         args.name.clone(),
@@ -70,7 +79,7 @@ fn boot_qemu(
         paths,
         args.clone,
         !args.nographics,
-        true,
+        serial,
         orphans.clone(),
     )
     .unwrap_or_else(|e| {
@@ -100,6 +109,7 @@ fn boot_qemu(
 
     spawn_ssh_announcer(
         backend.ssh_target(),
+        backend.os(),
         backend.run_name(),
         backend.serial_log_path().map(std::path::Path::to_path_buf),
     );
@@ -166,6 +176,7 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
 
         spawn_ssh_announcer(
             backend.ssh_target(),
+            backend.os(),
             backend.run_name(),
             backend.serial_log_path().map(std::path::Path::to_path_buf),
         );
@@ -194,7 +205,12 @@ fn resolve_cpus_and_memory(args: &BootArgs) -> (u32, u64) {
     (cpus, memory_mb)
 }
 
-fn spawn_ssh_announcer(ssh: SshTarget, run_name: String, serial_log: Option<std::path::PathBuf>) {
+fn spawn_ssh_announcer(
+    ssh: SshTarget,
+    os: GuestOs,
+    run_name: String,
+    serial_log: Option<std::path::PathBuf>,
+) {
     std::thread::spawn(move || {
         let Ok(rt) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -202,7 +218,7 @@ fn spawn_ssh_announcer(ssh: SshTarget, run_name: String, serial_log: Option<std:
         else {
             return;
         };
-        let Some(secs) = rt.block_on(wait_for_ssh(&ssh, SSH_WAIT_TIMEOUT)) else {
+        let Some(secs) = rt.block_on(wait_for_ssh(&ssh, os, SSH_WAIT_TIMEOUT)) else {
             return;
         };
         let cmd = if let Some(ref key) = ssh.cred.key {

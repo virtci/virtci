@@ -133,6 +133,10 @@ pub fn validate_workflow_str(contents: &str, paths: &VciGlobalPaths) -> Vec<Diag
 }
 
 fn validate_job(name: &str, job_v: &Value, paths: &VciGlobalPaths, diags: &mut Vec<Diagnostic>) {
+    if let Err(e) = super::validate_run_name(name) {
+        diags.push(Diagnostic::error(name, e.to_string()));
+    }
+
     let Value::Mapping(map) = job_v else {
         diags.push(Diagnostic::error(name, "job must be a mapping"));
         return;

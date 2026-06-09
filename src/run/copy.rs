@@ -324,7 +324,9 @@ async fn send_archive_to_remote(
 ) -> Result<(), String> {
     const CHUNK_SIZE: usize = 32 * 1024;
 
-    let handle = crate::run::connect(ssh).await?;
+    let handle = crate::run::connect_resilient(ssh)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
 
     let channel = handle
         .channel_open_session()
@@ -568,7 +570,9 @@ async fn exec_remote_with_stdin(
 ) -> Result<Vec<u8>, String> {
     const CHUNK_SIZE: usize = 32 * 1024;
 
-    let handle = crate::run::connect(ssh).await?;
+    let handle = crate::run::connect_resilient(ssh)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
     let channel = handle
         .channel_open_session()
         .await

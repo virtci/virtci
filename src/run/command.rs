@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use russh::ChannelMsg;
 
-use crate::{run::connect, vm_image::GuestOs, vm_image::SshTarget};
+use crate::{run::connect_resilient, vm_image::GuestOs, vm_image::SshTarget};
 
 pub struct CommandResult {
     pub exit_code: u32,
@@ -27,7 +27,7 @@ pub async fn run_command(
     env: &HashMap<String, String>,
     os: GuestOs,
 ) -> Result<CommandResult, String> {
-    let handle = connect(ssh).await?;
+    let handle = connect_resilient(ssh).await.map_err(|e| format!("{e:#}"))?;
 
     let mut channel = handle
         .channel_open_session()
@@ -159,7 +159,7 @@ pub async fn run_command_binary(
     env: &HashMap<String, String>,
     os: GuestOs,
 ) -> Result<BinaryCommandResult, String> {
-    let handle = connect(ssh).await?;
+    let handle = connect_resilient(ssh).await.map_err(|e| format!("{e:#}"))?;
 
     let mut channel = handle
         .channel_open_session()

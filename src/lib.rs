@@ -510,6 +510,8 @@ fn extract_yaml_workflows(
 
     let mut jobs = Vec::<run::Job>::new();
     for (name, yaml_job) in workflow {
+        run::validate_run_name(&name)?;
+
         let image_name = if let Some(img) = &args.image {
             img
         } else {
@@ -550,7 +552,7 @@ fn extract_yaml_workflows(
                     paths,
                     true,
                     false,
-                    false,
+                    backend::qemu::backend::SerialKind::File,
                     orphans.clone(),
                 )
                 .with_context(|| format!("Failed to create QEMU backend for job '{name}'"))?;
@@ -569,6 +571,7 @@ fn extract_yaml_workflows(
             backend,
             host_env: yaml_job.host_env,
             steps,
+            ssh_retry_budget: None,
         });
     }
 
