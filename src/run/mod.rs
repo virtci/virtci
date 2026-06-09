@@ -53,6 +53,36 @@ pub const DEFAULT_VM_START_MAX_TIMEOUT: u64 = 1800;
 /// How often, while waiting for SSH, to print a "still booting" progress line.
 const BOOT_STATUS_INTERVAL: u64 = 30;
 
+/// Once SSH first becomes functional, we don't trust it immediately: a VM that has *just* reached a
+/// usable SSH state is often still finishing first-boot work (cloud-init creating the user and
+/// reloading sshd, networking re-converging) and can briefly drop the connection right after. So we
+/// require it to stay continuously functional for a short "settle" window before declaring the boot
+/// done. The window is scaled off the observed boot time (a live measure of how slow/contended this
+/// host is) and clamped to this range: cheap on a fast box, proportionate on a slow one.
+const SETTLE_DIVISOR: u64 = 10;
+const SETTLE_MIN_SECS: u64 = 3;
+const SETTLE_MAX_SECS: u64 = 30;
+/// How often, during the settle window, to re-confirm SSH is still functional.
+const SETTLE_POLL_INTERVAL: u64 = 3;
+
+/// Floor on [`connect_resilient`]'s wall-clock retry budget when a target carries no boot-derived
+/// budget (e.g. ad-hoc connections outside a job's step loop). A running job stamps a scaled budget
+/// onto its [`SshTarget`]; see [`scaled_settle_secs`] for the same scaling rationale.
+const DEFAULT_CONNECT_RETRY_BUDGET_SECS: u64 = 30;
+
+/// Scale a duration off the observed boot time, clamped to `[min, max]`. Used for both the post-boot
+/// settle window and the per-step connect retry budget: a longer boot is direct evidence the host is
+/// slow/contended right now, so the windows that absorb that slowness should grow with it.
+fn scaled_settle_secs(boot_secs: u64) -> u64 {
+    (boot_secs / SETTLE_DIVISOR).clamp(SETTLE_MIN_SECS, SETTLE_MAX_SECS)
+}
+
+/// Per-step connect retry budget derived from the observed boot time: `max(boot/10, 30s)`,
+/// uncapped above so a pathologically slow host still gets a proportionate window.
+fn connect_retry_budget(boot_secs: u64) -> Duration {
+    Duration::from_secs((boot_secs / SETTLE_DIVISOR).max(DEFAULT_CONNECT_RETRY_BUDGET_SECS))
+}
+
 /// Resolve the boot idle/max timeouts from optional raw env-var strings (the values of
 /// `VIRTCI_VM_START_IDLE_TIMEOUT` / `VIRTCI_VM_START_MAX_TIMEOUT`). Pure so it can be unit-tested.
 ///
@@ -136,6 +166,22 @@ pub struct Job {
     pub backend: Box<dyn VmBackend>,
     pub host_env: Vec<String>,
     pub steps: Vec<Step>,
+    /// Per-step SSH connect retry budget, derived from the observed boot time and refreshed on every
+    /// (re)boot. Stamped onto each [`SshTarget`] the job hands to a step via [`Job::ssh`]. `None`
+    /// until the first boot completes.
+    pub ssh_retry_budget: Option<Duration>,
+}
+
+impl Job {
+    /// Fetch the backend's SSH target with this job's current boot-derived retry budget stamped on,
+    /// so step execution rides out a transient connection drop proportionate to how slow this host
+    /// has proven to be.
+    fn ssh(&self) -> SshTarget {
+        SshTarget {
+            retry_budget: self.ssh_retry_budget,
+            ..self.backend.ssh_target()
+        }
+    }
 }
 
 pub struct Step {
@@ -176,7 +222,7 @@ impl Job {
             .start_vm(initial_cfg)
             .with_context(|| format!("Failed to start VM: {}", &self.name))?;
 
-        let ssh_target = self.backend.ssh_target();
+        let mut ssh_target = self.backend.ssh_target();
 
         let secs = wait_for_ssh_watching(
             self.backend.as_mut(),
@@ -185,6 +231,10 @@ impl Job {
             max_timeout,
         )
         .await?;
+        // Derive the per-step connect retry budget from how long this boot took, and stamp it onto
+        // the targets used both here (offline-enforce / clock-set) and by every step (via `ssh()`).
+        self.ssh_retry_budget = Some(connect_retry_budget(secs));
+        ssh_target.retry_budget = self.ssh_retry_budget;
         let ssh_cmd = match &ssh_target.cred.key {
             Some(key) => format!(
                 "ssh -i {} {}@{} -p {}",
@@ -328,7 +378,7 @@ impl Job {
                     env.insert(key.clone(), value.clone());
                 }
 
-                let ssh = self.backend.ssh_target();
+                let ssh = self.ssh();
                 let command_future = command::run_command(
                     &ssh,
                     command,
@@ -355,7 +405,7 @@ impl Job {
                 }
             }
             StepKind::Copy(copy_spec) => {
-                let ssh = self.backend.ssh_target();
+                let ssh = self.ssh();
                 let guest_os = self.backend.os();
                 let is_host_to_vm = copy_spec.to.starts_with("vm:");
                 let host_is_windows = cfg!(target_os = "windows");
@@ -439,7 +489,7 @@ impl Job {
                         _ => "sync", // Unix/Linux/macOS
                     };
                     let empty_env = std::collections::HashMap::new();
-                    let ssh = self.backend.ssh_target();
+                    let ssh = self.ssh();
                     let sync_future =
                         command::run_command(&ssh, sync_cmd, None, &empty_env, self.backend.os());
 
@@ -494,7 +544,7 @@ impl Job {
                     self.backend.start_vm(cfg).context("Failed to restart VM")?;
 
                     let (idle_timeout, max_timeout) = boot_timeouts();
-                    let ssh = self.backend.ssh_target();
+                    let mut ssh = self.backend.ssh_target();
                     let secs = wait_for_ssh_watching(
                         self.backend.as_mut(),
                         &ssh,
@@ -503,6 +553,9 @@ impl Job {
                     )
                     .await
                     .context("after restart")?;
+                    // Refresh the retry budget from this (re)boot's timing for subsequent steps.
+                    self.ssh_retry_budget = Some(connect_retry_budget(secs));
+                    ssh.retry_budget = self.ssh_retry_budget;
                     println!("{}", format!("  SSH ready after {secs}s").dimmed());
 
                     if self.backend.is_offline() {
@@ -546,27 +599,79 @@ impl Job {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum SshProgress {
     Ready,
-    /// Forwarded port is not yet answering, or sshd connect and auth didn't complete.
+    /// `SSH-` banner exists, but auth and exec didn't work. Probably still provisioning stuff
+    /// internally.
+    Listening,
+    /// Nothing is answering the forwarded port, or what answered isn't sshd.
     NotReady,
 }
 
-/// Checks if the VM is ready for SSH'd into. Used to detect readiness. Unlike
-/// [`connect_resilient`], does not retry itself, that's up to the caller. Is not used for step
-/// execution.
-async fn probe_ssh(ssh: &SshTarget) -> SshProgress {
-    match tokio::time::timeout(ssh_connect_timeout(), connect(ssh)).await {
-        Ok(Ok(handle)) => {
-            // Clean SSH disconnect (not a bare drop) so sshd frees the slot right away rather than
-            // waiting to notice a dead TCP connection — keeps us well clear of MaxStartups.
-            handle
-                .disconnect(russh::Disconnect::ByApplication, "", "en")
-                .await
-                .ok();
-            SshProgress::Ready
+/// Checks if SSH is ready, or if it's alive and still provisioning.
+async fn probe_ssh(ssh: &SshTarget, os: GuestOs) -> SshProgress {
+    if !sshd_listening(ssh).await {
+        return SshProgress::NotReady;
+    }
+    if probe_functional(ssh, os).await {
+        SshProgress::Ready
+    } else {
+        SshProgress::Listening
+    }
+}
+
+/// Check if SSH TCP connection is even present and if it reports `SSH-` banner.
+/// Proves that something is alive, even if it cannot yet be used.
+async fn sshd_listening(ssh: &SshTarget) -> bool {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let addr = format!("{}:{}", ssh.ip, ssh.port);
+    let connect = tokio::net::TcpStream::connect(&addr);
+    let Ok(Ok(stream)) = tokio::time::timeout(Duration::from_secs(10), connect).await else {
+        return false;
+    };
+    let mut reader = BufReader::new(stream);
+    let mut banner = String::new();
+    matches!(
+        tokio::time::timeout(Duration::from_secs(10), reader.read_line(&mut banner)).await,
+        Ok(Ok(n)) if n > 0 && banner.starts_with("SSH-")
+    )
+}
+
+/// Actually see if SSH is fully functional, not just that the TCP connection can be established.
+async fn probe_functional(ssh: &SshTarget, os: GuestOs) -> bool {
+    let Ok(Ok(handle)) = tokio::time::timeout(ssh_connect_timeout(), connect(ssh)).await else {
+        return false;
+    };
+    let ok = exec_trivial(&handle, os).await;
+    handle
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await
+        .ok();
+    ok
+}
+
+/// Run a no-op command over an authenticated "handle". Basically just confirms that SSH connection
+/// WORKS, not just appears to work.
+async fn exec_trivial(handle: &client::Handle<ClientHandler>, os: GuestOs) -> bool {
+    let cmd = if os == GuestOs::Windows {
+        "exit 0"
+    } else {
+        "true"
+    };
+    let Ok(mut channel) = handle.channel_open_session().await else {
+        return false;
+    };
+    if channel.exec(true, cmd).await.is_err() {
+        return false;
+    }
+    loop {
+        match channel.wait().await {
+            Some(russh::ChannelMsg::ExitStatus { .. }) => return true,
+            None => return false,
+            _ => {}
         }
-        _ => SshProgress::NotReady,
     }
 }
 
@@ -592,17 +697,33 @@ pub async fn wait_for_ssh_watching(
     let max_timeout = Duration::from_secs(max_timeout_secs);
     let poll = Duration::from_secs(SSH_POLL_INTERVAL);
 
+    let os = backend.os();
     let start = Instant::now();
     let mut last_progress = start;
     let mut last_status = start;
+    let mut banner_seen = false;
 
     loop {
         if let Some(err) = backend.vm_exit_error() {
             anyhow::bail!("VM process exited while waiting for SSH: {err}");
         }
 
-        match probe_ssh(ssh).await {
-            SshProgress::Ready => return Ok(start.elapsed().as_secs()),
+        match probe_ssh(ssh, os).await {
+            SshProgress::Ready => break,
+            SshProgress::Listening => {
+                // It's listening which means boot progress should be happening.
+                // Can't login yet though.
+                if !banner_seen {
+                    banner_seen = true;
+                    println!(
+                        "{}",
+                        "[VirtCI] SSH banner detected. Waiting for login to be \
+                         accepted (VM likely still provisioning)..."
+                            .dimmed()
+                    );
+                }
+                last_progress = Instant::now();
+            }
             SshProgress::NotReady => {}
         }
 
@@ -619,7 +740,7 @@ pub async fn wait_for_ssh_watching(
 
         if idle >= idle_timeout {
             anyhow::bail!(
-                "VM appears wedged: no boot progress for {}s (no serial output and SSH not up). \
+                "VM appears stuck. No boot progress for {}s (no serial output, and SSH not up). \
                  Tune with VIRTCI_VM_START_IDLE_TIMEOUT.\n{}",
                 idle.as_secs(),
                 serial_tail(serial_path.as_deref()),
@@ -637,6 +758,11 @@ pub async fn wait_for_ssh_watching(
             last_status = now;
             let detail = if last_size > status_size {
                 format!("serial +{} bytes, still booting", last_size - status_size)
+            } else if banner_seen {
+                format!(
+                    "sshd up, waiting for login ({}s idle, gives up at {idle_timeout_secs}s)",
+                    idle.as_secs()
+                )
             } else if serial_path.is_some() {
                 format!(
                     "no serial output for {}s (gives up at {idle_timeout_secs}s idle)",
@@ -658,9 +784,54 @@ pub async fn wait_for_ssh_watching(
 
         tokio::time::sleep(poll).await;
     }
+
+    // SSH needs to stay functional.
+    let settle = Duration::from_secs(scaled_settle_secs(start.elapsed().as_secs()));
+    let settle_poll = Duration::from_secs(SETTLE_POLL_INTERVAL);
+    println!(
+        "{}",
+        format!(
+            "[VirtCI] SSH functional after {}s. Confirming it stays up for {}s before running \
+             steps...",
+            start.elapsed().as_secs(),
+            settle.as_secs()
+        )
+        .dimmed()
+    );
+
+    let mut healthy_since: Option<Instant> = None;
+    loop {
+        if let Some(err) = backend.vm_exit_error() {
+            anyhow::bail!("VM process exited while waiting for SSH: {err}");
+        }
+        if start.elapsed() >= max_timeout {
+            anyhow::bail!(
+                "VM did not stay SSH-reachable within the {max_timeout_secs}s maximum boot \
+                 timeout (SSH kept dropping during the post-boot settle window). Tune with \
+                 VIRTCI_VM_START_MAX_TIMEOUT.\n{}",
+                serial_tail(serial_path.as_deref()),
+            );
+        }
+
+        if probe_ssh(ssh, os).await == SshProgress::Ready {
+            let now = Instant::now();
+            let since = *healthy_since.get_or_insert(now);
+            if now.duration_since(since) >= settle {
+                return Ok(start.elapsed().as_secs());
+            }
+        } else if healthy_since.take().is_some() {
+            println!(
+                "{}",
+                "[VirtCI] SSH dropped during settle; re-confirming before running steps..."
+                    .dimmed()
+            );
+        }
+
+        tokio::time::sleep(settle_poll).await;
+    }
 }
 
-pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
+pub async fn wait_for_ssh(ssh: &SshTarget, os: GuestOs, timeout_secs: u64) -> Option<u64> {
     let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
     let poll = Duration::from_secs(SSH_POLL_INTERVAL);
@@ -668,7 +839,7 @@ pub async fn wait_for_ssh(ssh: &SshTarget, timeout_secs: u64) -> Option<u64> {
         if start.elapsed() >= timeout {
             return None;
         }
-        if let SshProgress::Ready = probe_ssh(ssh).await {
+        if let SshProgress::Ready = probe_ssh(ssh, os).await {
             return Some(start.elapsed().as_secs());
         }
         tokio::time::sleep(poll).await;
@@ -796,15 +967,25 @@ pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, C
 /// SSH connect and authenticate. Re-tries. On success, the VM SSH connection is 100% undeniably
 /// ready. Used for command execution and copy step execution, NOT for detecting if the VM has
 /// started, as the looping attempts can take a while. For VM start detection, see [`probe_ssh`].
+///
+/// Retries transient transport failures (the classic one being sshd resetting a connection while a
+/// VM's networking/sshd re-converges right after boot or restart) on a wall-clock budget rather than
+/// a fixed attempt count: no readiness check can guarantee the system never hiccups *after* it's
+/// declared ready, so this is the real backstop that lets a step ride out such a hiccup. The budget
+/// comes from `ssh.retry_budget` (scaled off the observed boot time by the running job) and falls
+/// back to [`DEFAULT_CONNECT_RETRY_BUDGET_SECS`] when unset.
 pub async fn connect_resilient(ssh: &SshTarget) -> anyhow::Result<client::Handle<ClientHandler>> {
     use colored::Colorize;
 
-    const MAX_ATTEMPTS: u32 = 6;
     const BASE_BACKOFF_MS: u64 = 250;
     const MAX_BACKOFF_MS: u64 = 2000;
 
     let timeout = ssh_connect_timeout();
-    let mut attempt = 0;
+    let budget = ssh
+        .retry_budget
+        .unwrap_or(Duration::from_secs(DEFAULT_CONNECT_RETRY_BUDGET_SECS));
+    let start = Instant::now();
+    let mut attempt = 0u32;
     loop {
         attempt += 1;
         let outcome = match tokio::time::timeout(timeout, connect(ssh)).await {
@@ -817,23 +998,29 @@ pub async fn connect_resilient(ssh: &SshTarget) -> anyhow::Result<client::Handle
 
         match outcome {
             Ok(handle) => return Ok(handle),
-            Err(e) if e.is_retryable() && attempt < MAX_ATTEMPTS => {
-                let backoff =
-                    Duration::from_millis((BASE_BACKOFF_MS << (attempt - 1)).min(MAX_BACKOFF_MS));
+            // Keep retrying a transient failure until the wall-clock budget is spent.
+            Err(e) if e.is_retryable() && start.elapsed() < budget => {
+                let backoff = Duration::from_millis(
+                    (BASE_BACKOFF_MS << (attempt - 1).min(20)).min(MAX_BACKOFF_MS),
+                );
                 eprintln!(
                     "{}",
                     format!(
-                        "[VirtCI] SSH connect attempt {attempt}/{MAX_ATTEMPTS} failed ({e}); \
-                         retrying in {}ms",
-                        backoff.as_millis()
+                        "[VirtCI] SSH connect attempt {attempt} failed ({e}); retrying in {}ms \
+                         ({}s/{}s of retry budget used)",
+                        backoff.as_millis(),
+                        start.elapsed().as_secs(),
+                        budget.as_secs()
                     )
                     .dimmed()
                 );
                 tokio::time::sleep(backoff).await;
             }
             Err(e) => {
-                return Err(anyhow::Error::new(e)
-                    .context(format!("SSH connection failed after {attempt} attempt(s)")));
+                return Err(anyhow::Error::new(e).context(format!(
+                    "SSH connection failed after {attempt} attempt(s) over {}s",
+                    start.elapsed().as_secs()
+                )));
             }
         }
     }
@@ -842,8 +1029,39 @@ pub async fn connect_resilient(ssh: &SshTarget) -> anyhow::Result<client::Handle
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_boot_timeouts, DEFAULT_VM_START_IDLE_TIMEOUT, DEFAULT_VM_START_MAX_TIMEOUT,
+        connect_retry_budget, resolve_boot_timeouts, scaled_settle_secs,
+        DEFAULT_CONNECT_RETRY_BUDGET_SECS, DEFAULT_VM_START_IDLE_TIMEOUT,
+        DEFAULT_VM_START_MAX_TIMEOUT, SETTLE_MAX_SECS, SETTLE_MIN_SECS,
     };
+
+    #[test]
+    fn settle_scales_with_boot_time_within_bounds() {
+        // ~10% of boot time once past the floor: a 200s boot settles for 20s.
+        assert_eq!(scaled_settle_secs(200), 20);
+        assert_eq!(scaled_settle_secs(450), 45.min(SETTLE_MAX_SECS));
+    }
+
+    #[test]
+    fn settle_clamped_to_floor_and_ceiling() {
+        // A fast boot still gets the floor (even fast hosts can flap right after boot)...
+        assert_eq!(scaled_settle_secs(0), SETTLE_MIN_SECS);
+        assert_eq!(scaled_settle_secs(20), SETTLE_MIN_SECS); // 20/10 = 2 -> floored to 3
+                                                             // ...and a pathologically slow boot is capped so settle can't run away.
+        assert_eq!(scaled_settle_secs(100_000), SETTLE_MAX_SECS);
+    }
+
+    #[test]
+    fn retry_budget_floored_then_scales_uncapped() {
+        // Below the floor, the fixed minimum applies.
+        assert_eq!(
+            connect_retry_budget(50).as_secs(),
+            DEFAULT_CONNECT_RETRY_BUDGET_SECS
+        );
+        // max(boot/10, 30): 200/10 = 20 < 30 -> 30.
+        assert_eq!(connect_retry_budget(200).as_secs(), 30);
+        // Past the floor it scales and is intentionally uncapped: 1800/10 = 180.
+        assert_eq!(connect_retry_budget(1800).as_secs(), 180);
+    }
 
     #[test]
     fn boot_timeouts_default_when_unset() {

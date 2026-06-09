@@ -571,6 +571,7 @@ fn extract_yaml_workflows(
             backend,
             host_env: yaml_job.host_env,
             steps,
+            ssh_retry_budget: None,
         });
     }
 

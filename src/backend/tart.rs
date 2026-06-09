@@ -379,6 +379,7 @@ impl VmBackend for TartBackend {
             ip: runner.vm_ip.clone(),
             port: 22,
             cred: self.base_image.ssh.clone(),
+            retry_budget: None,
         }
     }
 

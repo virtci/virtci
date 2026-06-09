@@ -385,6 +385,7 @@ impl VmBackend for QemuBackend {
                 .expect("Need booted VM to get the host port")
                 .port,
             cred: self.base_image.ssh.clone(),
+            retry_budget: None,
         }
     }
 
