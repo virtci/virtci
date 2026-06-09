@@ -8,7 +8,6 @@ pub mod validate;
 
 use std::{
     collections::HashMap,
-    net::TcpStream,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -26,6 +25,16 @@ use crate::{
 
 pub const SSH_WAIT_TIMEOUT: u64 = 600;
 pub const SSH_POLL_INTERVAL: u64 = 2;
+/// Default ceiling on a *single* SSH connect+auth attempt before it's treated as a (retryable)
+/// transport failure. This is deliberately generous and is **not** a knob for the common case: the
+/// failure we actually retry around (sshd refusing/resetting a connection right after restart)
+/// returns an error in milliseconds, so retries fire immediately no matter how high this is. The
+/// ceiling only ever bounds a connection that was accepted but then goes *silent*. Cutting a
+/// legitimate-but-slow handshake short is the one thing retrying can't fix — every attempt re-hits
+/// the same slow crypto — so we set it well above the worst-case key exchange on slow, nested-TCG,
+/// low-clock hardware, and let `VIRTCI_SSH_CONNECT_TIMEOUT` raise it further for anything more
+/// pathological.
+pub const DEFAULT_SSH_CONNECT_TIMEOUT: u64 = 60;
 /// I don't see why something would take longer than 2 hours realistically.
 /// I have definitely compiled gRPC for over an hour, but 2 hours is some lunacy.
 /// If it does, the user can specify it themselves.
@@ -85,6 +94,17 @@ pub fn boot_timeouts() -> (u64, u64) {
     });
 
     resolve_boot_timeouts(idle.as_deref(), max.as_deref())
+}
+
+/// Per-attempt SSH connect+auth ceiling, from `VIRTCI_SSH_CONNECT_TIMEOUT` (a positive integer
+/// number of seconds) or [`DEFAULT_SSH_CONNECT_TIMEOUT`]. See that constant for why it's generous.
+fn ssh_connect_timeout() -> Duration {
+    let secs = std::env::var("VIRTCI_SSH_CONNECT_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_SSH_CONNECT_TIMEOUT);
+    Duration::from_secs(secs)
 }
 
 /// Neat
@@ -528,41 +548,25 @@ impl Job {
 
 enum SshProgress {
     Ready,
-    /// sshd answered with an `SSH-` banner. Auth hasn't completed yet, but the VM is clearly up
-    /// and progressing, so this counts as progress and resets the idle timer.
-    Banner,
-    /// No SSH banner: either the forwarded port isn't answering, or whatever answered isn't sshd.
+    /// Forwarded port is not yet answering, or sshd connect and auth didn't complete.
     NotReady,
 }
 
-/// Forward port can have TCP connections accepted before sshd is actually up, so checks for
-/// SSH banner too.
+/// Checks if the VM is ready for SSH'd into. Used to detect readiness. Unlike
+/// [`connect_resilient`], does not retry itself, that's up to the caller. Is not used for step
+/// execution.
 async fn probe_ssh(ssh: &SshTarget) -> SshProgress {
-    use std::io::{BufRead, BufReader};
-
-    let Ok(addr) = format!("{}:{}", ssh.ip, ssh.port).parse::<std::net::SocketAddr>() else {
-        return SshProgress::NotReady;
-    };
-    // Kept short so the watcher loop stays responsive to `vm_exit_error` and serial-growth
-    // sampling: while not-ready, slirp accepts the connect immediately, so it's this banner-read
-    // timeout (not the connect) that paces the loop. A live sshd sends its banner at once, well
-    // within 5s.
-    let Ok(stream) = TcpStream::connect_timeout(&addr, Duration::from_secs(5)) else {
-        return SshProgress::NotReady;
-    };
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    let mut reader = BufReader::new(stream);
-    let mut banner = String::new();
-    if !(reader.read_line(&mut banner).is_ok() && banner.starts_with("SSH-")) {
-        return SshProgress::NotReady;
-    }
-    // sshd is up; a single auth attempt tells us whether we're fully ready.
-    match tokio::time::timeout(Duration::from_secs(20), connect(ssh)).await {
+    match tokio::time::timeout(ssh_connect_timeout(), connect(ssh)).await {
         Ok(Ok(handle)) => {
-            drop(handle);
+            // Clean SSH disconnect (not a bare drop) so sshd frees the slot right away rather than
+            // waiting to notice a dead TCP connection — keeps us well clear of MaxStartups.
+            handle
+                .disconnect(russh::Disconnect::ByApplication, "", "en")
+                .await
+                .ok();
             SshProgress::Ready
         }
-        _ => SshProgress::Banner,
+        _ => SshProgress::NotReady,
     }
 }
 
@@ -599,7 +603,6 @@ pub async fn wait_for_ssh_watching(
 
         match probe_ssh(ssh).await {
             SshProgress::Ready => return Ok(start.elapsed().as_secs()),
-            SshProgress::Banner => last_progress = Instant::now(),
             SshProgress::NotReady => {}
         }
 
@@ -720,7 +723,33 @@ impl client::Handler for ClientHandler {
     }
 }
 
-pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, String> {
+#[derive(Debug)]
+pub enum ConnectError {
+    /// Disconnected, EOF mid-handshake, timed out, etc. Possible to happen during sshd boot.
+    Transport(String),
+    /// Retrying won't help here.
+    Fatal(String),
+}
+
+impl ConnectError {
+    fn is_retryable(&self) -> bool {
+        matches!(self, ConnectError::Transport(_))
+    }
+}
+
+impl std::fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectError::Transport(m) | ConnectError::Fatal(m) => f.write_str(m),
+        }
+    }
+}
+
+impl std::error::Error for ConnectError {}
+
+/// A single SSH connect and authenticate, with no retry and no timeout of its own. Wrapped by
+/// callers.
+pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, ConnectError> {
     let mut config = client::Config {
         inactivity_timeout: None,
         ..Default::default()
@@ -734,7 +763,7 @@ pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, S
     let addr = format!("{}:{}", ssh.ip, ssh.port);
     let mut handle = client::connect(config, &addr, ClientHandler)
         .await
-        .map_err(|e| format!("SSH connection failed: {e}"))?;
+        .map_err(|e| ConnectError::Transport(format!("SSH connection failed: {e}")))?;
 
     let cred = &ssh.cred;
     let auth_result = {
@@ -742,26 +771,72 @@ pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, S
             handle
                 .authenticate_password(&cred.user, pass)
                 .await
-                .map_err(|e| format!("Password auth failed: {e}"))?
+                .map_err(|e| ConnectError::Transport(format!("Password auth failed: {e}")))?
         } else {
             let key_path = cred.key.as_ref().unwrap();
             let key_data = std::fs::read_to_string(key_path)
-                .map_err(|e| format!("Failed to read key file: {e}"))?;
+                .map_err(|e| ConnectError::Fatal(format!("Failed to read key file: {e}")))?;
             let key_pair = russh::keys::decode_secret_key(&key_data, None)
-                .map_err(|e| format!("Failed to decode key: {e}"))?;
+                .map_err(|e| ConnectError::Fatal(format!("Failed to decode key: {e}")))?;
             let key = PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
             handle
                 .authenticate_publickey(&cred.user, key)
                 .await
-                .map_err(|e| format!("Key auth failed: {e}"))?
+                .map_err(|e| ConnectError::Transport(format!("Key auth failed: {e}")))?
         }
     };
 
     if !matches!(auth_result, russh::client::AuthResult::Success) {
-        return Err("Authentication rejected".to_string());
+        return Err(ConnectError::Fatal("Authentication rejected".to_string()));
     }
 
     Ok(handle)
+}
+
+/// SSH connect and authenticate. Re-tries. On success, the VM SSH connection is 100% undeniably
+/// ready. Used for command execution and copy step execution, NOT for detecting if the VM has
+/// started, as the looping attempts can take a while. For VM start detection, see [`probe_ssh`].
+pub async fn connect_resilient(ssh: &SshTarget) -> anyhow::Result<client::Handle<ClientHandler>> {
+    use colored::Colorize;
+
+    const MAX_ATTEMPTS: u32 = 6;
+    const BASE_BACKOFF_MS: u64 = 250;
+    const MAX_BACKOFF_MS: u64 = 2000;
+
+    let timeout = ssh_connect_timeout();
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let outcome = match tokio::time::timeout(timeout, connect(ssh)).await {
+            Ok(result) => result,
+            Err(_) => Err(ConnectError::Transport(format!(
+                "connect timed out after {}s",
+                timeout.as_secs()
+            ))),
+        };
+
+        match outcome {
+            Ok(handle) => return Ok(handle),
+            Err(e) if e.is_retryable() && attempt < MAX_ATTEMPTS => {
+                let backoff =
+                    Duration::from_millis((BASE_BACKOFF_MS << (attempt - 1)).min(MAX_BACKOFF_MS));
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[VirtCI] SSH connect attempt {attempt}/{MAX_ATTEMPTS} failed ({e}); \
+                         retrying in {}ms",
+                        backoff.as_millis()
+                    )
+                    .dimmed()
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e)
+                    .context(format!("SSH connection failed after {attempt} attempt(s)")));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
