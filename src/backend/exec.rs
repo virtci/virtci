@@ -80,6 +80,13 @@ impl TargetChildProcess {
     pub fn host_pid(&self) -> Option<u32> {
         self.process.host_pid()
     }
+
+    /// Total CPU time the process has consumed so far, in nanoseconds, or `None` if it can't be
+    /// sampled. Works for both a host process (read directly) and a WSL2 process (read from inside
+    /// the distro). Used as a boot-liveness signal; only growth between calls is meaningful.
+    pub fn cpu_time_ns(&self) -> Option<u64> {
+        self.process.cpu_time_ns()
+    }
 }
 
 impl Drop for TargetChildProcess {
@@ -205,6 +212,53 @@ impl TargetChild {
             Self::Wsl(_) => None,
         }
     }
+
+    fn cpu_time_ns(&self) -> Option<u64> {
+        match self {
+            Self::Host(child) => host_process_cpu_time_ns(child.id()),
+            #[cfg(target_os = "windows")]
+            Self::Wsl(p) => p.cpu_time_ns(),
+        }
+    }
+}
+
+/// CPU time of a host (non-WSL2) process, via the per-platform native helper. See
+/// `src/file_lock/process_time.c`.
+fn host_process_cpu_time_ns(pid: u32) -> Option<u64> {
+    let mut cpu_ns: u64 = 0;
+    let ok = unsafe { get_process_cpu_time_native(pid, &raw mut cpu_ns) };
+    ok.then_some(cpu_ns)
+}
+
+extern "C" {
+    fn get_process_cpu_time_native(pid: u32, out_cpu_ns: *mut u64) -> bool;
+}
+
+/// Sum `(utime + stime)` across the given `/proc/<pid>/stat` line(s), returned as total CPU
+/// nanoseconds. Assumes the kernel `USER_HZ` of 100, universal on Linux x86_64/aarch64. `None` if
+/// no line parsed. Field 2 (`comm`) can contain spaces and parens, so each line is parsed from
+/// after its last `)`: the remaining fields are `state ppid ...`, making `utime`/`stime` (overall
+/// fields 14/15) the tokens at index 11/12.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_proc_stat_cpu_ns(stat_lines: &str) -> Option<u64> {
+    const USER_HZ: u64 = 100;
+    let mut total_ticks: u64 = 0;
+    let mut parsed_any = false;
+    for line in stat_lines.lines() {
+        let Some((_, after_comm)) = line.rsplit_once(')') else {
+            continue;
+        };
+        let fields: Vec<&str> = after_comm.split_whitespace().collect();
+        let (Some(utime), Some(stime)) = (
+            fields.get(11).and_then(|s| s.parse::<u64>().ok()),
+            fields.get(12).and_then(|s| s.parse::<u64>().ok()),
+        ) else {
+            continue;
+        };
+        total_ticks += utime + stime;
+        parsed_any = true;
+    }
+    parsed_any.then(|| total_ticks * 1_000_000_000 / USER_HZ)
 }
 
 #[cfg(target_os = "windows")]
@@ -223,6 +277,30 @@ impl WslProcess {
         let _ = self.relay.kill();
         let _ = self.relay.wait();
     }
+
+    /// The real QEMU has no host PID (it lives inside the distro), so read its CPU time from the
+    /// distro's `/proc`, identifying it by the same run marker used to reap it. `pgrep -f <marker>`
+    /// also matches swtpm and the polling shell itself, so the lines are filtered to the
+    /// `qemu-system*` process by its `comm`. Shelling out to `wsl.exe` is why the caller samples
+    /// this on a slow cadence rather than every poll.
+    fn cpu_time_ns(&self) -> Option<u64> {
+        let script = format!(
+            "for p in $(pgrep -f \"{marker}\"); do \
+               case \"$(cat /proc/$p/comm 2>/dev/null)\" in \
+                 qemu-system*) cat /proc/$p/stat 2>/dev/null;; \
+               esac; \
+             done",
+            marker = self.marker
+        );
+        let mut cmd = Command::new("wsl");
+        cmd.args(["-d", self.wsl_distro.as_str(), "--", "sh", "-c", &script]);
+        detach_from_console(&mut cmd, true);
+        let out = cmd.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        parse_proc_stat_cpu_ns(&String::from_utf8_lossy(&out.stdout))
+    }
 }
 
 /// Force-kill every process inside `distro` whose command line contains `marker`
@@ -235,4 +313,60 @@ pub fn reap_wsl2_marker_process(distro: &str, marker: &str) {
     let _ = Command::new("wsl")
         .args(["-d", distro, "--", "pkill", "-9", "-f", marker])
         .status();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A real qemu /proc/<pid>/stat line: comm "(qemu-system-aar)" with the parens that force
+    // last-')' parsing; utime=field 14 = 1234, stime=field 15 = 567.
+    const QEMU_STAT: &str = "4242 (qemu-system-aar) S 1 4242 4242 0 -1 4194560 \
+        9001 0 13 0 1234 567 0 0 20 0 7 0 9999999 5000000000 12345 \
+        18446744073709551615 1 1 0 0 0 0 0 4096 17091";
+
+    #[test]
+    fn parses_utime_plus_stime_at_100hz() {
+        // (1234 + 567) ticks / 100 Hz = 18.01 s = 18_010_000_000 ns.
+        assert_eq!(parse_proc_stat_cpu_ns(QEMU_STAT), Some(18_010_000_000));
+    }
+
+    #[test]
+    fn sums_multiple_processes() {
+        let two = format!("{QEMU_STAT}\n{QEMU_STAT}");
+        assert_eq!(parse_proc_stat_cpu_ns(&two), Some(36_020_000_000));
+    }
+
+    #[test]
+    fn comm_with_spaces_and_parens_is_handled() {
+        // comm itself contains a ')' and a space; parsing must key off the *last* ')'.
+        let line = "10 (weird ) name) R 1 10 10 0 -1 0 0 0 0 0 100 200 \
+            0 0 20 0 1 0 0 0 0";
+        // (100 + 200)/100 = 3 s.
+        assert_eq!(parse_proc_stat_cpu_ns(line), Some(3_000_000_000));
+    }
+
+    #[test]
+    fn empty_or_garbage_is_none() {
+        assert_eq!(parse_proc_stat_cpu_ns(""), None);
+        assert_eq!(parse_proc_stat_cpu_ns("no parens, too few fields"), None);
+    }
+
+    #[test]
+    fn host_cpu_time_reads_own_process_and_advances() {
+        let pid = std::process::id();
+        let before = host_process_cpu_time_ns(pid).expect("should read own CPU time");
+        let mut acc = 0u64;
+        for i in 0..20_000_000u64 {
+            acc = acc.wrapping_add(i);
+        }
+        std::hint::black_box(acc);
+        let after = host_process_cpu_time_ns(pid).expect("should read own CPU time");
+        assert!(after >= before, "CPU time must be monotonic: {before} -> {after}");
+    }
+
+    #[test]
+    fn host_cpu_time_for_bogus_pid_is_none() {
+        assert_eq!(host_process_cpu_time_ns(u32::MAX), None);
+    }
 }

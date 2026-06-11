@@ -22,6 +22,18 @@ bool get_process_start_time_native(uint32_t pid, uint64_t *out_start_time) {
 
 uint64_t start_time_to_unix_secs(uint64_t start_time) { return start_time / 1000000ULL; }
 
+// CPU time used by pid in annoseconds.
+bool get_process_cpu_time_native(uint32_t pid, uint64_t *out_cpu_ns) {
+    struct proc_taskinfo info;
+    int ret = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, sizeof(info));
+    if (ret <= 0) {
+        return false;
+    }
+    // pti_total_user and pti_total_system are already in nanoseconds.
+    *out_cpu_ns = info.pti_total_user + info.pti_total_system;
+    return true;
+}
+
 #elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -52,6 +64,27 @@ uint64_t start_time_to_unix_secs(uint64_t start_time) {
         return 0;
     }
     return (start_time - EPOCH_DIFF) / 10000000ULL;
+}
+
+bool get_process_cpu_time_native(uint32_t pid, uint64_t *out_cpu_ns) {
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (handle == NULL) {
+        return false;
+    }
+
+    FILETIME creation_time, exit_time, kernel_time, user_time;
+    BOOL success = GetProcessTimes(handle, &creation_time, &exit_time, &kernel_time, &user_time);
+    CloseHandle(handle);
+
+    if (!success) {
+        return false;
+    }
+
+    uint64_t kernel = ((uint64_t)kernel_time.dwHighDateTime << 32) | kernel_time.dwLowDateTime;
+    uint64_t user = ((uint64_t)user_time.dwHighDateTime << 32) | user_time.dwLowDateTime;
+    // Windows FILETIME is in units of 100 nanosecond intervals, so multiply by 100
+    *out_cpu_ns = (kernel + user) * 100ULL;
+    return true;
 }
 
 #elif defined(__linux__)
@@ -140,6 +173,59 @@ uint64_t start_time_to_unix_secs(uint64_t start_time) {
     }
     uint64_t boot_time = get_boot_time();
     return boot_time + (start_time / (uint64_t)ticks_per_sec);
+}
+
+bool get_process_cpu_time_native(uint32_t pid, uint64_t *out_cpu_ns) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%u/stat", pid);
+
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        return false;
+    }
+
+    char buf[1024];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+
+    if (n == 0) {
+        return false;
+    }
+    buf[n] = '\0';
+
+    char *after_comm = strrchr(buf, ')');
+    if (!after_comm) {
+        return false;
+    }
+    after_comm++;
+
+    unsigned long long utime = 0, stime = 0;
+    int fields_parsed = sscanf(after_comm,
+                               " %*c"   // state
+                               " %*d"   // ppid
+                               " %*d"   // pgrp
+                               " %*d"   // session
+                               " %*d"   // tty_nr
+                               " %*d"   // tpgid
+                               " %*u"   // flags
+                               " %*u"   // minflt
+                               " %*u"   // cminflt
+                               " %*u"   // majflt
+                               " %*u"   // cmajflt
+                               " %llu"  // utime
+                               " %llu", // stime
+                               &utime, &stime);
+
+    if (fields_parsed != 2) {
+        return false;
+    }
+
+    long ticks_per_sec = sysconf(_SC_CLK_TCK);
+    if (ticks_per_sec <= 0) {
+        ticks_per_sec = 100; // fallback
+    }
+    *out_cpu_ns = ((uint64_t)(utime + stime) * 1000000000ULL) / (uint64_t)ticks_per_sec;
+    return true;
 }
 
 #else

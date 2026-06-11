@@ -53,6 +53,16 @@ pub const DEFAULT_VM_START_MAX_TIMEOUT: u64 = 1800;
 /// How often, while waiting for SSH, to print a "still booting" progress line.
 const BOOT_STATUS_INTERVAL: u64 = 30;
 
+/// How often, while waiting for SSH, to sample the VM process's CPU time as a liveness signal.
+/// Deliberately coarse: a WSL2 sample shells out to the distro, and the idle timeout it feeds is
+/// measured in minutes, so there's no need to sample every poll.
+const CPU_SAMPLE_INTERVAL: u64 = 15;
+/// Minimum share of one CPU core (`1 / CPU_PROGRESS_DIVISOR`) the VM must burn over a sample
+/// interval for it to count as boot progress. Set so an actively-emulating guest (which pegs a
+/// core under TCG) clears it easily, while the idle housekeeping of a halted/wedged guest's
+/// process does not masquerade as progress. `20` => 5%.
+const CPU_PROGRESS_DIVISOR: u64 = 20;
+
 /// Once SSH first becomes functional, we don't trust it immediately: a VM that has *just* reached a
 /// usable SSH state is often still finishing first-boot work (cloud-init creating the user and
 /// reloading sshd, networking re-converging) and can briefly drop the connection right after. So we
@@ -693,15 +703,30 @@ pub async fn wait_for_ssh_watching(
     let mut last_size = serial_path.as_deref().and_then(serial_size).unwrap_or(0);
     let mut status_size = last_size;
 
+    // Two extra liveness signals beyond serial growth, both of which stay active during the
+    // serial-silent, CPU-bound late-boot phase that cross-arch TCG makes long enough to trip the
+    // idle timeout: the VM process burning CPU, and the guest writing to its disk. A "fingerprint"
+    // of `(len, mtime)` catches in-place writes that don't grow the file.
+    let disk_path = backend.disk_image_path().map(std::path::Path::to_path_buf);
+    let disk_fingerprint = |p: &std::path::Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()))
+    };
+    let mut last_disk = disk_path.as_deref().and_then(disk_fingerprint);
+
     let idle_timeout = Duration::from_secs(idle_timeout_secs);
     let max_timeout = Duration::from_secs(max_timeout_secs);
     let poll = Duration::from_secs(SSH_POLL_INTERVAL);
+    let cpu_sample_interval = Duration::from_secs(CPU_SAMPLE_INTERVAL);
 
     let os = backend.os();
     let start = Instant::now();
     let mut last_progress = start;
     let mut last_status = start;
     let mut banner_seen = false;
+    let mut last_cpu = backend.vm_cpu_time_ns();
+    let mut last_cpu_at = start;
 
     loop {
         if let Some(err) = backend.vm_exit_error() {
@@ -734,14 +759,41 @@ pub async fn wait_for_ssh_watching(
             }
         }
 
+        // Disk-write liveness: a grown file or a bumped mtime both mean the guest just wrote.
+        if let Some(fp) = disk_path.as_deref().and_then(disk_fingerprint) {
+            if last_disk.as_ref().is_none_or(|prev| fp > *prev) {
+                last_disk = Some(fp);
+                last_progress = Instant::now();
+            }
+        }
+
         let now = Instant::now();
+
+        // CPU-time liveness, on a slower cadence (a WSL2 sample shells out to the distro). Counts
+        // only if the VM burned a meaningful share of a core since the last sample, so an idle
+        // process doesn't keep a wedged guest alive. Only advance the anchor on a successful
+        // sample, so a transient read failure just retries rather than skewing the next interval.
+        if now.duration_since(last_cpu_at) >= cpu_sample_interval {
+            if let Some(cpu) = backend.vm_cpu_time_ns() {
+                if let Some(prev) = last_cpu {
+                    let cpu_delta = cpu.saturating_sub(prev);
+                    let wall_ns = now.duration_since(last_cpu_at).as_nanos() as u64;
+                    if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
+                        last_progress = now;
+                    }
+                }
+                last_cpu = Some(cpu);
+                last_cpu_at = now;
+            }
+        }
+
         let idle = now.duration_since(last_progress);
         let elapsed = now.duration_since(start);
 
         if idle >= idle_timeout {
             anyhow::bail!(
-                "VM appears stuck. No boot progress for {}s (no serial output, and SSH not up). \
-                 Tune with VIRTCI_VM_START_IDLE_TIMEOUT.\n{}",
+                "VM appears stuck. No boot progress for {}s (no serial output, no disk writes, no \
+                 CPU activity, and SSH not up). Tune with VIRTCI_VM_START_IDLE_TIMEOUT.\n{}",
                 idle.as_secs(),
                 serial_tail(serial_path.as_deref()),
             );
@@ -765,7 +817,8 @@ pub async fn wait_for_ssh_watching(
                 )
             } else if serial_path.is_some() {
                 format!(
-                    "no serial output for {}s (gives up at {idle_timeout_secs}s idle)",
+                    "quiet for {}s (no serial/disk/CPU progress; gives up at {idle_timeout_secs}s \
+                     idle)",
                     idle.as_secs()
                 )
             } else {

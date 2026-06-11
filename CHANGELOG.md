@@ -25,6 +25,8 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
   - Now reads the serial log to determine if boot progress is being made, aborting after `VIRTCI_VM_START_IDLE_TIMEOUT` seconds if no progress has been made.
   - Has an absolute maximum cutoff seconds, configurable by the user of `VIRTCI_VM_START_MAX_TIMEOUT` only for `virtci run`, not for `virtci boot`.
   - SSH detection itself uses a real attempt for SSH connection, configurable by the user of `VIRTCI_SSH_CONNECT_TIMEOUT` to determine if a VM is ready for use.
+  - Checks CPU time of the QEMU process to also determine if boot progress is happening.
+  - Checks growth of the qcow2 disk overlay to also determine if boot progress is happening.
 - `.vci` file `managed: bool` field deprecated. Ignored now.
 
 ### Fixed

@@ -53,6 +53,17 @@ pub trait VmBackend {
     fn serial_log_path(&self) -> Option<&Path> {
         None
     }
+
+    /// CPU time used by the VM process, in nanoseconds, or `None` if it cannot be queried.
+    fn vm_cpu_time_ns(&self) -> Option<u64> {
+        None
+    }
+
+    /// The path of the primary disk image. Used to see if there's growth, meaning something is
+    /// probably happening.
+    fn disk_image_path(&self) -> Option<&Path> {
+        None
+    }
 }
 
 pub fn expand_path(path: &str) -> PathBuf {

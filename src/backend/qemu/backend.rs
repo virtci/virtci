@@ -477,6 +477,14 @@ impl VmBackend for QemuBackend {
             SerialMode::Off | SerialMode::Console => None,
         }
     }
+
+    fn vm_cpu_time_ns(&self) -> Option<u64> {
+        self.qemu_process.as_ref()?.lock().ok()?.cpu_time_ns()
+    }
+
+    fn disk_image_path(&self) -> Option<&Path> {
+        Some(self.disk.target().path.as_path())
+    }
 }
 
 impl Drop for QemuBackend {
