@@ -2,6 +2,10 @@ name: Release
 
 # How To Trigger a Release
 #
+# Update Cargo.toml to the new release version.
+# Update CHANGELOG.md to have the release notes for the new version.
+# Push both of those changes to main.
+#
 # Ensure you're on latest main `git checkout main && git pull`
 # Ensure a clean working tree `git status`
 #

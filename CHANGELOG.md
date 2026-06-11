@@ -2,7 +2,7 @@
 
 VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
-## Version 0.3.1 - 2026-06-07
+## Version 0.3.1 - 2026-06-11
 
 ### Added
 
@@ -25,12 +25,15 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
   - Now reads the serial log to determine if boot progress is being made, aborting after `VIRTCI_VM_START_IDLE_TIMEOUT` seconds if no progress has been made.
   - Has an absolute maximum cutoff seconds, configurable by the user of `VIRTCI_VM_START_MAX_TIMEOUT` only for `virtci run`, not for `virtci boot`.
   - SSH detection itself uses a real attempt for SSH connection, configurable by the user of `VIRTCI_SSH_CONNECT_TIMEOUT` to determine if a VM is ready for use.
+- `.vci` file `managed: bool` field deprecated. Ignored now.
 
 ### Fixed
 
 - Fixed unconditional HVF acceleration on MacOS hosts, even if HVF acceleration isn't available.
 - Fixed arm64 TCG emulation CPU selection unconditionally using `max`, which has issues on some host environments emulating newer kernels.
   - Default to `neoverse-n1` if the `qemu-system-aarch64` is version 7.0.0 or newer, otherwise fallback to `max` and warn.
+- Creating a new VM that uses system UEFI vars will now make a copy in the managed VM directory.
+  - Fixes an issue where creating a VM would have boot attempt to use the system UEFI vars, and fail for lack of permissions. It also shouldn't do that so that other VMs can have their own UEFI vars.
 
 ## Version 0.3.0 - 2026-06-06
 

@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug VirtCI CLI With Args",
+      "cargo": {
+        "args": ["build", "--bin=virtci"]
+      },
+      "program": "${workspaceFolder}/target/debug/virtci",
+      "args": ["${input:myExtraArgument}"],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "myExtraArgument",
+      "type": "promptString",
+      "description": "Enter extra CLI argument"
+    }
+  ]
+}
