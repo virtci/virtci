@@ -777,7 +777,7 @@ pub async fn wait_for_ssh_watching(
             if let Some(cpu) = backend.vm_cpu_time_ns() {
                 if let Some(prev) = last_cpu {
                     let cpu_delta = cpu.saturating_sub(prev);
-                    let wall_ns = now.duration_since(last_cpu_at).as_nanos() as u64;
+                    let wall_ns = u64::try_from(now.duration_since(last_cpu_at).as_nanos())?;
                     if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
                         last_progress = now;
                     }
