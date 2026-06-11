@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 
 use crate::vm_image::{
-    expand_path, read_line, read_line_with_default, save_config, validate_image_name, Arch,
-    BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig, UefiSplit,
+    expand_path, localize_uefi_vars, read_line, read_line_with_default, save_config,
+    validate_image_name, Arch, BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig,
+    UefiSplit,
 };
 use crate::VciGlobalPaths;
 
@@ -115,6 +116,7 @@ pub fn run_interactive_setup(paths: &VciGlobalPaths, system: bool) -> anyhow::Re
             return Ok(());
         }
 
+        localize_uefi_vars(&mut config, &dest_home, system).map_err(anyhow::Error::msg)?;
         save_config(&config, &dest_home, system).map_err(anyhow::Error::msg)?;
         println!("\nSaved to {}/{}.vci", dest_home.display(), config.name);
         println!("Use in workflows with: image: {}", config.name);

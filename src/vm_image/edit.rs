@@ -74,7 +74,19 @@ pub fn run_edit(args: &EditArgs, paths: &VciGlobalPaths) -> anyhow::Result<()> {
 
     validate_image_name(new_name, paths).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    if desc.managed != Some(true) {
+    // A file is considered "managed" (VirtCI will remove it on `virtci remove ...` if it lives in
+    // the per-vm directory `<home>/<old_name>/`.
+    let qemu_dir_backed = matches!(desc.backend, BackendConfig::Qemu(_))
+        && (desc.managed == Some(true) || home_dir.join(old_name).exists());
+
+    if !qemu_dir_backed {
+        // A virtci-created Tart VM can't be renamed (its underlying `tart` VM name would drift).
+        if matches!(desc.backend, BackendConfig::Tart(_)) && desc.managed == Some(true) {
+            anyhow::bail!(
+                "Renaming Tart-backed images is not yet supported. \
+                 Use `virtci clone {old_name} {new_name}` then `virtci remove {old_name}`."
+            );
+        }
         let new_vci = home_dir.join(format!("{new_name}.vci"));
         std::fs::rename(&vci_path, &new_vci).map_err(|e| {
             anyhow::anyhow!(
@@ -91,19 +103,11 @@ pub fn run_edit(args: &EditArgs, paths: &VciGlobalPaths) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    match &desc.backend {
-        BackendConfig::Tart(_) => anyhow::bail!(
-            "Renaming Tart-backed images is not yet supported. \
-             Use `virtci clone {old_name} {new_name}` then `virtci remove {old_name}`."
-        ),
-        BackendConfig::Qemu(_) => {
-            #[cfg(target_os = "windows")]
-            if home.in_wsl() {
-                anyhow::bail!("Renaming WSL2-backed images is not yet supported.");
-            }
-            rename_managed(&desc, &home_dir, old_name, new_name, system)?;
-        }
+    #[cfg(target_os = "windows")]
+    if home.in_wsl() {
+        anyhow::bail!("Renaming WSL2-backed images is not yet supported.");
     }
+    rename_managed(&desc, &home_dir, old_name, new_name, system)?;
 
     println!("Renamed '{old_name}' to '{new_name}'");
     Ok(())

@@ -1,10 +1,6 @@
-use std::path::Path;
-
 use crate::{
     cli::RemoveArgs,
-    vm_image::{
-        list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig, QemuConfig,
-    },
+    vm_image::{list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig},
     VciGlobalPaths,
 };
 
@@ -46,20 +42,25 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
         return;
     }
 
-    if desc.managed.is_some() && *desc.managed.as_ref().unwrap() {
-        let mut home_path = home.path.clone();
-        home_path.pop();
-        match &desc.backend {
-            BackendConfig::Qemu(ref qemu) => {
-                if let Err(e) = delete_qemu_managed_files(&home_path, &desc.name, qemu) {
+    let mut home_path = home.path.clone();
+    home_path.pop();
+    match &desc.backend {
+        // Any file inside the `<home>/<name>/` per-VM directory is owned by VirtCI, and thus must
+        // be deleted during remove.
+        BackendConfig::Qemu(_) => {
+            let vm_dir = home_path.join(name);
+            if vm_dir.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&vm_dir) {
                     println!(
-                        "Failed to delete QEMU backend files: {e}{}",
+                        "Failed to delete VirtCI VM folder: {e}{}",
                         permission_hint(&e)
                     );
-                    return;
                 }
             }
-            BackendConfig::Tart(ref tart) => {
+        }
+        // Tart has no per-VM file dir; the `managed` flag is its ownership signal.
+        BackendConfig::Tart(ref tart) => {
+            if desc.managed == Some(true) {
                 let output = std::process::Command::new("tart")
                     .arg("delete")
                     .arg(&tart.vm_name)
@@ -78,14 +79,6 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
                     }
                 }
             }
-        }
-
-        let vci_image_folder_path = home_path.join(name);
-        if let Err(e) = std::fs::remove_dir_all(vci_image_folder_path) {
-            println!(
-                "Failed to delete VirtCI VM folder: {e}{}",
-                permission_hint(&e)
-            );
         }
     }
 
@@ -117,35 +110,4 @@ fn remove_wsl2_image(home: &crate::global_paths::TargetPath, name: &str, distro:
         ),
         Err(e) => println!("Failed to run `wsl rm -rf` in distro '{distro}': {e}"),
     }
-}
-
-fn delete_qemu_managed_files(
-    home_path: &Path,
-    name: &str,
-    qemu: &QemuConfig,
-) -> std::io::Result<()> {
-    let vm_dir = home_path.join(name);
-
-    std::fs::remove_file(vm_dir.join(&qemu.image))?;
-
-    if let Some(ref uefi) = qemu.uefi {
-        std::fs::remove_file(vm_dir.join(&uefi.code))?;
-        std::fs::remove_file(vm_dir.join(&uefi.vars))?;
-    }
-
-    if let Some(ref drives) = qemu.additional_drives {
-        for drive in drives {
-            if let Some(file_path) = super::export::parse_drive_file_path(drive) {
-                std::fs::remove_file(vm_dir.join(&file_path))?;
-            }
-        }
-    }
-
-    if let Some(ref isos) = qemu.readonly_isos {
-        for iso in isos {
-            std::fs::remove_file(vm_dir.join(iso))?;
-        }
-    }
-
-    Ok(())
 }

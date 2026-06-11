@@ -226,7 +226,9 @@ pub struct ImageDescription {
     pub arch: Arch,
     pub backend: BackendConfig,
     pub ssh: SshConfig,
-    /// When true, VirtCI owns the backing files (stored in home_path/<name>/).
+    /// Legacy whole-VM ownership. Ownership is now done per-file by location. A specific file
+    /// living inside the `<home>/<name>/` directory is considered owned by VirtCI, and will be
+    /// moved around as necessary, or deleted by `virtci remove ...`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub managed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -387,6 +389,7 @@ pub fn run_from_file(
     } else {
         paths.user_home.clone()
     };
+    localize_uefi_vars(&mut config, &dest_home, system)?;
     save_config(&config, &dest_home, system)?;
 
     println!("Registered '{}'.", config.name);
@@ -438,6 +441,51 @@ fn resolve_config_paths(config: &mut ImageDescription) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+/// A lot of system-wide UEFI vars live in system directories, and shouldn't be modified in-place as
+/// probably many VirtCI VMs would need them. INSTEAD, just copy them to the managed per-VM
+/// directory.
+fn localize_uefi_vars(
+    config: &mut ImageDescription,
+    dest_home: &Path,
+    system: bool,
+) -> Result<(), String> {
+    let name = config.name.clone();
+    let BackendConfig::Qemu(qemu) = &mut config.backend else {
+        return Ok(());
+    };
+    let Some(uefi) = &mut qemu.uefi else {
+        return Ok(());
+    };
+
+    let vm_dir = dest_home.join(&name);
+    if Path::new(&uefi.vars).starts_with(&vm_dir) {
+        return Ok(());
+    }
+
+    let dest = vm_dir.join(export::filename_of(&uefi.vars));
+    std::fs::create_dir_all(&vm_dir)
+        .map_err(|e| format!("Failed to create {}: {e}", vm_dir.display()))?;
+    if system {
+        ensure_world_readable_dir(&vm_dir)
+            .map_err(|e| format!("Failed to set permissions on {}: {e}", vm_dir.display()))?;
+    }
+    std::fs::copy(&uefi.vars, &dest).map_err(|e| {
+        format!(
+            "Failed to copy UEFI vars {} -> {}: {e}{}",
+            uefi.vars,
+            dest.display(),
+            permission_hint(&e)
+        )
+    })?;
+    if system {
+        ensure_world_readable_file(&dest)
+            .map_err(|e| format!("Failed to set permissions on {}: {e}", dest.display()))?;
+    }
+
+    uefi.vars = dest.to_string_lossy().into_owned();
     Ok(())
 }
 
