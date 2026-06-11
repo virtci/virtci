@@ -27,7 +27,7 @@ windows-system-tests-x64:
       run: choco install nodejs -y --quiet
 
     - name: Install clang-format
-      run: winget install --id=LLVM.ClangFormat -e --silent
+      run: winget install --id=LLVM.LLVM -e --silent
 
     - name: Install cargo-deny
       run: cargo install cargo-deny
