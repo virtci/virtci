@@ -284,16 +284,22 @@ impl WslProcess {
     /// `qemu-system*` process by its `comm`. Shelling out to `wsl.exe` is why the caller samples
     /// this on a slow cadence rather than every poll.
     fn cpu_time_ns(&self) -> Option<u64> {
-        let script = format!(
-            "for p in $(pgrep -f \"{marker}\"); do \
+        let script = "for p in $(pgrep -f -- \"$1\"); do \
                case \"$(cat /proc/$p/comm 2>/dev/null)\" in \
                  qemu-system*) cat /proc/$p/stat 2>/dev/null;; \
                esac; \
-             done",
-            marker = self.marker
-        );
+             done";
         let mut cmd = Command::new("wsl");
-        cmd.args(["-d", self.wsl_distro.as_str(), "--", "sh", "-c", &script]);
+        cmd.args([
+            "-d",
+            self.wsl_distro.as_str(),
+            "--",
+            "sh",
+            "-c",
+            script,
+            "sh",
+            self.marker.as_str(),
+        ]);
         detach_from_console(&mut cmd, true);
         let out = cmd.output().ok()?;
         if !out.status.success() {
@@ -362,7 +368,10 @@ mod tests {
         }
         std::hint::black_box(acc);
         let after = host_process_cpu_time_ns(pid).expect("should read own CPU time");
-        assert!(after >= before, "CPU time must be monotonic: {before} -> {after}");
+        assert!(
+            after >= before,
+            "CPU time must be monotonic: {before} -> {after}"
+        );
     }
 
     #[test]
