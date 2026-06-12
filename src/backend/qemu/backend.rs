@@ -219,8 +219,12 @@ impl QemuBackend {
             HostExecTarget::WSL2(distro) => Some(distro.clone()),
             _ => None,
         };
-        let meta =
-            crate::file_lock::LockMetadata::with_run_info(self.run_marker(), ssh, wsl_distro);
+        let meta = crate::file_lock::LockMetadata::with_run_info(
+            self.run_marker(),
+            ssh,
+            self.base_image.os,
+            wsl_distro,
+        );
         let json =
             serde_json::to_string_pretty(&meta).context("Failed to serialize run metadata")?;
         self.run_id

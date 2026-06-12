@@ -137,3 +137,46 @@ pub fn run_shell(args: &cli::ShellArgs, temp_path: &PathBuf) {
         }
     }
 }
+
+pub fn run_copy(args: &cli::CopyArgs, temp_path: &PathBuf) -> anyhow::Result<()> {
+    let vm_name = &args.vm;
+
+    crate::yaml::validate_copy_direction(&args.source, &args.dest)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let spec = crate::yaml::CopySpec {
+        from: args.source.clone(),
+        to: args.dest.clone(),
+        exclude: args.exclude.clone(),
+        crlf: args.crlf,
+        no_mkdir: args.no_mkdir,
+        allow_empty: args.allow_empty,
+    };
+
+    let Some(meta) = find_active_run(vm_name, temp_path) else {
+        anyhow::bail!(
+            "No active job found with name '{vm_name}'.\n\
+             Run 'virtci active' to see all running jobs"
+        );
+    };
+
+    let ssh = meta
+        .ssh
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("active run '{vm_name}' is missing its SSH target"))?;
+    let guest_os = meta.guest_os.unwrap_or_else(|| {
+        eprintln!(
+            "[VirtCI] Warning: active run '{vm_name}' has no recorded guest OS so assuming Linux. \
+             Reboot the VM to record it."
+        );
+        crate::vm_image::GuestOs::Linux
+    });
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to start async runtime: {e}"))?;
+
+    rt.block_on(crate::run::copy::run_copy_spec(ssh, &spec, guest_os, None))
+        .map_err(|e| anyhow::anyhow!(e))
+}

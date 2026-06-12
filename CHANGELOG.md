@@ -2,6 +2,12 @@
 
 VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `virtci copy` to copy files to and from actively running VMs. Supports all of the same functionality as the `virtci run` YAML `copy` step.
+
 ## Version 0.3.1 - 2026-06-11
 
 ### Added
