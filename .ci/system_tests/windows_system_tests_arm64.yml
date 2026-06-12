@@ -92,6 +92,10 @@ windows-system-tests-arm64:
       env:
         QEMU_ARM_SHA512: 67ca24c6b07ecb74848f5c1078db7dc71e4e3ffe1669ef713c34184d322fb6bfbf72f1c9ca028a42212af9b157e46ef806f2e43083b2a9e51a351bd961885288
 
+    - name: Fetch Cargo Dependencies
+      workdir: virtci
+      run: cargo fetch
+
     - name: Go Offline and More Memory
       restart:
         offline: true
