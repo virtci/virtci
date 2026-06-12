@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 mod command;
-mod copy;
+pub mod copy;
 pub mod run_id;
 pub mod validate;
 
@@ -417,70 +417,14 @@ impl Job {
             StepKind::Copy(copy_spec) => {
                 let ssh = self.ssh();
                 let guest_os = self.backend.os();
-                let is_host_to_vm = copy_spec.to.starts_with("vm:");
-                let host_is_windows = cfg!(target_os = "windows");
-                let guest_is_windows = guest_os == GuestOs::Windows;
 
-                if !copy_spec.crlf {
-                    let warning = if is_host_to_vm {
-                        if host_is_windows && !guest_is_windows {
-                            Some("[VirtCI] Copying files from a Windows host to a non-Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
-                        } else if !host_is_windows && guest_is_windows {
-                            Some("[VirtCI] Copying files from a non-Windows host to a Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
-                        } else {
-                            None
-                        }
-                    } else if guest_is_windows && !host_is_windows {
-                        Some("[VirtCI] Copying files from a Windows guest to a non-Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
-                    } else if !guest_is_windows && host_is_windows {
-                        Some("[VirtCI] Copying files from a non-Windows guest to a Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
-                    } else {
-                        None
-                    };
-                    if let Some(warning) = warning {
-                        println!("{}", warning.yellow());
-                    }
-                }
-
-                // In-flight tar conversion. Host->VM CRLF is still done in-guest
-                // by `convert_windows_line_endings` below, not here.
-                let line_endings = if !copy_spec.crlf {
-                    copy::LineEndingConversion::None
-                } else if is_host_to_vm {
-                    if host_is_windows && !guest_is_windows {
-                        copy::LineEndingConversion::ToLf
-                    } else {
-                        copy::LineEndingConversion::None
-                    }
-                } else if guest_is_windows && !host_is_windows {
-                    copy::LineEndingConversion::ToLf
-                } else if !guest_is_windows && host_is_windows {
-                    copy::LineEndingConversion::ToCrlf
-                } else {
-                    copy::LineEndingConversion::None
-                };
-
-                let copy_future = copy::copy_files_tar(
-                    &ssh,
-                    &copy_spec.from,
-                    &copy_spec.to,
-                    &copy_spec.exclude,
-                    guest_os,
-                    Some(timeout_duration),
-                    copy_spec.no_mkdir,
-                    copy_spec.allow_empty,
-                    line_endings,
-                );
+                let copy_future =
+                    copy::run_copy_spec(&ssh, copy_spec, guest_os, Some(timeout_duration));
 
                 tokio::time::timeout(timeout_duration, copy_future)
                     .await
                     .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", step.timeout))?
                     .map_err(|e| anyhow::anyhow!(e))?;
-
-                let convert_to_crlf = is_host_to_vm && guest_is_windows && copy_spec.crlf;
-                if convert_to_crlf {
-                    copy::convert_windows_line_endings(&ssh, &copy_spec.to).await;
-                }
             }
             StepKind::Restart(restart) => {
                 println!(

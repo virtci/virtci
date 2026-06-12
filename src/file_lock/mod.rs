@@ -30,6 +30,10 @@ pub struct LockMetadata {
     pub run_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<crate::vm_image::SshTarget>,
+    /// OS that the VM is running, so commands that run on it like `virtci copy` can do the right
+    /// stuff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_os: Option<crate::vm_image::GuestOs>,
     /// The WSL2 distro this run's QEMU/swtpm live in, if any. Set by the QEMU
     /// backend before it spawns anything, so a later `cleanup` can reap orphans
     /// left by an abrupt death (SIGKILL/crash) via `pkill -f run_name` inside the
@@ -52,6 +56,7 @@ impl LockMetadata {
             locked_at: now,
             run_name: None,
             ssh: None,
+            guest_os: None,
             #[cfg(target_os = "windows")]
             wsl_distro: None,
         }
@@ -64,11 +69,13 @@ impl LockMetadata {
     pub fn with_run_info(
         run_name: String,
         ssh: crate::vm_image::SshTarget,
+        guest_os: crate::vm_image::GuestOs,
         wsl_distro: Option<String>,
     ) -> Self {
         let mut meta = Self::new();
         meta.run_name = Some(run_name);
         meta.ssh = Some(ssh);
+        meta.guest_os = Some(guest_os);
         #[cfg(target_os = "windows")]
         {
             meta.wsl_distro = wsl_distro;

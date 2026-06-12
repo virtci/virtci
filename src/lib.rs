@@ -113,6 +113,12 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
         cli::Command::Shell(shell_args) => {
             run_state::run_shell(&shell_args, &paths.temp);
         }
+        cli::Command::Copy(copy_args) => {
+            if let Err(e) = run_state::run_copy(&copy_args, &paths.temp) {
+                eprintln!("Copy failed: {e}");
+                std::process::exit(1);
+            }
+        }
         cli::Command::Serve(serve_args) => {
             let mut config = crate::web::ServerConfig::default();
             if let Some(port) = serve_args.port {

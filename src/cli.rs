@@ -27,6 +27,7 @@ pub enum Command {
     Edit(EditArgs),
     Boot(BootArgs),
     Shell(ShellArgs),
+    Copy(CopyArgs),
     Serve(ServeArgs),
 }
 
@@ -230,6 +231,41 @@ pub struct ShellArgs {
     /// name of the running job to connect to
     #[argh(positional)]
     pub name: String,
+}
+
+/// Copy files to or from a running VM (find it with `virtci active`).
+///
+/// Exactly one of `source` / `dest` must be prefixed with `vm:` to mark the VM side. This works
+/// identically to the YAML `copy:` step in workflows.
+/// `~` is expanded correctly on both the `source` and `dest` sides for the VM and host.
+///
+/// Example:
+///   virtci copy vci-win-11-arm64-00001 ./dist vm:~/app --exclude build
+///   virtci copy vci-win-11-arm64-00001 vm:/home/ci/logs ./logs --crlf
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "copy")]
+pub struct CopyArgs {
+    /// name of the running VM (from `virtci active`)
+    #[argh(positional)]
+    pub vm: String,
+    /// source path. Prefix with `vm:` to read from the VM
+    #[argh(positional)]
+    pub source: String,
+    /// destination path. Prefix with `vm:` to write to the VM
+    #[argh(positional)]
+    pub dest: String,
+    /// glob pattern to exclude from the copy; may be given more than once
+    #[argh(option)]
+    pub exclude: Vec<String>,
+    /// convert line endings (CRLF <-> LF) based on host and guest OS
+    #[argh(switch)]
+    pub crlf: bool,
+    /// do not create the destination directory before copying
+    #[argh(switch)]
+    pub no_mkdir: bool,
+    /// allow a glob `source` that matches zero files instead of erroring
+    #[argh(switch)]
+    pub allow_empty: bool,
 }
 
 /// (TODO) Start the web UI server
