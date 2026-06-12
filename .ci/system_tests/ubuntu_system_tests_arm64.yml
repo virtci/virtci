@@ -31,7 +31,7 @@ ubuntu-system-tests-arm64:
         NODE_SHA256=524659219d6a207a7400f2bde15d19ba060ffbe0d32a8643319ad67e3bb64c78
         curl --proto '=https' --tlsv1.2 -fsSLO "https://nodejs.org/dist/${NODE_VER}/${NODE_TARBALL}"
         echo "${NODE_SHA256}  ${NODE_TARBALL}" | shasum -a 256 -c -
-        tar -xJf "${NODE_TARBALL}" -C /usr/local --strip-components=1
+        sudo tar -xJf "${NODE_TARBALL}" -C /usr/local --strip-components=1
         rm -f "${NODE_TARBALL}"
 
     - name: Verify npm Supports Release-Age Cooldown
