@@ -25,57 +25,117 @@ permissions:
   contents: read
 
 jobs:
-  ubuntu-x64-host-system-tests:
+  ubuntu-x64-check:
     runs-on:
       - self-hosted
       - Linux
       - X64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run Checks and Dependency Audits
+        run: exec cargo run -- run .ci/check/ubuntu_check_x64.yml
+
+  ubuntu-arm64-check:
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run Checks and Dependency Audits
+        run: exec cargo run -- run .ci/check/ubuntu_check_arm64.yml
+
+  macos-arm64-check:
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run Checks and Dependency Audits
+        run: exec cargo run -- run .ci/check/macos_check_arm64.yml
+
+  windows-x64-check:
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run Checks and Dependency Audits
+        run: exec cargo run -- run .ci/check/windows_check_x64.yml
+
+  windows-arm64-check:
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run Checks and Dependency Audits
+        run: exec cargo run -- run .ci/check/windows_check_arm64.yml
+
+  ubuntu-x64-host-system-tests:
+    needs: ubuntu-x64-check
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
         run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_x64.yml
 
   ubuntu-arm64-host-system-tests:
+    needs: ubuntu-arm64-check
     runs-on:
       - self-hosted
       - macOS
       - ARM64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
         run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_arm64.yml
 
   macos-arm64-host-system-tests:
+    needs: macos-arm64-check
     runs-on:
       - self-hosted
       - macOS
       - ARM64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
         run: exec cargo run -- run .ci/system_tests/macos_system_tests_arm64.yml
 
   windows-x64-host-system-tests:
+    needs: windows-x64-check
     runs-on:
       - self-hosted
       - Linux
       - X64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
         run: exec cargo run -- run .ci/system_tests/windows_system_tests_x64.yml
 
   windows-arm64-host-system-tests:
+    needs: windows-arm64-check
     runs-on:
       - self-hosted
       - macOS
       - ARM64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
         run: exec cargo run -- run .ci/system_tests/windows_system_tests_arm64.yml

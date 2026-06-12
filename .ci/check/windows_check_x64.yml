@@ -1,7 +1,7 @@
-windows-system-tests-x64:
+windows-check-x64:
   image: win-11-x64
-  cpus: 4
-  memory: 12G
+  cpus: 2
+  memory: 8G
   steps:
     - name: Copy Files
       copy:
@@ -14,11 +14,6 @@ windows-system-tests-x64:
           - target
           - .ci/upstream/*.img
           - .ci/temp
-
-    - name: Fetch Ubuntu Images
-      run: |
-        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-        .\virtci\.ci\upstream\fetch_ubuntu_images.ps1
 
     - name: Install Rust
       run: winget install Rustlang.Rustup --silent
@@ -53,37 +48,55 @@ windows-system-tests-x64:
             throw "npm $npm is too old for min-release-age (need >= 11.10.0)"
         }
 
-    - name: Install NPM Dependencies
-      workdir: virtci/web
+    - name: Install clang-format
+      # gets clang-format, nice
       run: |
-        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-        npm ci
+        winget install --id=LLVM.LLVM -e --silent
+        [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';C:\Program Files\LLVM\bin', 'Machine')
 
-    - name: Install QEMU and UEFI Firmware
-      # winget only has x64 binaries seemingly
-      run: winget install -e --id SoftwareFreedomConservancy.QEMU
+    - name: Install cargo-deny
+      run: cargo install cargo-deny
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
       run: cargo fetch
 
-    - name: Go Offline and More Memory
-      restart:
-        offline: true
-        memory: 16G
-
-    - name: Build
+    - name: Rust Security and License Audit
       workdir: virtci
-      run: cargo build
+      run: cargo deny check
 
-    - name: Unit Tests
+    - name: Install NPM Dependencies (locked, scripts blocked)
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm ci
+
+    - name: NPM Provenance and Signature Audit
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm audit signatures
+
+    - name: NPM Vulnerability Audit
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm audit --audit-level=moderate
+
+    - name: Web Lint and Build
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm run lint
+        npm run build
+
+    - name: Clippy
       workdir: virtci
-      run: cargo test
+      run: cargo clippy -- -D warnings
 
-    - name: Go Online For Full CI/CD Workflow Run Tests
-      restart:
-        offline: false
-
-    - name: Full CI/CD Workflow Run Tests
+    - name: Check Formatting
       workdir: virtci
-      run: cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture
+      run: |
+        cargo fmt --check
+        Get-ChildItem -Recurse -Include *.c | ForEach-Object { clang-format --dry-run --Werror $_.FullName }
+      continue_on_error: true

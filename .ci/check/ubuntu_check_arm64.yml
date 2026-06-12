@@ -1,7 +1,7 @@
-ubuntu-system-tests-arm64:
+ubuntu-check-arm64:
   image: ubuntu-arm64
-  cpus: 4
-  memory: 12G
+  cpus: 2
+  memory: 6G
   steps:
     - name: Copy Files
       copy:
@@ -14,9 +14,6 @@ ubuntu-system-tests-arm64:
           - target
           - .ci/upstream/*.img
           - .ci/temp
-
-    - name: Fetch Ubuntu Images
-      run: ./virtci/.ci/upstream/fetch_ubuntu_images.sh
 
     - name: Install Rust
       run: |
@@ -42,35 +39,46 @@ ubuntu-system-tests-arm64:
         npm --version
         npm --version | awk -F. '($1<11)||($1==11 && $2<10){ print "npm "$0" is too old for min-release-age (need >= 11.10.0)"; exit 1 }'
 
-    - name: Install NPM Dependencies
-      workdir: virtci/web
-      run: |
-        npm ci
+    - name: Install clang-format
+      run: sudo apt update && sudo apt install -y clang-format
 
-    - name: Install QEMU and UEFI Firmware
-      run: sudo apt update && sudo apt install -y qemu-system-x86 qemu-system-arm qemu-system-riscv qemu-utils ovmf qemu-efi-aarch64 qemu-efi-riscv64
+    - name: Install cargo-deny
+      run: . "$HOME/.cargo/env" && cargo install cargo-deny
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
       run: . "$HOME/.cargo/env" && cargo fetch
 
-    - name: Go Offline and More Memory
-      restart:
-        offline: true
-        memory: 16G
-
-    - name: Build
+    - name: Rust Security and License Audit
       workdir: virtci
-      run: . "$HOME/.cargo/env" && cargo build
+      run: . "$HOME/.cargo/env" && cargo deny check
 
-    - name: Unit Tests
+    - name: Install NPM Dependencies (locked, scripts blocked)
+      workdir: virtci/web
+      run: npm ci
+
+    - name: NPM Provenance and Signature Audit
+      workdir: virtci/web
+      run: npm audit signatures
+
+    - name: NPM Vulnerability Audit
+      workdir: virtci/web
+      run: npm audit --audit-level=moderate
+
+    - name: Web Lint and Build
+      workdir: virtci/web
+      run: |
+        npm run lint
+        npm run build
+
+    - name: Clippy
       workdir: virtci
-      run: . "$HOME/.cargo/env" && cargo test
+      run: . "$HOME/.cargo/env" && cargo clippy -- -D warnings
 
-    - name: Go Online For Full CI/CD Workflow Run Tests
-      restart:
-        offline: false
-
-    - name: Full CI/CD Workflow Run Tests
+    - name: Check Formatting
       workdir: virtci
-      run: . "$HOME/.cargo/env" &&  cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture
+      run: |
+        . "$HOME/.cargo/env"
+        cargo fmt --check
+        find src -name '*.c' -exec clang-format --dry-run --Werror {} +
+      continue_on_error: true

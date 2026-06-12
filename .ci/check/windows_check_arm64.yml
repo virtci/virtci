@@ -1,0 +1,112 @@
+windows-check-arm64:
+  image: win-11-arm64
+  cpus: 2
+  memory: 8G
+  steps:
+    - name: Copy Files
+      copy:
+        from: ./
+        to: vm:~/virtci
+        exclude:
+          - .git
+          - .github
+          - docs
+          - target
+          - .ci/upstream/*.img
+          - .ci/temp
+
+    - name: Install Rust
+      run: winget install Rustlang.Rustup --silent
+
+    - name: Install Node and NPM
+      # https://nodejs.org/dist/v24.16.0/SHASUMS256.txt
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+        $NodeVer = "v24.16.0"
+        $NodeZip = "node-$NodeVer-win-arm64.zip"
+        $NodeSha256 = "14834611d4c6b3c06054e7007732b90474c16e0b32f395e05b55a571ef71c6d2"
+        $dest = Join-Path $env:TEMP $NodeZip
+        & curl.exe --proto "=https" --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o $dest "https://nodejs.org/dist/$NodeVer/$NodeZip"
+        if ($LASTEXITCODE -ne 0) { throw "Failed to download Node (curl exit $LASTEXITCODE)." }
+        $actual = (Get-FileHash $dest -Algorithm SHA256).Hash
+        if ($actual -ne $NodeSha256) { throw "Node SHA256 mismatch: expected $NodeSha256, got $actual" }
+        Expand-Archive -Path $dest -DestinationPath "C:\nodejs" -Force
+        Remove-Item $dest
+        $NodeDir = "C:\nodejs\node-$NodeVer-win-arm64"
+        [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'Machine') + ";$NodeDir", 'Machine')
+
+    - name: Verify npm Supports Release-Age Cooldown
+      # npm must be >= 11.10.0 because that has `min-release-age`. Anything lower will just silently ignore, not acceptable.
+      run: |
+        $ErrorActionPreference = "Stop"
+        node --version
+        $npm = (npm --version).Trim()
+        Write-Host "npm $npm"
+        $p = $npm.Split('.')
+        if ([int]$p[0] -lt 11 -or ([int]$p[0] -eq 11 -and [int]$p[1] -lt 10)) {
+            throw "npm $npm is too old for min-release-age (need >= 11.10.0)"
+        }
+
+    # cargo-deny's arm64 asm stuff cannot be built by MSVC, needs clang. Also gets clang-format.
+    - name: Install LLVM
+      run: |
+        winget install -e --id LLVM.LLVM --silent
+        [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';C:\Program Files\LLVM\bin', 'Machine')
+
+    - name: Install Git
+      run: winget install -e --id Git.Git
+
+    - name: Install cargo-deny
+      run: cargo install cargo-deny
+
+    - name: Fetch Cargo Dependencies
+      workdir: virtci
+      run: cargo fetch
+
+    - name: Rust Security and License Audit
+      # cargo-deny covers RUSTSEC advisories, license policy, banned crates, and
+      # untrusted sources in a single pass.
+      workdir: virtci
+      run: cargo deny check
+
+    - name: Install NPM Dependencies (locked, scripts blocked)
+      # `npm ci` installs STRICTLY from package-lock.json and verifies every
+      # package's sha512 integrity hash. The committed web/.npmrc layers on
+      # ignore-scripts, min-release-age=7, and engine-strict.
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm ci
+
+    - name: NPM Provenance and Signature Audit
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm audit signatures
+
+    - name: NPM Vulnerability Audit
+      # Fails on any known advisory at moderate severity or above. Tighten to
+      # --audit-level=low to also block low-severity advisories.
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm audit --audit-level=moderate
+
+    - name: Web Lint and Build
+      workdir: virtci/web
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        npm run lint
+        npm run build
+
+    - name: Clippy
+      workdir: virtci
+      run: cargo clippy -- -D warnings
+
+    - name: Check Formatting
+      workdir: virtci
+      run: |
+        cargo fmt --check
+        Get-ChildItem -Recurse -Include *.c | ForEach-Object { clang-format --dry-run --Werror $_.FullName }
+      continue_on_error: true
