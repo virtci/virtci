@@ -55,6 +55,10 @@ ubuntu-system-tests-x64:
     - name: Install QEMU and UEFI Firmware
       run: sudo apt update && sudo apt install -y qemu-system-x86 qemu-system-arm qemu-system-riscv qemu-utils ovmf qemu-efi-aarch64 qemu-efi-riscv64
 
+    - name: Fetch Cargo Dependencies
+      workdir: virtci
+      run: . "$HOME/.cargo/env" && cargo fetch
+
     - name: Go Offline and More Memory
       restart:
         offline: true

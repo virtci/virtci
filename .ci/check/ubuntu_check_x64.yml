@@ -40,7 +40,8 @@ ubuntu-check-x64:
         npm --version | awk -F. '($1<11)||($1==11 && $2<10){ print "npm "$0" is too old for min-release-age (need >= 11.10.0)"; exit 1 }'
 
     - name: Install clang-format
-      run: sudo apt update && sudo apt install -y clang-format
+      # git is required by `cargo deny check` to clone the RustSec advisory-db.
+      run: sudo apt update && sudo apt install -y clang-format git
 
     - name: Install cargo-deny
       run: . "$HOME/.cargo/env" && cargo install cargo-deny

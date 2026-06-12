@@ -44,6 +44,7 @@ windows-system-tests-arm64:
     - name: Verify npm Supports Release-Age Cooldown
       # npm must be >= 11.10.0 because that has `min-release-age`. Anything lower will just silently ignore, not acceptable.
       run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
         $ErrorActionPreference = "Stop"
         node --version
         $npm = (npm --version).Trim()
@@ -98,7 +99,9 @@ windows-system-tests-arm64:
 
     - name: Build
       workdir: virtci
-      run: cargo build
+      run: |
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+        cargo build
 
     - name: Unit Tests
       workdir: virtci

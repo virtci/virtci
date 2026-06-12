@@ -38,6 +38,7 @@ macos-system-tests-arm64:
       # npm must be >= 11.10.0 because that has `min-release-age`. Anything lower will just silently ignore, not acceptable.
       run: |
         set -euo pipefail
+        export PATH="/usr/local/bin:$PATH"
         node --version
         npm --version
         npm --version | awk -F. '($1<11)||($1==11 && $2<10){ print "npm "$0" is too old for min-release-age (need >= 11.10.0)"; exit 1 }'
@@ -48,6 +49,7 @@ macos-system-tests-arm64:
     - name: Install NPM Dependencies
       workdir: virtci/web
       run: |
+        export PATH="/usr/local/bin:$PATH"
         npm ci
 
     - name: Fetch Cargo Dependencies
@@ -61,7 +63,9 @@ macos-system-tests-arm64:
 
     - name: Build
       workdir: virtci
-      run: . "$HOME/.cargo/env" && cargo build
+      run: |
+        export PATH="/usr/local/bin:$PATH"
+        . "$HOME/.cargo/env" && cargo build
 
     - name: Unit Tests
       workdir: virtci
