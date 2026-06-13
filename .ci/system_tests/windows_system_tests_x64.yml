@@ -66,7 +66,7 @@ windows-system-tests-x64:
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
-      run: cargo fetch
+      run: cargo fetch --locked
 
     - name: Go Offline and More Memory
       restart:
@@ -77,11 +77,11 @@ windows-system-tests-x64:
       workdir: virtci
       run: |
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-        cargo build
+        cargo build --locked
 
     - name: Unit Tests
       workdir: virtci
-      run: cargo test
+      run: cargo test --locked
 
     - name: Go Online For Full CI/CD Workflow Run Tests
       restart:
@@ -89,4 +89,4 @@ windows-system-tests-x64:
 
     - name: Full CI/CD Workflow Run Tests
       workdir: virtci
-      run: cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture
+      run: cargo test --locked --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture

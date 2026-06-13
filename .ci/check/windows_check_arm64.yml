@@ -59,11 +59,11 @@ windows-check-arm64:
       run: winget install -e --id Git.Git
 
     - name: Install cargo-deny
-      run: cargo install cargo-deny
+      run: cargo install --locked cargo-deny
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
-      run: cargo fetch
+      run: cargo fetch --locked
 
     - name: Rust Security and License Audit
       # cargo-deny covers RUSTSEC advisories, license policy, banned crates, and
@@ -103,7 +103,7 @@ windows-check-arm64:
 
     - name: Clippy
       workdir: virtci
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --locked -- -D warnings
 
     - name: Check Formatting
       workdir: virtci

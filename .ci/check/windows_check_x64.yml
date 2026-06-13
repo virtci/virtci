@@ -56,11 +56,11 @@ windows-check-x64:
         [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';C:\Program Files\LLVM\bin', 'Machine')
 
     - name: Install cargo-deny
-      run: cargo install cargo-deny
+      run: cargo install --locked cargo-deny
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
-      run: cargo fetch
+      run: cargo fetch --locked
 
     - name: Rust Security and License Audit
       workdir: virtci
@@ -93,7 +93,7 @@ windows-check-x64:
 
     - name: Clippy
       workdir: virtci
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --locked -- -D warnings
 
     - name: Check Formatting
       workdir: virtci

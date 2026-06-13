@@ -54,7 +54,7 @@ macos-system-tests-arm64:
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
-      run: . "$HOME/.cargo/env" && cargo fetch
+      run: . "$HOME/.cargo/env" && cargo fetch --locked
 
     - name: Go Offline and More Memory
       restart:
@@ -65,11 +65,11 @@ macos-system-tests-arm64:
       workdir: virtci
       run: |
         export PATH="/usr/local/bin:$PATH"
-        . "$HOME/.cargo/env" && cargo build
+        . "$HOME/.cargo/env" && cargo build --locked
 
     - name: Unit Tests
       workdir: virtci
-      run: . "$HOME/.cargo/env" && cargo test
+      run: . "$HOME/.cargo/env" && cargo test --locked
 
     - name: Go Online For Full CI/CD Workflow Run Tests
       restart:
@@ -77,4 +77,4 @@ macos-system-tests-arm64:
 
     - name: Full CI/CD Workflow Run Tests
       workdir: virtci
-      run: . "$HOME/.cargo/env" &&  cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture
+      run: . "$HOME/.cargo/env" &&  cargo test --locked --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture

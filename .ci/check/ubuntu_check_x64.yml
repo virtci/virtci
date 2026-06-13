@@ -44,11 +44,11 @@ ubuntu-check-x64:
       run: sudo apt update && sudo apt install -y clang-format git
 
     - name: Install cargo-deny
-      run: . "$HOME/.cargo/env" && cargo install cargo-deny
+      run: . "$HOME/.cargo/env" && cargo install --locked cargo-deny
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
-      run: . "$HOME/.cargo/env" && cargo fetch
+      run: . "$HOME/.cargo/env" && cargo fetch --locked
 
     - name: Rust Security and License Audit
       workdir: virtci
@@ -74,7 +74,7 @@ ubuntu-check-x64:
 
     - name: Clippy
       workdir: virtci
-      run: . "$HOME/.cargo/env" && cargo clippy -- -D warnings
+      run: . "$HOME/.cargo/env" && cargo clippy --locked -- -D warnings
 
     - name: Check Formatting
       workdir: virtci
