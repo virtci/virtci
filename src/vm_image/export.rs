@@ -4,9 +4,9 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::VciGlobalPaths;
 use crate::vm_image::progress::ProgressReader;
 use crate::vm_image::{BackendConfig, ImageDescription, QemuConfig, TartConfig};
-use crate::VciGlobalPaths;
 
 use anyhow::Context;
 
@@ -159,10 +159,10 @@ pub fn filename_of(path: &str) -> String {
 
 pub fn parse_drive_file_path(drive_str: &str) -> Option<String> {
     for part in drive_str.split(',') {
-        if let Some(path) = part.strip_prefix("file=") {
-            if !path.is_empty() {
-                return Some(path.to_string());
-            }
+        if let Some(path) = part.strip_prefix("file=")
+            && !path.is_empty()
+        {
+            return Some(path.to_string());
         }
     }
     None

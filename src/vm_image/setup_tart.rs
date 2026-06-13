@@ -3,11 +3,11 @@
 
 use std::path::PathBuf;
 
-use crate::vm_image::{
-    expand_path, read_line, read_line_with_default, save_config, validate_image_name, Arch,
-    BackendConfig, GuestOs, ImageDescription, SshConfig, TartConfig,
-};
 use crate::VciGlobalPaths;
+use crate::vm_image::{
+    Arch, BackendConfig, GuestOs, ImageDescription, SshConfig, TartConfig, expand_path, read_line,
+    read_line_with_default, save_config, validate_image_name,
+};
 
 /// Interactive Tart image setup (macOS ARM64 only)
 /// 1. Image name (what to call it)

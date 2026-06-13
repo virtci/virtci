@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use crate::run::MAX_TIMEOUT;
-use serde::de::{self, Deserializer};
 use serde::Deserialize;
+use serde::de::{self, Deserializer};
 use std::collections::HashMap;
 
 /// Coerce a YAML scalar (string, number, or bool) into a `String`.

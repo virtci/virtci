@@ -1,7 +1,7 @@
 use crate::{
-    cli::RemoveArgs,
-    vm_image::{list::print_verbose, permission_hint, setup_qemu::prompt_yes_no, BackendConfig},
     VciGlobalPaths,
+    cli::RemoveArgs,
+    vm_image::{BackendConfig, list::print_verbose, permission_hint, setup_qemu::prompt_yes_no},
 };
 
 pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
@@ -49,17 +49,17 @@ pub fn run_remove(remove_args: &RemoveArgs, paths: &VciGlobalPaths) {
         // be deleted during remove.
         BackendConfig::Qemu(_) => {
             let vm_dir = home_path.join(name);
-            if vm_dir.exists() {
-                if let Err(e) = std::fs::remove_dir_all(&vm_dir) {
-                    println!(
-                        "Failed to delete VirtCI VM folder: {e}{}",
-                        permission_hint(&e)
-                    );
-                }
+            if vm_dir.exists()
+                && let Err(e) = std::fs::remove_dir_all(&vm_dir)
+            {
+                println!(
+                    "Failed to delete VirtCI VM folder: {e}{}",
+                    permission_hint(&e)
+                );
             }
         }
         // Tart has no per-VM file dir; the `managed` flag is its ownership signal.
-        BackendConfig::Tart(ref tart) => {
+        BackendConfig::Tart(tart) => {
             if desc.managed == Some(true) {
                 let output = std::process::Command::new("tart")
                     .arg("delete")

@@ -8,16 +8,16 @@ use std::{
 
 use crate::{
     backend::{
-        exec::{self, TargetChildProcess},
-        qemu::{create_backing_file, PortFlock},
         VmBackend, VmStartConfig,
+        exec::{self, TargetChildProcess},
+        qemu::{PortFlock, create_backing_file},
     },
     file_lock::FileLock,
     global_paths::{TargetPath, VciGlobalPaths},
     orphan::OrphanTracker,
     run::run_id::ReservedRunId,
     util::cpu_arch::Arch,
-    vm_image::{expand_path, HostExecTarget, ImageDescription},
+    vm_image::{HostExecTarget, ImageDescription, expand_path},
 };
 
 use anyhow::Context;
@@ -358,15 +358,15 @@ impl VmBackend for QemuBackend {
     }
 
     fn stop_vm(&mut self) {
-        if let Some(qemu) = self.qemu_process.take() {
-            if let Ok(mut guard) = qemu.lock() {
-                guard.kill();
-            }
+        if let Some(qemu) = self.qemu_process.take()
+            && let Ok(mut guard) = qemu.lock()
+        {
+            guard.kill();
         }
-        if let Some(tpm) = self.tpm_process.take() {
-            if let Ok(mut guard) = tpm.lock() {
-                guard.kill();
-            }
+        if let Some(tpm) = self.tpm_process.take()
+            && let Ok(mut guard) = tpm.lock()
+        {
+            guard.kill();
         }
 
         // Directly remove swtpm's control socket, cause SIGKILL may not unlink it.
@@ -460,10 +460,10 @@ impl VmBackend for QemuBackend {
         }
 
         self.qemu_process = None;
-        if let Some(tpm) = self.tpm_process.take() {
-            if let Ok(mut guard) = tpm.lock() {
-                guard.kill();
-            }
+        if let Some(tpm) = self.tpm_process.take()
+            && let Ok(mut guard) = tpm.lock()
+        {
+            guard.kill();
         }
 
         // Directly remove swtpm's control socket, cause SIGKILL may not unlink it.
@@ -493,15 +493,15 @@ impl VmBackend for QemuBackend {
 
 impl Drop for QemuBackend {
     fn drop(&mut self) {
-        if let Some(qemu) = self.qemu_process.take() {
-            if let Ok(mut guard) = qemu.lock() {
-                guard.kill();
-            }
+        if let Some(qemu) = self.qemu_process.take()
+            && let Ok(mut guard) = qemu.lock()
+        {
+            guard.kill();
         }
-        if let Some(tpm) = self.tpm_process.take() {
-            if let Ok(mut guard) = tpm.lock() {
-                guard.kill();
-            }
+        if let Some(tpm) = self.tpm_process.take()
+            && let Ok(mut guard) = tpm.lock()
+        {
+            guard.kill();
         }
 
         // [`BackingFile::temp()`] returns a path only for `Temp`.

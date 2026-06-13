@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
+use crate::VciGlobalPaths;
 use crate::cli::EditArgs;
 use crate::file_lock::{FileLock, FileLockError};
 use crate::vm_image::{
-    ensure_world_readable_file, load_image, permission_hint, validate_image_name, BackendConfig,
-    ImageDescription,
+    BackendConfig, ImageDescription, ensure_world_readable_file, load_image, permission_hint,
+    validate_image_name,
 };
-use crate::VciGlobalPaths;
 
 /// Any image-mutating operations, like edit and reconcile, serialize on THIS lock.
 /// Ensures concurrent operations can't delete a `.vci` that's in-flight edit.

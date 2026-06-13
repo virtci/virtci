@@ -198,9 +198,12 @@ pub fn qemu_cpu(
                 patch: 0,
             };
             if (*version) < min_version_with_neoverse_n1 {
-                eprintln!("You are using QEMU {}.{}.{} which doesn't support `-cpu neoverse-n1`. \
+                eprintln!(
+                    "You are using QEMU {}.{}.{} which doesn't support `-cpu neoverse-n1`. \
                 You may encounter issues using more recent arm64 UEFI firmware while using `-cpu max`. \
-                If so, please update to QEMU 7.0.0 or higher.", version.major, version.minor, version.patch);
+                If so, please update to QEMU 7.0.0 or higher.",
+                    version.major, version.minor, version.patch
+                );
                 "max"
             } else {
                 "neoverse-n1"

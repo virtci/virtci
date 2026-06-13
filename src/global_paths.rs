@@ -18,7 +18,7 @@ pub struct VciGlobalPaths {
 /// path to exceed the 104-byte `sockaddr_un.sun_path` limit.
 #[cfg(target_os = "macos")]
 fn default_temp_path() -> PathBuf {
-    extern "C" {
+    unsafe extern "C" {
         fn getuid() -> u32;
     }
     PathBuf::from(format!("/tmp/vci-{}", unsafe { getuid() }))

@@ -264,7 +264,7 @@ fn run_thorough_system_test(test_name: &str, image_name: &str, image_json: &str,
     std::fs::create_dir_all(&copy_out).expect("Failed to create copy_out directory");
 
     // Forwarded into the VM via the job's `host_env`.
-    std::env::set_var("VIRTCI_TEST_HOST_ENV", "from-host");
+    unsafe { std::env::set_var("VIRTCI_TEST_HOST_ENV", "from-host") };
 
     // CRLF conversion only runs when host and guest line conventions disagree
     // (Windows host -> Unix VM). On a Unix host the file arrives unconverted.

@@ -23,7 +23,7 @@ use std::os::unix::fs::PermissionsExt;
 static LOCK_FILE_PATH: std::sync::LazyLock<PathBuf> =
     std::sync::LazyLock::new(|| std::env::temp_dir().join("vci-transfer.lock"));
 
-extern "C" {
+unsafe extern "C" {
     fn get_process_start_time_native(pid: u32, out_start_time: *mut u64) -> bool;
     fn start_time_to_unix_secs(start_time: u64) -> u64;
     fn format_unix_time_local(unix_secs: u64, buf: *mut u8, buf_size: usize);
@@ -32,11 +32,7 @@ extern "C" {
 fn get_process_start_time(pid: u32) -> Option<u64> {
     let mut start_time: u64 = 0;
     let exists = unsafe { get_process_start_time_native(pid, &raw mut start_time) };
-    if exists {
-        Some(start_time)
-    } else {
-        None
-    }
+    if exists { Some(start_time) } else { None }
 }
 
 fn format_local_time(unix_secs: u64) -> String {
@@ -91,7 +87,7 @@ type RawHandle = std::ffi::c_int;
 #[cfg(windows)]
 type RawHandle = isize;
 
-extern "C" {
+unsafe extern "C" {
     fn try_lock_file_exclusive_native(handle: RawHandle) -> bool;
     fn unlock_file_native(handle: RawHandle);
 }
@@ -142,10 +138,10 @@ impl TransferLock {
         } else {
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
-            if file.read_to_string(&mut contents).is_ok() {
-                if let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents) {
-                    return Err(TransferLockError::OtherProcessBlock(blocking_metadata));
-                }
+            if file.read_to_string(&mut contents).is_ok()
+                && let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents)
+            {
+                return Err(TransferLockError::OtherProcessBlock(blocking_metadata));
             }
             Err(TransferLockError::Other)
         }

@@ -16,7 +16,7 @@ pub enum Arch {
     RISCV64 = 2,
 }
 
-extern "C" {
+unsafe extern "C" {
     /// `src/util/exec_built_cpu_arch.c`. If returned `-1`, some kind of error happened.
     fn virtci_get_arch_of_executable_native(executable_path: *const u8, path_len: usize) -> i32;
     /// `src/util/exec_built_cpu_arch.c`. If returned `-1`, some kind of error happened.

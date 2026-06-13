@@ -4,8 +4,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::vm_image::{BackendConfig, ImageDescription};
 use crate::VciGlobalPaths;
+use crate::vm_image::{BackendConfig, ImageDescription};
 
 pub fn run_list(verbose: bool, paths: &VciGlobalPaths) {
     let mut images = load_all_images(paths);

@@ -153,10 +153,10 @@ impl FileLock {
         } else {
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
-            if file.read_to_string(&mut contents).is_ok() {
-                if let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents) {
-                    return Err(FileLockError::OtherProcessBlock(blocking_metadata));
-                }
+            if file.read_to_string(&mut contents).is_ok()
+                && let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents)
+            {
+                return Err(FileLockError::OtherProcessBlock(blocking_metadata));
             }
             Err(FileLockError::Other)
         }
@@ -193,10 +193,10 @@ impl FileLock {
             let mut file = file;
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
-            if file.read_to_string(&mut contents).is_ok() {
-                if let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents) {
-                    return Err(FileLockError::OtherProcessBlock(blocking_metadata));
-                }
+            if file.read_to_string(&mut contents).is_ok()
+                && let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents)
+            {
+                return Err(FileLockError::OtherProcessBlock(blocking_metadata));
             }
             Err(FileLockError::Other)
         }
@@ -252,10 +252,10 @@ impl FileLock {
             let mut file = file;
             let mut contents = String::new();
             file.seek(SeekFrom::Start(0)).ok();
-            if file.read_to_string(&mut contents).is_ok() {
-                if let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents) {
-                    return Err(FileLockError::OtherProcessBlock(blocking_metadata));
-                }
+            if file.read_to_string(&mut contents).is_ok()
+                && let Ok(blocking_metadata) = serde_json::from_str::<LockMetadata>(&contents)
+            {
+                return Err(FileLockError::OtherProcessBlock(blocking_metadata));
             }
             Err(FileLockError::Other)
         }
@@ -282,11 +282,7 @@ impl Drop for FileLock {
 fn get_process_start_time(pid: u32) -> Option<u64> {
     let mut start_time: u64 = 0;
     let exists = unsafe { get_process_start_time_native(pid, &raw mut start_time) };
-    if exists {
-        Some(start_time)
-    } else {
-        None
-    }
+    if exists { Some(start_time) } else { None }
 }
 
 fn format_local_time(unix_secs: u64) -> String {
@@ -296,7 +292,7 @@ fn format_local_time(unix_secs: u64) -> String {
     String::from_utf8_lossy(&buf[..len]).into_owned()
 }
 
-extern "C" {
+unsafe extern "C" {
     fn try_lock_file_exclusive_native(handle: RawHandle) -> bool;
     fn try_lock_file_shared_native(handle: RawHandle) -> bool;
     fn unlock_file_native(handle: RawHandle);

@@ -161,18 +161,18 @@ fn run_setup(args: &cli::SetupArgs, paths: &VciGlobalPaths) {
         std::process::exit(1);
     }
 
-    if args.qemu {
-        if let Err(e) = vm_image::setup_qemu::run_interactive_setup(paths, args.system) {
-            panic!("Setup failed: {e}");
-        }
+    if args.qemu
+        && let Err(e) = vm_image::setup_qemu::run_interactive_setup(paths, args.system)
+    {
+        panic!("Setup failed: {e}");
     }
 
     #[cfg(target_os = "macos")]
     {
-        if args.tart {
-            if let Err(e) = vm_image::setup_tart::run_interactive_setup(paths, args.system) {
-                panic!("Setup failed: {e}");
-            }
+        if args.tart
+            && let Err(e) = vm_image::setup_tart::run_interactive_setup(paths, args.system)
+        {
+            panic!("Setup failed: {e}");
         }
     }
 
@@ -338,7 +338,7 @@ fn setup_signal_handlers(orphans: orphan::OrphanTracker) {
 async fn signal_handler(orphans: orphan::OrphanTracker) {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         const GRACEFUL_TIMEOUT_SECS: u64 = 30;
 
@@ -372,20 +372,18 @@ async fn signal_handler(orphans: orphan::OrphanTracker) {
                 std::process::exit(1);
             }
 
-            if !graceful_attempted {
-                if let Some(&pid) = QEMU_BOOT_GRACEFUL_PID.get() {
-                    let sent = std::process::Command::new("kill")
-                        .arg("-TERM")
-                        .arg(pid.to_string())
-                        .status()
-                        .is_ok_and(|s| s.success());
-                    if sent {
-                        eprintln!(
-                            "\n[VirtCI] SIGTERM sent to QEMU; waiting for clean qcow2 close (up to {GRACEFUL_TIMEOUT_SECS}s). Press CTRL+C again to force-exit."
-                        );
-                        graceful_attempted = true;
-                        continue;
-                    }
+            if !graceful_attempted && let Some(&pid) = QEMU_BOOT_GRACEFUL_PID.get() {
+                let sent = std::process::Command::new("kill")
+                    .arg("-TERM")
+                    .arg(pid.to_string())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                if sent {
+                    eprintln!(
+                        "\n[VirtCI] SIGTERM sent to QEMU; waiting for clean qcow2 close (up to {GRACEFUL_TIMEOUT_SECS}s). Press CTRL+C again to force-exit."
+                    );
+                    graceful_attempted = true;
+                    continue;
                 }
             }
 

@@ -14,13 +14,14 @@ use std::{
 
 use anyhow::Context;
 use russh::client;
-use russh::keys::ssh_key;
 use russh::keys::PrivateKeyWithHashAlg;
+use russh::keys::ssh_key;
 
 use crate::{
+    VciGlobalPaths,
     backend::{VmBackend, VmStartConfig},
     vm_image::{GuestOs, SshTarget},
-    yaml, VciGlobalPaths,
+    yaml,
 };
 
 pub const SSH_WAIT_TIMEOUT: u64 = 600;
@@ -123,12 +124,10 @@ pub fn boot_timeouts() -> (u64, u64) {
             ("VIRTCI_VM_START_IDLE_TIMEOUT", &idle),
             ("VIRTCI_VM_START_MAX_TIMEOUT", &max),
         ] {
-            if let Some(raw) = raw {
-                if raw.trim().parse::<u64>().ok().is_none_or(|n| n == 0) {
-                    eprintln!(
-                        "Warning: {name}={raw:?} is not a positive integer; using the default."
-                    );
-                }
+            if let Some(raw) = raw
+                && raw.trim().parse::<u64>().ok().is_none_or(|n| n == 0)
+            {
+                eprintln!("Warning: {name}={raw:?} is not a positive integer; using the default.");
             }
         }
     });
@@ -262,22 +261,20 @@ impl Job {
 
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
-        if self.backend.is_offline() {
-            if let Some(cmd) = self.backend.offline_enforce_cmd() {
-                let empty_env = std::collections::HashMap::new();
-                let enforce_future =
-                    command::run_command(&ssh_target, cmd, None, &empty_env, self.backend.os());
-                match tokio::time::timeout(tokio::time::Duration::from_secs(30), enforce_future)
-                    .await
-                {
-                    Ok(Ok(res)) if res.exit_code != 0 => {
-                        anyhow::bail!("offline enforcement exited with code {}", res.exit_code)
-                    }
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => anyhow::bail!("offline enforcement failed: {e}"),
-                    Err(_) => {
-                        anyhow::bail!("offline enforcement timed out after 30s");
-                    }
+        if self.backend.is_offline()
+            && let Some(cmd) = self.backend.offline_enforce_cmd()
+        {
+            let empty_env = std::collections::HashMap::new();
+            let enforce_future =
+                command::run_command(&ssh_target, cmd, None, &empty_env, self.backend.os());
+            match tokio::time::timeout(tokio::time::Duration::from_secs(30), enforce_future).await {
+                Ok(Ok(res)) if res.exit_code != 0 => {
+                    anyhow::bail!("offline enforcement exited with code {}", res.exit_code)
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => anyhow::bail!("offline enforcement failed: {e}"),
+                Err(_) => {
+                    anyhow::bail!("offline enforcement timed out after 30s");
                 }
             }
         }
@@ -512,36 +509,31 @@ impl Job {
                     ssh.retry_budget = self.ssh_retry_budget;
                     println!("{}", format!("  SSH ready after {secs}s").dimmed());
 
-                    if self.backend.is_offline() {
-                        if let Some(cmd) = self.backend.offline_enforce_cmd() {
-                            let empty_env = std::collections::HashMap::new();
-                            let enforce_future = command::run_command(
-                                &ssh,
-                                cmd,
-                                None,
-                                &empty_env,
-                                self.backend.os(),
-                            );
+                    if self.backend.is_offline()
+                        && let Some(cmd) = self.backend.offline_enforce_cmd()
+                    {
+                        let empty_env = std::collections::HashMap::new();
+                        let enforce_future =
+                            command::run_command(&ssh, cmd, None, &empty_env, self.backend.os());
 
-                            match tokio::time::timeout(
-                                tokio::time::Duration::from_secs(30),
-                                enforce_future,
-                            )
-                            .await
-                            {
-                                Ok(Ok(res)) if res.exit_code != 0 => {
-                                    anyhow::bail!(
-                                        "offline enforcement exited with code {}",
-                                        res.exit_code
-                                    )
-                                }
-                                Ok(Ok(_)) => {}
-                                Ok(Err(e)) => {
-                                    anyhow::bail!("offline enforcement failed: {e}")
-                                }
-                                Err(_) => {
-                                    anyhow::bail!("offline enforcement timed out after 30s")
-                                }
+                        match tokio::time::timeout(
+                            tokio::time::Duration::from_secs(30),
+                            enforce_future,
+                        )
+                        .await
+                        {
+                            Ok(Ok(res)) if res.exit_code != 0 => {
+                                anyhow::bail!(
+                                    "offline enforcement exited with code {}",
+                                    res.exit_code
+                                )
+                            }
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
+                                anyhow::bail!("offline enforcement failed: {e}")
+                            }
+                            Err(_) => {
+                                anyhow::bail!("offline enforcement timed out after 30s")
                             }
                         }
                     }
@@ -696,19 +688,19 @@ pub async fn wait_for_ssh_watching(
             SshProgress::NotReady => {}
         }
 
-        if let Some(size) = serial_path.as_deref().and_then(serial_size) {
-            if size > last_size {
-                last_size = size;
-                last_progress = Instant::now();
-            }
+        if let Some(size) = serial_path.as_deref().and_then(serial_size)
+            && size > last_size
+        {
+            last_size = size;
+            last_progress = Instant::now();
         }
 
         // Disk-write liveness: a grown file or a bumped mtime both mean the guest just wrote.
-        if let Some(fp) = disk_path.as_deref().and_then(disk_fingerprint) {
-            if last_disk.as_ref().is_none_or(|prev| fp > *prev) {
-                last_disk = Some(fp);
-                last_progress = Instant::now();
-            }
+        if let Some(fp) = disk_path.as_deref().and_then(disk_fingerprint)
+            && last_disk.as_ref().is_none_or(|prev| fp > *prev)
+        {
+            last_disk = Some(fp);
+            last_progress = Instant::now();
         }
 
         let now = Instant::now();
@@ -717,18 +709,18 @@ pub async fn wait_for_ssh_watching(
         // only if the VM burned a meaningful share of a core since the last sample, so an idle
         // process doesn't keep a wedged guest alive. Only advance the anchor on a successful
         // sample, so a transient read failure just retries rather than skewing the next interval.
-        if now.duration_since(last_cpu_at) >= cpu_sample_interval {
-            if let Some(cpu) = backend.vm_cpu_time_ns() {
-                if let Some(prev) = last_cpu {
-                    let cpu_delta = cpu.saturating_sub(prev);
-                    let wall_ns = u64::try_from(now.duration_since(last_cpu_at).as_nanos())?;
-                    if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
-                        last_progress = now;
-                    }
+        if now.duration_since(last_cpu_at) >= cpu_sample_interval
+            && let Some(cpu) = backend.vm_cpu_time_ns()
+        {
+            if let Some(prev) = last_cpu {
+                let cpu_delta = cpu.saturating_sub(prev);
+                let wall_ns = u64::try_from(now.duration_since(last_cpu_at).as_nanos())?;
+                if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
+                    last_progress = now;
                 }
-                last_cpu = Some(cpu);
-                last_cpu_at = now;
             }
+            last_cpu = Some(cpu);
+            last_cpu_at = now;
         }
 
         let idle = now.duration_since(last_progress);
@@ -1026,9 +1018,9 @@ pub async fn connect_resilient(ssh: &SshTarget) -> anyhow::Result<client::Handle
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_retry_budget, resolve_boot_timeouts, scaled_settle_secs,
         DEFAULT_CONNECT_RETRY_BUDGET_SECS, DEFAULT_VM_START_IDLE_TIMEOUT,
-        DEFAULT_VM_START_MAX_TIMEOUT, SETTLE_MAX_SECS, SETTLE_MIN_SECS,
+        DEFAULT_VM_START_MAX_TIMEOUT, SETTLE_MAX_SECS, SETTLE_MIN_SECS, connect_retry_budget,
+        resolve_boot_timeouts, scaled_settle_secs,
     };
 
     #[test]
@@ -1043,7 +1035,7 @@ mod tests {
         // A fast boot still gets the floor (even fast hosts can flap right after boot)...
         assert_eq!(scaled_settle_secs(0), SETTLE_MIN_SECS);
         assert_eq!(scaled_settle_secs(20), SETTLE_MIN_SECS); // 20/10 = 2 -> floored to 3
-                                                             // ...and a pathologically slow boot is capped so settle can't run away.
+        // ...and a pathologically slow boot is capped so settle can't run away.
         assert_eq!(scaled_settle_secs(100_000), SETTLE_MAX_SECS);
     }
 

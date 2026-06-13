@@ -47,10 +47,10 @@ pub async fn copy_files_tar(
                     eprintln!("Another process is copying files with tar.\n\t{p}");
                 }
 
-                if let Some(timeout) = timeout {
-                    if start.elapsed() >= timeout {
-                        return Err("Timed out waiting for transfer lock".to_string());
-                    }
+                if let Some(timeout) = timeout
+                    && start.elapsed() >= timeout
+                {
+                    return Err("Timed out waiting for transfer lock".to_string());
                 }
 
                 std::thread::sleep(poll_interval);
@@ -128,16 +128,24 @@ pub async fn run_copy_spec(
     if !spec.crlf {
         let warning = if is_host_to_vm {
             if host_is_windows && !guest_is_windows {
-                Some("[VirtCI] Copying files from a Windows host to a non-Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                Some(
+                    "[VirtCI] Copying files from a Windows host to a non-Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.",
+                )
             } else if !host_is_windows && guest_is_windows {
-                Some("[VirtCI] Copying files from a non-Windows host to a Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+                Some(
+                    "[VirtCI] Copying files from a non-Windows host to a Windows guest without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.",
+                )
             } else {
                 None
             }
         } else if guest_is_windows && !host_is_windows {
-            Some("[VirtCI] Copying files from a Windows guest to a non-Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+            Some(
+                "[VirtCI] Copying files from a Windows guest to a non-Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.",
+            )
         } else if !guest_is_windows && host_is_windows {
-            Some("[VirtCI] Copying files from a non-Windows guest to a Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.")
+            Some(
+                "[VirtCI] Copying files from a non-Windows guest to a Windows host without CRLF conversion may result in unexpected line endings. Set 'crlf: true' if you want line-ending conversion.",
+            )
         } else {
             None
         };
@@ -509,7 +517,9 @@ async fn copy_vm_to_host_tar(
     let is_windows = os == GuestOs::Windows;
 
     let test_cmd = if is_windows {
-        format!("if (Test-Path -Path \"{remote_path}\" -PathType Container) {{ Write-Output \"DIR\" }} else {{ Write-Output \"FILE\" }}")
+        format!(
+            "if (Test-Path -Path \"{remote_path}\" -PathType Container) {{ Write-Output \"DIR\" }} else {{ Write-Output \"FILE\" }}"
+        )
     } else {
         format!("test -d \"{remote_path}\" && echo DIR || echo FILE")
     };

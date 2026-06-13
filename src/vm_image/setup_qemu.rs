@@ -5,12 +5,11 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 
-use crate::vm_image::{
-    expand_path, localize_uefi_vars, read_line, read_line_with_default, save_config,
-    validate_image_name, Arch, BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig,
-    UefiSplit,
-};
 use crate::VciGlobalPaths;
+use crate::vm_image::{
+    Arch, BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig, UefiSplit, expand_path,
+    localize_uefi_vars, read_line, read_line_with_default, save_config, validate_image_name,
+};
 
 /// Interactive QEMU image setup
 /// 1. Image name (what to call it)
@@ -722,11 +721,7 @@ fn prompt_advanced_options(
             Some(input)
         } else {
             let input = read_line("CPU model (enter for auto): ")?;
-            if input.is_empty() {
-                None
-            } else {
-                Some(input)
-            }
+            if input.is_empty() { None } else { Some(input) }
         };
 
         if is_macos_x64 {

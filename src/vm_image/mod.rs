@@ -7,12 +7,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 // https://stackoverflow.com/questions/75527167/serde-deserialize-string-into-u64
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as};
 
 use anyhow::Context;
 
-use crate::util::cpu_arch::Arch;
 use crate::VciGlobalPaths;
+use crate::util::cpu_arch::Arch;
 
 /// TTL for remote images if 24 hours by default
 pub const DEFAULT_REMOTE_TTL_SECS: u32 = 86400;
@@ -517,10 +517,10 @@ fn resolve_drive_spec_path(spec: &str) -> Result<String, String> {
 }
 
 pub fn expand_path(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home).join(path.strip_prefix("~/").unwrap());
-        }
+    if path.starts_with("~/")
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return PathBuf::from(home).join(path.strip_prefix("~/").unwrap());
     }
     PathBuf::from(path)
 }

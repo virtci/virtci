@@ -7,18 +7,18 @@ use anyhow::Context;
 #[cfg(not(target_os = "macos"))]
 use colored::Colorize;
 
+use crate::VciGlobalPaths;
 use crate::backend::qemu::binaries::{qemu_image_binary, target_command};
 use crate::cli::CloneArgs;
-use crate::vm_image::export::{filename_of, parse_drive_file_path, rewrite_drive_file_path};
-use crate::vm_image::import::rewrite_paths_to_managed;
 #[cfg(target_os = "macos")]
 use crate::vm_image::TartConfig;
+use crate::vm_image::export::{filename_of, parse_drive_file_path, rewrite_drive_file_path};
+use crate::vm_image::import::rewrite_paths_to_managed;
 use crate::vm_image::{
+    BackendConfig, HostExecTarget, ImageDescription, QemuConfig, UefiSplit,
     ensure_world_readable_dir, ensure_world_readable_file, load_image, permission_hint,
-    save_config, validate_image_name, BackendConfig, HostExecTarget, ImageDescription, QemuConfig,
-    UefiSplit,
+    save_config, validate_image_name,
 };
-use crate::VciGlobalPaths;
 
 /// What a partially-created clone left behind, so it can be torn down if a later step fails.
 enum CloneArtifacts {
@@ -97,7 +97,9 @@ pub fn run_clone(args: &CloneArgs, paths: &VciGlobalPaths) -> anyhow::Result<()>
     validate_image_name(new_name, paths).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     if args.system && matches!(src_desc.backend, BackendConfig::Tart(_)) {
-        anyhow::bail!("--system is not supported for Tart-backed images. Tart stores VM data in per-user storage (~/.tart/vms/).");
+        anyhow::bail!(
+            "--system is not supported for Tart-backed images. Tart stores VM data in per-user storage (~/.tart/vms/)."
+        );
     }
 
     println!("Cloning '{src_name}' to '{new_name}'");

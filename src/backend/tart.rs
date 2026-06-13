@@ -461,13 +461,13 @@ fn resolve_tart_ip(clone_name: &str) -> anyhow::Result<String> {
             .args(["ip", clone_name])
             .output();
 
-        if let Ok(output) = output {
-            if output.status.success() {
-                let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !ip.is_empty() {
-                    println!("{}", format!("  VM IP: {ip}").dimmed());
-                    return Ok(ip);
-                }
+        if let Ok(output) = output
+            && output.status.success()
+        {
+            let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !ip.is_empty() {
+                println!("{}", format!("  VM IP: {ip}").dimmed());
+                return Ok(ip);
             }
         }
 
@@ -517,25 +517,22 @@ pub fn cleanup_stale_tart_clones(temp_path: &Path) {
         };
 
         let suffix = format!("-{slot_str}");
-        if let Ok(output) = std::process::Command::new("tart").arg("list").output() {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines().skip(1) {
-                    let mut cols = line.split_whitespace();
-                    let Some(source) = cols.next() else { continue };
-                    let Some(vm_name) = cols.next() else { continue };
+        if let Ok(output) = std::process::Command::new("tart").arg("list").output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines().skip(1) {
+                let mut cols = line.split_whitespace();
+                let Some(source) = cols.next() else { continue };
+                let Some(vm_name) = cols.next() else { continue };
 
-                    if source == "local"
-                        && vm_name.starts_with("vci-")
-                        && vm_name.ends_with(&suffix)
-                    {
-                        let _ = std::process::Command::new("tart")
-                            .args(["stop", vm_name])
-                            .output();
-                        let _ = std::process::Command::new("tart")
-                            .args(["delete", vm_name])
-                            .output();
-                    }
+                if source == "local" && vm_name.starts_with("vci-") && vm_name.ends_with(&suffix) {
+                    let _ = std::process::Command::new("tart")
+                        .args(["stop", vm_name])
+                        .output();
+                    let _ = std::process::Command::new("tart")
+                        .args(["delete", vm_name])
+                        .output();
                 }
             }
         }

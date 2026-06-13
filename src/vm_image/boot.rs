@@ -4,12 +4,12 @@
 use colored::Colorize;
 
 use crate::{
+    VciGlobalPaths,
     backend::VmBackend,
     cli::BootArgs,
     orphan::OrphanTracker,
-    run::{wait_for_ssh, SSH_WAIT_TIMEOUT},
+    run::{SSH_WAIT_TIMEOUT, wait_for_ssh},
     vm_image::{BackendConfig, GuestOs, ImageDescription, SshTarget},
-    VciGlobalPaths,
 };
 
 pub fn run_boot(args: &BootArgs, paths: &VciGlobalPaths, orphans: &OrphanTracker) {
@@ -61,8 +61,8 @@ fn boot_qemu(
     orphans: &OrphanTracker,
 ) {
     use crate::backend::{
-        qemu::backend::{QemuBackend, SerialKind},
         VmStartConfig,
+        qemu::backend::{QemuBackend, SerialKind},
     };
 
     let (cpus, memory_mb) = resolve_cpus_and_memory(args);
@@ -101,10 +101,10 @@ fn boot_qemu(
             std::process::exit(1);
         });
 
-    if !args.clone {
-        if let Some(pid) = backend.qemu_pid() {
-            let _ = crate::QEMU_BOOT_GRACEFUL_PID.set(pid);
-        }
+    if !args.clone
+        && let Some(pid) = backend.qemu_pid()
+    {
+        let _ = crate::QEMU_BOOT_GRACEFUL_PID.set(pid);
     }
 
     spawn_ssh_announcer(
@@ -121,7 +121,7 @@ fn boot_qemu(
 fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPaths) {
     #[cfg(target_os = "macos")]
     {
-        use crate::backend::{tart::TartBackend, VmStartConfig};
+        use crate::backend::{VmStartConfig, tart::TartBackend};
 
         let (cpus, memory_mb) = resolve_cpus_and_memory(args);
 

@@ -230,7 +230,7 @@ fn host_process_cpu_time_ns(pid: u32) -> Option<u64> {
     ok.then_some(cpu_ns)
 }
 
-extern "C" {
+unsafe extern "C" {
     fn get_process_cpu_time_native(pid: u32, out_cpu_ns: *mut u64) -> bool;
 }
 

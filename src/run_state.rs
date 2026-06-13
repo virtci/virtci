@@ -120,10 +120,10 @@ pub fn run_shell(args: &cli::ShellArgs, temp_path: &PathBuf) {
 
             cmd.arg(format!("{}@{}", ssh.cred.user, ssh.ip));
 
-            if ssh.cred.key.is_none() {
-                if let Some(ref pass) = ssh.cred.pass {
-                    eprintln!("Password: {pass}");
-                }
+            if ssh.cred.key.is_none()
+                && let Some(ref pass) = ssh.cred.pass
+            {
+                eprintln!("Password: {pass}");
             }
 
             let status = cmd.status();

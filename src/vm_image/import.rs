@@ -6,12 +6,12 @@ use std::path::Path;
 
 use anyhow::Context;
 
+use crate::VciGlobalPaths;
 use crate::vm_image::progress::ProgressReader;
 use crate::vm_image::{
-    ensure_world_readable_dir, ensure_world_readable_file, permission_hint, BackendConfig,
-    ImageDescription,
+    BackendConfig, ImageDescription, ensure_world_readable_dir, ensure_world_readable_file,
+    permission_hint,
 };
-use crate::VciGlobalPaths;
 
 pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> anyhow::Result<()> {
     if !archive_path.exists() {
@@ -26,7 +26,9 @@ pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> 
     desc.name.clone_from(&name);
 
     if system && matches!(desc.backend, BackendConfig::Tart(_)) {
-        anyhow::bail!("--system is not supported for Tart-backed images. Tart stores VM data in per-user storage (~/.tart/vms/), so the system-wide config would point at data that other users cannot access.");
+        anyhow::bail!(
+            "--system is not supported for Tart-backed images. Tart stores VM data in per-user storage (~/.tart/vms/), so the system-wide config would point at data that other users cannot access."
+        );
     }
 
     if let Some(existing_home) = paths.resolve_image_home(&name) {
@@ -101,12 +103,16 @@ fn warn_if_unsupported_secure_boot(desc: &ImageDescription, paths: &VciGlobalPat
         crate::backend::qemu::binaries::find_non_secboot_firmware(desc.arch, &exec_target)
     {
         eprintln!("This image's UEFI firmware appears to use Secure Boot ({configured}).");
-        eprintln!("Secure Boot is not supported on Windows or WSL2 because they lack SMM. Non-secure boot UEFI firmware will be used instead.");
+        eprintln!(
+            "Secure Boot is not supported on Windows or WSL2 because they lack SMM. Non-secure boot UEFI firmware will be used instead."
+        );
         eprintln!("Code: {code}, Vars: {vars}");
     } else {
         eprintln!("This image's UEFI firmware appears to use Secure Boot ({configured}).");
         eprintln!("Secure Boot is not supported on Windows or WSL2 because they lack SMM.");
-        eprintln!("Couldn't find any OVMF firmware to use instead, so boot will likely fail. Please install OVMF firmware.");
+        eprintln!(
+            "Couldn't find any OVMF firmware to use instead, so boot will likely fail. Please install OVMF firmware."
+        );
     }
 }
 
@@ -416,7 +422,7 @@ fn wsl_tar_extract(
 
 pub(crate) fn rewrite_paths_to_managed(desc: &mut ImageDescription, managed_dir: &Path) {
     match &mut desc.backend {
-        BackendConfig::Qemu(ref mut qemu) => {
+        BackendConfig::Qemu(qemu) => {
             qemu.image = managed_dir.join(&qemu.image).to_string_lossy().to_string();
 
             if let Some(ref mut uefi) = qemu.uefi {

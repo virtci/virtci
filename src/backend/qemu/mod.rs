@@ -231,15 +231,15 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
 
         // The marker (`run_name`) is written before any process spawns, so it is
         // always present whenever there is something to reap.
-        if let Some(meta) = lock.read_metadata() {
-            if let Some(marker) = meta.run_name.as_deref() {
-                #[cfg(target_os = "windows")]
-                if let Some(distro) = meta.wsl_distro.as_deref() {
-                    crate::backend::exec::reap_wsl2_marker_process(distro, marker);
-                }
-                #[cfg(unix)]
-                reap_host_marker_process(marker);
+        if let Some(meta) = lock.read_metadata()
+            && let Some(marker) = meta.run_name.as_deref()
+        {
+            #[cfg(target_os = "windows")]
+            if let Some(distro) = meta.wsl_distro.as_deref() {
+                crate::backend::exec::reap_wsl2_marker_process(distro, marker);
             }
+            #[cfg(unix)]
+            reap_host_marker_process(marker);
         }
 
         // `-{id}.qcow2` also covers the `…-drive{n}-{id}.qcow2` additional drives.

@@ -77,19 +77,19 @@ pub fn expand_path(path: &str) -> PathBuf {
 }
 
 pub fn expand_path_in_string(s: &str) -> String {
-    if let Some(idx) = s.find("~/") {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            let home_str = home.to_string_lossy();
-            let before = &s[..idx];
-            let after = &s[idx + 2..];
-            return format!(
-                "{}{}{}{}",
-                before,
-                home_str,
-                std::path::MAIN_SEPARATOR,
-                after
-            );
-        }
+    if let Some(idx) = s.find("~/")
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        let home_str = home.to_string_lossy();
+        let before = &s[..idx];
+        let after = &s[idx + 2..];
+        return format!(
+            "{}{}{}{}",
+            before,
+            home_str,
+            std::path::MAIN_SEPARATOR,
+            after
+        );
     }
     s.to_string()
 }
