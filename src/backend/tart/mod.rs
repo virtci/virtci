@@ -89,7 +89,7 @@ impl TartBackend {
             let lock_path = temp_path.join(format!("vci_image_{}.lock", self.base_image.name));
             FileLock::try_new(lock_path).map_err(|_| {
                 anyhow::anyhow!(
-                    "Image '{}' is currently in use by another virtci process — \
+                    "Image '{}' is currently in use by another virtci process so it \
                      cannot boot for modification while it is running.",
                     self.base_image.name
                 )
@@ -180,12 +180,12 @@ impl TartBackend {
             FileLock::try_new_shared(lock_path).map_err(|e| {
                 let msg = match e {
                     crate::file_lock::FileLockError::OtherProcessBlock(_) => format!(
-                        "Image '{}' is currently being modified by `virtci boot` — \
+                        "Image '{}' is currently being modified by `virtci boot` so \
                          wait for it to finish before starting a new run.",
                         self.base_image.name
                     ),
                     crate::file_lock::FileLockError::Other => format!(
-                        "Failed to acquire shared lock for image '{}' — \
+                        "Failed to acquire shared lock for image '{}' so \
                          if `virtci boot` is not running, try `virtci cleanup --force`.",
                         self.base_image.name
                     ),

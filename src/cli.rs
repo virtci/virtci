@@ -49,33 +49,26 @@ pub struct RunArgs {
     /// VM image: --image <name>
     #[argh(option)]
     pub image: Option<String>,
-    // /// CPU count: --cpus 4 OR --cpus job=2 (default: half system threads)
-    // #[argh(option)]
-    // pub cpus: Vec<String>,
-
-    // /// memory: --mem 2G OR --mem job=512M (default: 8G)
-    // #[argh(option)]
-    // pub mem: Vec<String>,
-
-    // /// SSH username: --ssh-user root OR --ssh-user job=admin
-    // #[argh(option)]
-    // pub ssh_user: Vec<String>,
-
-    // /// SSH password: --ssh-password secret OR --ssh-password job=secret
-    // #[argh(option)]
-    // pub ssh_password: Vec<String>,
-
-    // /// SSH private key: --ssh-key path OR --ssh-key job=path
-    // #[argh(option)]
-    // pub ssh_key: Vec<String>,
-
-    // /// SSH port: --ssh-port 22 OR --ssh-port job=2222
-    // #[argh(option)]
-    // pub ssh_port: Vec<String>,
-
-    // /// VM architecture: --arch x86_64 OR --arch job=aarch64 (default: host arch)
-    // #[argh(option)]
-    // pub arch: Vec<String>,
+    /// run this workflow without using or producing any VM cache.
+    #[argh(switch)]
+    pub no_cache: bool,
+    /// user specified cache namespace.
+    /// There are 3 variables that VirtCI can auto-fill from git providers when possible.
+    /// These are the following:
+    ///
+    /// - `owner` The organization that owns the git repo. (GITHUB_REPOSITORY_OWNER).
+    /// - `repo` The git repository. (repo part of GITHUB_REPOSITORY).
+    /// - `ref` Ref name / branch name. (GITHUB_REF_NAME).
+    ///
+    /// You can use these, which will get auto-filled, replaced when using {} braces, and sanitized.
+    /// For example: `--cache-namespace "hello/{repo}/{ref}"` or
+    /// `--cache-namespace "example/{repo}"`. If not provided, will default to
+    /// `{owner}/{repo}/{ref}`.
+    ///
+    /// NOTE: Must be cautious about forks and PRs who have access
+    /// to the VirtCI VM cache on the CI machine.
+    #[argh(option)]
+    pub cache_namespace: Option<String>,
 }
 
 /// Interactive setup for a new VM image description

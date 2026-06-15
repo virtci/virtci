@@ -1,6 +1,7 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+pub mod cache;
 mod command;
 pub mod copy;
 pub mod run_id;
@@ -20,6 +21,7 @@ use russh::keys::ssh_key;
 use crate::{
     VciGlobalPaths,
     backend::{VmBackend, VmStartConfig},
+    util::git::{GitInfo, GitProvider},
     vm_image::{GuestOs, SshTarget},
     yaml,
 };
@@ -146,11 +148,6 @@ fn ssh_connect_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
-/// Neat
-fn is_github_actions() -> bool {
-    std::env::var("GITHUB_ACTIONS").is_ok()
-}
-
 pub fn validate_run_name(name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!name.is_empty(), "job name must not be empty");
     if let Some(bad) = name
@@ -179,6 +176,7 @@ pub struct Job {
     /// (re)boot. Stamped onto each [`SshTarget`] the job hands to a step via [`Job::ssh`]. `None`
     /// until the first boot completes.
     pub ssh_retry_budget: Option<Duration>,
+    pub git_info: Option<GitInfo>,
 }
 
 impl Job {
@@ -329,7 +327,11 @@ impl Job {
                 .unwrap_or_else(|| format!("Step {}", i + 1));
             let continue_on_error = self.steps[i].continue_on_error;
 
-            if is_github_actions() {
+            let git_provider = GitProvider::detect_provider();
+
+            if let Some(provider) = &git_provider
+                && matches!(provider, GitProvider::GitHub)
+            {
                 println!("::group::VCI Step {}: {}", i + 1, step_name);
             } else {
                 println!(
@@ -340,7 +342,9 @@ impl Job {
 
             let result = self.run_step(i).await;
 
-            if is_github_actions() {
+            if let Some(provider) = &git_provider
+                && matches!(provider, GitProvider::GitHub)
+            {
                 println!("::endgroup::");
             }
 

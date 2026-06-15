@@ -3,3 +3,4 @@
 
 pub mod bin_version;
 pub mod cpu_arch;
+pub mod git;

@@ -21,6 +21,8 @@ use std::sync::OnceLock;
 
 use argh::FromArgs;
 
+use crate::util::git::GitInfo;
+
 /// PID of the QEMU process running the qcow2 for `virtci boot` (no --clone).
 pub static QEMU_BOOT_GRACEFUL_PID: OnceLock<u32> = OnceLock::new();
 
@@ -576,6 +578,7 @@ fn extract_yaml_workflows(
             host_env: yaml_job.host_env,
             steps,
             ssh_retry_budget: None,
+            git_info: GitInfo::detect(),
         });
     }
 
