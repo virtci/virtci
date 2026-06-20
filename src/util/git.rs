@@ -73,9 +73,9 @@ impl GitInfo {
     }
 
     pub fn as_cache_path(&self) -> anyhow::Result<String> {
-        assert_ne!(self.owner, "");
-        assert_ne!(self.repo, "");
-        assert_ne!(self.git_ref, "");
+        anyhow::ensure!(!self.owner.is_empty(), "git owner is empty");
+        anyhow::ensure!(!self.repo.is_empty(), "git repo is empty");
+        anyhow::ensure!(!self.git_ref.is_empty(), "git ref is empty");
 
         let owner = sanitize_git_path(&self.owner)?;
         let repo = sanitize_git_path(&self.repo)?;
@@ -107,7 +107,7 @@ const WINDOWS_RESERVED: &[&str] = &[
 ///
 /// A `.` or `_` or `-` inside of a segment is fine cause it will realistically happen, notably
 /// with git tags like `v1.2.3`, or a repo like `www.virtci.com`.
-fn sanitize_git_path(s: &str) -> anyhow::Result<String> {
+pub fn sanitize_git_path(s: &str) -> anyhow::Result<String> {
     for seg in s.split('/') {
         anyhow::ensure!(
             !seg.is_empty(),
