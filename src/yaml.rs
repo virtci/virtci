@@ -81,14 +81,9 @@ pub struct Cache {
     /// new C++ source.
     #[serde(default)]
     pub files_list: Vec<String>,
-    // pub git: TODO
     /// Shell command to run, invalidating if the exit code is non zero.
     #[serde(default)]
     pub run: Option<String>,
-    /// Commands to run to get the version of CLI binaries (like `node --version`), invalidating
-    /// if the version changes.
-    #[serde(default)]
-    pub cli: Vec<String>,
     /// Invalidate if the hash of any of the environment variables provided has changed.
     #[serde(default)]
     pub env: Vec<String>,

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitProvider {
     GitHub,
     GitLab,
@@ -27,6 +28,7 @@ impl GitProvider {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct GitInfo {
     pub provider: GitProvider,
     pub owner: String,
@@ -165,6 +167,68 @@ fn is_gitlab() -> bool {
 
 fn is_bitbucket() -> bool {
     std::env::var("BITBUCKET_BUILD_NUMBER").is_ok()
+}
+
+/// Whether this run looks like a fork / external pull request, in which case the VM cache must be
+/// fully disabled (no read, no write): an untrusted contributor must never be able to read a cache
+/// produced by a trusted branch, nor poison one a trusted branch will later consume.
+///
+/// The policy is deliberately conservative: when a pull/merge request context is detected but the
+/// run cannot *prove* the head and base are the same repository, it is treated as a fork. Local
+/// runs (no detected provider) and ordinary branch/tag pushes are not forks.
+pub fn is_fork_or_external_pr() -> bool {
+    match GitProvider::detect_provider() {
+        // Gitea and Forgejo Actions expose the same `GITHUB_*` event variables as GitHub.
+        Some(GitProvider::GitHub | GitProvider::Gitea | GitProvider::Forgejo) => github_is_fork(),
+        Some(GitProvider::GitLab) => gitlab_is_fork(),
+        // Bitbucket does not expose the head repository in a way we can reliably compare, so any
+        // pull request is treated as a fork to stay on the safe side.
+        Some(GitProvider::BitBucket) => std::env::var_os("BITBUCKET_PR_ID").is_some(),
+        None => false,
+    }
+}
+
+/// GitHub-family fork detection. Reads the event payload (`GITHUB_EVENT_PATH`) and compares the head
+/// and base repository full names. Any inability to confirm a same-repo PR is treated as a fork.
+fn github_is_fork() -> bool {
+    let event = std::env::var("GITHUB_EVENT_NAME").unwrap_or_default();
+    if event != "pull_request" && event != "pull_request_target" {
+        return false;
+    }
+    let Ok(path) = std::env::var("GITHUB_EVENT_PATH") else {
+        return true;
+    };
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return true;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return true;
+    };
+    let head = json
+        .pointer("/pull_request/head/repo/full_name")
+        .and_then(serde_json::Value::as_str);
+    let base = json
+        .pointer("/pull_request/base/repo/full_name")
+        .and_then(serde_json::Value::as_str);
+    match (head, base) {
+        (Some(h), Some(b)) => h != b,
+        // A pull request whose repos we can't read can't be proven same-repo: assume fork.
+        _ => true,
+    }
+}
+
+/// GitLab fork detection. Merge request pipelines expose the source and target project paths; a
+/// mismatch (or any missing value during an MR pipeline) means a fork.
+fn gitlab_is_fork() -> bool {
+    if std::env::var("CI_PIPELINE_SOURCE").as_deref() != Ok("merge_request_event") {
+        return false;
+    }
+    let source = std::env::var("CI_MERGE_REQUEST_SOURCE_PROJECT_PATH").ok();
+    let target = std::env::var("CI_MERGE_REQUEST_PROJECT_PATH").ok();
+    match (source, target) {
+        (Some(s), Some(t)) => s != t,
+        _ => true,
+    }
 }
 
 #[cfg(test)]

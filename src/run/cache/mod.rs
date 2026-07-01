@@ -1,9 +1,24 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use crate::util::git::{GitInfo, sanitize_git_path};
+use std::{io::Read, path::Path, time::UNIX_EPOCH};
 
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    util::git::{GitInfo, sanitize_git_path},
+    vm_image::{BackendConfig, ImageDescription},
+    yaml,
+};
+
+/// On-disk metadata format version. Bump on any breaking change to [`CacheMetadata`] so a cache
+/// written by an older virtci is treated as a miss rather than misread.
+pub const CACHE_FORMAT_VERSION: u32 = 1;
+
+/// Length (hex chars) of the truncated blake3 digests used for ids and short content hashes. 16 hex
+/// chars = 64 bits, far beyond enough to avoid accidental collisions between cache slots/inputs.
+const SHORT_HASH_LEN: usize = 16;
 
 pub enum CacheNamespace {
     Disabled(DisabledReason),
@@ -13,17 +28,28 @@ pub enum CacheNamespace {
 impl CacheNamespace {
     /// Precedence:
     /// 1. CLI `--no-cache`, arg `no_cache` -> disabled.
-    /// 2. CLI `--cache-namespace` -> try to use, interpolating `{owner}`/`{repo}`/`{ref}` from
+    /// 2. `is_fork` (a fork / external pull request) -> disabled, unconditionally. Caches are
+    /// never shared with forks so that an untrusted contributor cannot read a trusted cache
+    /// nor poison one.
+    /// 3. CLI `--cache-namespace` -> try to use, interpolating `{owner}`/`{repo}`/`{ref}` from
     /// `git_info`.
-    /// 3. Derive from `git_info`.
-    /// 4. No cache.
+    /// 4. Derive from `git_info`.
+    /// 5. No cache.
+    ///
+    /// `is_fork` is passed in (rather than detected here) so this stays pure and testable; callers
+    /// supply it from [`crate::util::git::is_fork_or_external_pr`].
     pub fn resolve(
         no_cache: bool,
+        is_fork: bool,
         cache_namespace: Option<&str>,
         git_info: Option<&GitInfo>,
     ) -> Self {
         if no_cache {
             return Self::Disabled(DisabledReason::UserNoCache);
+        }
+
+        if is_fork {
+            return Self::Disabled(DisabledReason::Fork);
         }
 
         if let Some(template) = cache_namespace {
@@ -50,6 +76,8 @@ impl CacheNamespace {
 
 pub enum DisabledReason {
     UserNoCache,
+    /// This run is a fork / external pull request and caches are never shared with forks.
+    Fork,
     /// No explicitly provided user namespace, and no git CI provider environment.
     NoNamespaceSource,
     Invalid {
@@ -61,6 +89,10 @@ impl std::fmt::Display for DisabledReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DisabledReason::UserNoCache => write!(f, "--no-cache was passed"),
+            DisabledReason::Fork => write!(
+                f,
+                "this run is a fork / external pull request, and caches are never shared with forks"
+            ),
             DisabledReason::NoNamespaceSource => write!(
                 f,
                 "no --cache-namespace given and no git CI provider detected to derive one from"
@@ -93,6 +125,220 @@ fn interpolate_tokens(template: &str, git_info: Option<&GitInfo>) -> anyhow::Res
         .replace("{owner}", &gi.owner)
         .replace("{repo}", &gi.repo)
         .replace("{ref}", &gi.git_ref))
+}
+
+/// Persisted metadata describing a workflow cache, written alongside the disk (QEMU overlay) in
+/// the slot. The run will compare against this, so the format needs to be consistent.
+/// Bump [`CACHE_FORMAT_VERSION`] on a breaking schema change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheMetadata {
+    pub format_version: u32,
+    pub namespace: String,
+    pub job: String,
+    pub image_id: String,
+    /// Unix seconds when this artifact was written.
+    pub created_at: u64,
+    /// TTL in seconds from `created_at`, if `cache.max_age` was set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
+    /// Disk artifact filename within the slot (e.g. `disk.qcow2`).
+    pub disk_artifact: String,
+    /// blake3 of the persisted disk artifact, for future integrity/verification on consume.
+    pub disk_hash: String,
+    /// Captured invalidation inputs (the consume side recomputes the live values and compares).
+    pub fingerprint: Fingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputHash {
+    /// For a modified file, it's path.
+    /// For a files list, the glob pattern / directory / etc.
+    /// For environment variables, just the name, never the value.
+    pub input: String,
+    /// For a modified file, it's blake3 hashed contents.
+    /// For a files list, all the files matched by the glob pattern / directory / etc.
+    /// For environment variables, hash of the value.
+    pub hash: String,
+}
+
+/// Snapshot of every input that can invalidate a cache, captured when the cache is produced.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Fingerprint {
+    /// blake3 of the workflow YAML (whole file).
+    pub workflow_hash: String,
+    /// Cheap identity (`<len>:<mtime_secs`) of the base image. Since QEMU can use overlays,
+    /// this ensures integrity of the base qcow2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_image_marker: Option<String>,
+    /// file path -> blake3(contents). If the file isn't present, use `"missing"` when CREATING
+    /// the cache.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_modified: Vec<InputHash>,
+    /// Glob -> blake3(sorted matching paths). Tracks any files added / removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_list: Vec<InputHash>,
+    /// var name -> blake3(value). Values are hashed, never stored, since they may be
+    /// secrets. unset variables record `"unset"`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<InputHash>,
+    /// The run command as is. It's re-executed on consume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+}
+
+impl Fingerprint {
+    /// Get the live state of every invalidation input. Best effort: any failure to read a file
+    /// records a sentinel rather than aborting.
+    pub fn capture(
+        cfg: &yaml::Cache,
+        workflow_hash: String,
+        base_image_marker: Option<String>,
+    ) -> Self {
+        let files_modified = cfg
+            .files_modified
+            .iter()
+            .map(|path| InputHash {
+                input: path.clone(),
+                hash: hash_file(Path::new(path)).unwrap_or_else(|_| "missing".to_string()),
+            })
+            .collect();
+
+        let files_list = cfg
+            .files_list
+            .iter()
+            .map(|pattern| InputHash {
+                input: pattern.clone(),
+                hash: hash_file_list(pattern),
+            })
+            .collect();
+
+        let env = cfg
+            .env
+            .iter()
+            .map(|name| InputHash {
+                input: name.clone(),
+                hash: match std::env::var(name) {
+                    Ok(value) => short_hash(value.as_bytes()),
+                    Err(_) => "unset".to_string(),
+                },
+            })
+            .collect();
+
+        Fingerprint {
+            workflow_hash,
+            base_image_marker,
+            files_modified,
+            files_list,
+            env,
+            run: cfg.run.clone(),
+        }
+    }
+}
+
+/// Short identity binding a cache slot to a VM image.
+pub fn image_id(image: &ImageDescription) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(image.name.as_bytes());
+    h.update(b"\0");
+    h.update(format!("{:?}", image.arch).as_bytes());
+    h.update(b"\0");
+    match &image.backend {
+        BackendConfig::Qemu(q) => {
+            h.update(b"qemu\0");
+            h.update(q.image.as_bytes());
+        }
+        BackendConfig::Tart(t) => {
+            h.update(b"tart\0");
+            h.update(t.vm_name.as_bytes());
+        }
+    }
+    truncate_hex(&h.finalize())
+}
+
+/// Cheap identity (`<len>:<mtime_secs>`) of a QEMU base image's backing disk. `None` for non-QEMU
+/// images or when the file can't be stat'd.
+/// TODO WSL2
+pub fn base_image_marker(image: &ImageDescription) -> Option<String> {
+    let BackendConfig::Qemu(qemu) = &image.backend else {
+        return None;
+    };
+    let path = crate::backend::expand_path(&qemu.image);
+    let meta = std::fs::metadata(&path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(format!("{}:{mtime}", meta.len()))
+}
+
+/// Parse a `cache.max_age` value into seconds. A bare integer is days.
+/// Suffixes `S`/`s` (seconds), `M`/`m` (minutes), `H`/`h` (hours), `D`/`d` (days) override that.
+pub fn parse_max_age(s: &str) -> anyhow::Result<u64> {
+    let s = s.trim();
+    anyhow::ensure!(!s.is_empty(), "max_age is empty");
+
+    let last = s.chars().last().expect("non-empty checked above");
+    let (number, mult) = if last.is_ascii_alphabetic() {
+        let mult = match last {
+            'S' | 's' => 1,
+            'M' | 'm' => 60,
+            'H' | 'h' => 3600,
+            'D' | 'd' => 86400,
+            other => anyhow::bail!("invalid max_age suffix {other:?} (use S/M/H/D)"),
+        };
+        (&s[..s.len() - last.len_utf8()], mult)
+    } else {
+        (s, 86400)
+    };
+
+    let n: u64 = number
+        .trim()
+        .parse()
+        .with_context(|| format!("invalid max_age number {number:?}"))?;
+    n.checked_mul(mult).context("max_age overflows")
+}
+
+/// Hash a sorted list of files matching a specific glob pattern. JUST the file names, not their
+/// actual contents. This tracks files being added or removed. Glob errors record just a sentinel.
+fn hash_file_list(pattern: &str) -> String {
+    let Ok(paths) = glob::glob(pattern) else {
+        return "bad-glob".to_string();
+    };
+    let mut matches: Vec<String> = paths
+        .filter_map(Result::ok)
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    matches.sort();
+    short_hash(matches.join("\n").as_bytes())
+}
+
+/// Stream a file through blake3 and return the full hex digest.
+fn hash_file(path: &Path) -> anyhow::Result<String> {
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open {} for hashing", path.display()))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .context("failed to read while hashing")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Truncated blake3 of a byte slice, for ids and short content hashes.
+fn short_hash(bytes: &[u8]) -> String {
+    truncate_hex(&blake3::hash(bytes))
+}
+
+fn truncate_hex(hash: &blake3::Hash) -> String {
+    hash.to_hex().as_str()[..SHORT_HASH_LEN].to_string()
 }
 
 #[cfg(test)]
@@ -133,7 +379,24 @@ mod tests {
     #[test]
     fn no_cache_flag_disables_even_with_a_namespace() {
         assert!(matches!(
-            CacheNamespace::resolve(true, Some("a/b/c"), Some(&gi("o", "r", "main"))),
+            CacheNamespace::resolve(true, false, Some("a/b/c"), Some(&gi("o", "r", "main"))),
+            CacheNamespace::Disabled(DisabledReason::UserNoCache)
+        ));
+    }
+
+    #[test]
+    fn fork_disables_even_with_a_namespace() {
+        // A fork is disabled regardless of an explicit namespace or available git info.
+        assert!(matches!(
+            CacheNamespace::resolve(false, true, Some("a/b/c"), Some(&gi("o", "r", "main"))),
+            CacheNamespace::Disabled(DisabledReason::Fork)
+        ));
+    }
+
+    #[test]
+    fn no_cache_takes_precedence_over_fork() {
+        assert!(matches!(
+            CacheNamespace::resolve(true, true, None, None),
             CacheNamespace::Disabled(DisabledReason::UserNoCache)
         ));
     }
@@ -141,7 +404,12 @@ mod tests {
     #[test]
     fn auto_derives_from_git_info() {
         assert_enabled(
-            CacheNamespace::resolve(false, None, Some(&gi("gabkhanfig", "virtci", "main"))),
+            CacheNamespace::resolve(
+                false,
+                false,
+                None,
+                Some(&gi("gabkhanfig", "virtci", "main")),
+            ),
             "gabkhanfig/virtci/main",
         );
     }
@@ -149,7 +417,7 @@ mod tests {
     #[test]
     fn no_source_disables() {
         assert!(matches!(
-            CacheNamespace::resolve(false, None, None),
+            CacheNamespace::resolve(false, false, None, None),
             CacheNamespace::Disabled(DisabledReason::NoNamespaceSource)
         ));
     }
@@ -159,13 +427,19 @@ mod tests {
         assert_enabled(
             CacheNamespace::resolve(
                 false,
+                false,
                 Some("{owner}/{repo}/{ref}"),
                 Some(&gi("o", "r", "feature/x")),
             ),
             "o/r/feature/x",
         );
         assert_enabled(
-            CacheNamespace::resolve(false, Some("team-acme/{ref}"), Some(&gi("o", "r", "main"))),
+            CacheNamespace::resolve(
+                false,
+                false,
+                Some("team-acme/{ref}"),
+                Some(&gi("o", "r", "main")),
+            ),
             "team-acme/main",
         );
     }
@@ -173,7 +447,7 @@ mod tests {
     #[test]
     fn literal_namespace_without_git_info_is_fine() {
         assert_enabled(
-            CacheNamespace::resolve(false, Some("my-experiment"), None),
+            CacheNamespace::resolve(false, false, Some("my-experiment"), None),
             "my-experiment",
         );
     }
@@ -181,13 +455,13 @@ mod tests {
     #[test]
     fn token_without_provider_disables() {
         // A token with no provider to fill it must not silently drop and collapse refs together.
-        assert_invalid(CacheNamespace::resolve(false, Some("{ref}"), None));
+        assert_invalid(CacheNamespace::resolve(false, false, Some("{ref}"), None));
     }
 
     #[test]
     fn traversal_namespace_disables() {
-        assert_invalid(CacheNamespace::resolve(false, Some("../evil"), None));
-        assert_invalid(CacheNamespace::resolve(false, Some("a/../b"), None));
+        assert_invalid(CacheNamespace::resolve(false, false, Some("../evil"), None));
+        assert_invalid(CacheNamespace::resolve(false, false, Some("a/../b"), None));
     }
 
     #[test]
@@ -196,8 +470,126 @@ mod tests {
         // rather than silently mangling the path.
         assert_invalid(CacheNamespace::resolve(
             false,
+            false,
             Some("{ref}"),
             Some(&gi("o", "r", "bad ref")),
         ));
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::{Fingerprint, image_id, parse_max_age};
+    use crate::util::cpu_arch::Arch;
+    use crate::vm_image::{BackendConfig, GuestOs, ImageDescription, QemuConfig, SshConfig};
+
+    fn qemu_image(name: &str, disk: &str, arch: Arch) -> ImageDescription {
+        ImageDescription {
+            name: name.to_string(),
+            os: GuestOs::Linux,
+            arch,
+            backend: BackendConfig::Qemu(QemuConfig {
+                image: disk.to_string(),
+                uefi: None,
+                cpu_model: None,
+                additional_drives: None,
+                additional_devices: None,
+                tpm: false,
+                nvme: false,
+                readonly_isos: None,
+            }),
+            ssh: SshConfig {
+                user: "root".to_string(),
+                pass: None,
+                key: None,
+            },
+            managed: None,
+            remote: None,
+            #[cfg(target_os = "windows")]
+            wsl_distro: None,
+        }
+    }
+
+    #[test]
+    fn image_id_is_stable_and_distinct() {
+        let a = image_id(&qemu_image("ubuntu", "/img/a.qcow2", Arch::X64));
+        assert_eq!(
+            a,
+            image_id(&qemu_image("ubuntu", "/img/a.qcow2", Arch::X64))
+        );
+        assert_ne!(
+            a,
+            image_id(&qemu_image("ubuntu", "/img/b.qcow2", Arch::X64))
+        );
+        assert_ne!(
+            a,
+            image_id(&qemu_image("fedora", "/img/a.qcow2", Arch::X64))
+        );
+        assert_ne!(
+            a,
+            image_id(&qemu_image("ubuntu", "/img/a.qcow2", Arch::ARM64))
+        );
+        assert_eq!(a.len(), super::SHORT_HASH_LEN);
+    }
+
+    #[test]
+    fn max_age_units() {
+        assert_eq!(parse_max_age("7").unwrap(), 7 * 86400);
+        assert_eq!(parse_max_age("30s").unwrap(), 30);
+        assert_eq!(parse_max_age("15M").unwrap(), 15 * 60);
+        assert_eq!(parse_max_age("2h").unwrap(), 2 * 3600);
+        assert_eq!(parse_max_age("3D").unwrap(), 3 * 86400);
+        assert_eq!(parse_max_age(" 1d ").unwrap(), 86400);
+    }
+
+    #[test]
+    fn max_age_rejects_garbage() {
+        assert!(parse_max_age("").is_err());
+        assert!(parse_max_age("abc").is_err());
+        assert!(parse_max_age("10x").is_err());
+        assert!(parse_max_age("d").is_err());
+    }
+
+    #[test]
+    fn fingerprint_captures_config_in_order_and_hashes_env() {
+        // SAFETY: single-threaded test; set a known env var to assert it's hashed (not stored).
+        unsafe {
+            std::env::set_var("VCI_CACHE_TEST_ENV", "secret-value");
+        }
+        let cfg = crate::yaml::Cache {
+            files_modified: vec![
+                "does-not-exist-a".to_string(),
+                "does-not-exist-b".to_string(),
+            ],
+            files_list: vec![],
+            run: Some("test -d .".to_string()),
+            env: vec![
+                "VCI_CACHE_TEST_ENV".to_string(),
+                "VCI_CACHE_TEST_UNSET".to_string(),
+            ],
+            no_write_cache: false,
+            max_age: None,
+        };
+
+        let fp = Fingerprint::capture(&cfg, "wfhash".to_string(), Some("123:456".to_string()));
+
+        assert_eq!(fp.workflow_hash, "wfhash");
+        assert_eq!(fp.base_image_marker.as_deref(), Some("123:456"));
+        assert_eq!(fp.run.as_deref(), Some("test -d ."));
+
+        // Order preserved, missing files flagged.
+        let paths: Vec<&str> = fp.files_modified.iter().map(|i| i.input.as_str()).collect();
+        assert_eq!(paths, ["does-not-exist-a", "does-not-exist-b"]);
+        assert!(fp.files_modified.iter().all(|i| i.hash == "missing"));
+
+        // Env: set var is hashed (never the raw value), unset var is flagged.
+        assert_eq!(fp.env[0].input, "VCI_CACHE_TEST_ENV");
+        assert_ne!(fp.env[0].hash, "secret-value");
+        assert_ne!(fp.env[0].hash, "unset");
+        assert_eq!(fp.env[1].hash, "unset");
+
+        unsafe {
+            std::env::remove_var("VCI_CACHE_TEST_ENV");
+        }
     }
 }
