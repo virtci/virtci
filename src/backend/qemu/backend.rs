@@ -496,19 +496,18 @@ impl VmBackend for QemuBackend {
     /// 2. UEFI vars (optional)
     /// 3. Any additional drives (optional, array)
     fn cache_run_files(&self, cache_namespace: &CacheNamespace) -> anyhow::Result<()> {
-        let namespace = {
-            match cache_namespace {
-                CacheNamespace::Disabled(disabled_reason) => {
-                    anyhow::bail!("No cache namespace to write the cache to")
-                }
-                CacheNamespace::Enabled { namespace } => namespace,
+        let _namespace = match cache_namespace {
+            CacheNamespace::Disabled(reason) => {
+                anyhow::bail!("no cache namespace to write the cache to: {reason}")
             }
+            CacheNamespace::Enabled { namespace } => namespace,
         };
 
         // step 1. write JSON file. If something fails after this, that's fine, it will be cleaned up as an orphan.
         // step 2. rename the main disk from it's current path to the cache directory /namespace/here/{self.name}.qcow2 atomically.
         // step 3. for UEFI vars, same if they exist?
         // step 4. Not sure for the additional drives.
+        todo!("write QEMU run files into the cache slot")
     }
 }
 

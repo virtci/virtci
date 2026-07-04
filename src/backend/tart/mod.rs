@@ -306,6 +306,14 @@ impl TartBackend {
 }
 
 impl VmBackend for TartBackend {
+    fn cache_run_files(
+        &self,
+        _cache_namespace: &crate::run::cache::CacheNamespace,
+    ) -> anyhow::Result<()> {
+        // Placeholder: tart caching (a named `tart clone` into the cache store) is not built yet.
+        anyhow::bail!("cache writing is not yet implemented for the tart backend")
+    }
+
     fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()> {
         if let Some(o) = cfg.offline {
             self.offline = o;
