@@ -15,7 +15,7 @@ use crate::{
     file_lock::FileLock,
     global_paths::{TargetPath, VciGlobalPaths},
     orphan::OrphanTracker,
-    run::run_id::ReservedRunId,
+    run::{cache::CacheNamespace, run_id::ReservedRunId},
     util::cpu_arch::Arch,
     vm_image::{HostExecTarget, ImageDescription, expand_path},
 };
@@ -488,6 +488,27 @@ impl VmBackend for QemuBackend {
 
     fn disk_image_path(&self) -> Option<&Path> {
         Some(self.disk.target().path.as_path())
+    }
+
+    /// A QEMU backend has 3 unique things it can write to a cache.
+    ///
+    /// 1. The main disk qcow2 overlay (required)
+    /// 2. UEFI vars (optional)
+    /// 3. Any additional drives (optional, array)
+    fn cache_run_files(&self, cache_namespace: &CacheNamespace) -> anyhow::Result<()> {
+        let namespace = {
+            match cache_namespace {
+                CacheNamespace::Disabled(disabled_reason) => {
+                    anyhow::bail!("No cache namespace to write the cache to")
+                }
+                CacheNamespace::Enabled { namespace } => namespace,
+            }
+        };
+
+        // step 1. write JSON file. If something fails after this, that's fine, it will be cleaned up as an orphan.
+        // step 2. rename the main disk from it's current path to the cache directory /namespace/here/{self.name}.qcow2 atomically.
+        // step 3. for UEFI vars, same if they exist?
+        // step 4. Not sure for the additional drives.
     }
 }
 

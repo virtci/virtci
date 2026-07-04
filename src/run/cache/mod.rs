@@ -1,6 +1,9 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+pub mod file;
+pub mod metadata;
+
 use std::{io::Read, path::Path, time::UNIX_EPOCH};
 
 use anyhow::Context;
@@ -12,14 +15,11 @@ use crate::{
     yaml,
 };
 
-/// On-disk metadata format version. Bump on any breaking change to [`CacheMetadata`] so a cache
-/// written by an older virtci is treated as a miss rather than misread.
-pub const CACHE_FORMAT_VERSION: u32 = 1;
-
 /// Length (hex chars) of the truncated blake3 digests used for ids and short content hashes. 16 hex
 /// chars = 64 bits, far beyond enough to avoid accidental collisions between cache slots/inputs.
 const SHORT_HASH_LEN: usize = 16;
 
+#[derive(Clone)]
 pub enum CacheNamespace {
     Disabled(DisabledReason),
     Enabled { namespace: String },
@@ -74,6 +74,7 @@ impl CacheNamespace {
     }
 }
 
+#[derive(Clone)]
 pub enum DisabledReason {
     UserNoCache,
     /// This run is a fork / external pull request and caches are never shared with forks.
@@ -127,114 +128,6 @@ fn interpolate_tokens(template: &str, git_info: Option<&GitInfo>) -> anyhow::Res
         .replace("{ref}", &gi.git_ref))
 }
 
-/// Persisted metadata describing a workflow cache, written alongside the disk (QEMU overlay) in
-/// the slot. The run will compare against this, so the format needs to be consistent.
-/// Bump [`CACHE_FORMAT_VERSION`] on a breaking schema change.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheMetadata {
-    pub format_version: u32,
-    pub namespace: String,
-    pub job: String,
-    pub image_id: String,
-    /// Unix seconds when this artifact was written.
-    pub created_at: u64,
-    /// TTL in seconds from `created_at`, if `cache.max_age` was set.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl_secs: Option<u64>,
-    /// Disk artifact filename within the slot (e.g. `disk.qcow2`).
-    pub disk_artifact: String,
-    /// blake3 of the persisted disk artifact, for future integrity/verification on consume.
-    pub disk_hash: String,
-    /// Captured invalidation inputs (the consume side recomputes the live values and compares).
-    pub fingerprint: Fingerprint,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InputHash {
-    /// For a modified file, it's path.
-    /// For a files list, the glob pattern / directory / etc.
-    /// For environment variables, just the name, never the value.
-    pub input: String,
-    /// For a modified file, it's blake3 hashed contents.
-    /// For a files list, all the files matched by the glob pattern / directory / etc.
-    /// For environment variables, hash of the value.
-    pub hash: String,
-}
-
-/// Snapshot of every input that can invalidate a cache, captured when the cache is produced.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Fingerprint {
-    /// blake3 of the workflow YAML (whole file).
-    pub workflow_hash: String,
-    /// Cheap identity (`<len>:<mtime_secs`) of the base image. Since QEMU can use overlays,
-    /// this ensures integrity of the base qcow2.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_image_marker: Option<String>,
-    /// file path -> blake3(contents). If the file isn't present, use `"missing"` when CREATING
-    /// the cache.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files_modified: Vec<InputHash>,
-    /// Glob -> blake3(sorted matching paths). Tracks any files added / removed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files_list: Vec<InputHash>,
-    /// var name -> blake3(value). Values are hashed, never stored, since they may be
-    /// secrets. unset variables record `"unset"`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub env: Vec<InputHash>,
-    /// The run command as is. It's re-executed on consume.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
-}
-
-impl Fingerprint {
-    /// Get the live state of every invalidation input. Best effort: any failure to read a file
-    /// records a sentinel rather than aborting.
-    pub fn capture(
-        cfg: &yaml::Cache,
-        workflow_hash: String,
-        base_image_marker: Option<String>,
-    ) -> Self {
-        let files_modified = cfg
-            .files_modified
-            .iter()
-            .map(|path| InputHash {
-                input: path.clone(),
-                hash: hash_file(Path::new(path)).unwrap_or_else(|_| "missing".to_string()),
-            })
-            .collect();
-
-        let files_list = cfg
-            .files_list
-            .iter()
-            .map(|pattern| InputHash {
-                input: pattern.clone(),
-                hash: hash_file_list(pattern),
-            })
-            .collect();
-
-        let env = cfg
-            .env
-            .iter()
-            .map(|name| InputHash {
-                input: name.clone(),
-                hash: match std::env::var(name) {
-                    Ok(value) => short_hash(value.as_bytes()),
-                    Err(_) => "unset".to_string(),
-                },
-            })
-            .collect();
-
-        Fingerprint {
-            workflow_hash,
-            base_image_marker,
-            files_modified,
-            files_list,
-            env,
-            run: cfg.run.clone(),
-        }
-    }
-}
-
 /// Short identity binding a cache slot to a VM image.
 pub fn image_id(image: &ImageDescription) -> String {
     let mut h = blake3::Hasher::new();
@@ -253,24 +146,6 @@ pub fn image_id(image: &ImageDescription) -> String {
         }
     }
     truncate_hex(&h.finalize())
-}
-
-/// Cheap identity (`<len>:<mtime_secs>`) of a QEMU base image's backing disk. `None` for non-QEMU
-/// images or when the file can't be stat'd.
-/// TODO WSL2
-pub fn base_image_marker(image: &ImageDescription) -> Option<String> {
-    let BackendConfig::Qemu(qemu) = &image.backend else {
-        return None;
-    };
-    let path = crate::backend::expand_path(&qemu.image);
-    let meta = std::fs::metadata(&path).ok()?;
-    let mtime = meta
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    Some(format!("{}:{mtime}", meta.len()))
 }
 
 /// Parse a `cache.max_age` value into seconds. A bare integer is days.
@@ -298,38 +173,6 @@ pub fn parse_max_age(s: &str) -> anyhow::Result<u64> {
         .parse()
         .with_context(|| format!("invalid max_age number {number:?}"))?;
     n.checked_mul(mult).context("max_age overflows")
-}
-
-/// Hash a sorted list of files matching a specific glob pattern. JUST the file names, not their
-/// actual contents. This tracks files being added or removed. Glob errors record just a sentinel.
-fn hash_file_list(pattern: &str) -> String {
-    let Ok(paths) = glob::glob(pattern) else {
-        return "bad-glob".to_string();
-    };
-    let mut matches: Vec<String> = paths
-        .filter_map(Result::ok)
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
-    matches.sort();
-    short_hash(matches.join("\n").as_bytes())
-}
-
-/// Stream a file through blake3 and return the full hex digest.
-fn hash_file(path: &Path) -> anyhow::Result<String> {
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open {} for hashing", path.display()))?;
-    let mut hasher = blake3::Hasher::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = file
-            .read(&mut buf)
-            .context("failed to read while hashing")?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hasher.finalize().to_hex().to_string())
 }
 
 /// Truncated blake3 of a byte slice, for ids and short content hashes.

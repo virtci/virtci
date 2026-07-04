@@ -7,7 +7,10 @@ pub mod exec;
 pub mod qemu;
 pub mod tart;
 
-use crate::vm_image::{GuestOs, SshTarget};
+use crate::{
+    run::cache::CacheNamespace,
+    vm_image::{GuestOs, SshTarget},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct VmStartConfig {
@@ -64,6 +67,8 @@ pub trait VmBackend {
     fn disk_image_path(&self) -> Option<&Path> {
         None
     }
+
+    fn cache_run_files(&self, cache_namespace: &CacheNamespace) -> anyhow::Result<()>;
 }
 
 pub fn expand_path(path: &str) -> PathBuf {
