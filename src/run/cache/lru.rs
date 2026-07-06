@@ -250,7 +250,10 @@ fn mtime_secs(path: &Path) -> Option<u64> {
 /// a failure only costs a slightly-stale recency ordering, never correctness.
 pub fn touch_slot(slot: &TargetPath) {
     let cache_json = slot.join(CacheMetadata::FILENAME);
-    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&cache_json.path) {
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&cache_json.path)
+    {
         let _ = file.set_modified(std::time::SystemTime::now());
     }
 }
@@ -315,7 +318,10 @@ mod tests {
         };
         assert!(fits(80, Some(0), 0, &budget_only), "under budget");
         assert!(fits(80, Some(0), 20, &budget_only), "exactly at budget");
-        assert!(!fits(80, Some(0), 21, &budget_only), "incoming busts budget");
+        assert!(
+            !fits(80, Some(0), 21, &budget_only),
+            "incoming busts budget"
+        );
 
         let retain_only = CacheLimits {
             budget_bytes: None,

@@ -1,11 +1,22 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::path::{Path, PathBuf};
+//! Running these tests locally.
+//!
+//! ```sh
+//! ./.ci/upstream/fetch_ubuntu_images.sh
+//! cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --show-output
+//! ```
+//!
+//! ```powershell
+//! .\.ci\upstream\fetch_ubuntu_images.ps1
+//! cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --show-output
+//! ```
 
-use virtci::{global_paths::VciGlobalPaths, run_virtci_with_args, vm_image::list::load_all_images};
+use std::path::Path;
 
-const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
+mod common;
+use common::{register_image, remove_image, run_workflow, test_env};
 
 fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> String {
     format!(
@@ -133,94 +144,6 @@ second_job:
       run: echo second job ran
 "#
     )
-}
-
-fn upstream_img_path(file_name: &str) -> PathBuf {
-    PathBuf::from(MANIFEST_DIR)
-        .join(".ci/upstream")
-        .join(file_name)
-}
-
-fn system_tests_global_paths_no_wsl(
-    home: PathBuf,
-    system: PathBuf,
-    temp: PathBuf,
-) -> VciGlobalPaths {
-    virtci::global_paths::VciGlobalPaths {
-        user_home: home,
-        system_home: system,
-        temp,
-        #[cfg(target_os = "windows")]
-        wsl: None,
-    }
-}
-
-fn image_is_registered(paths: &VciGlobalPaths, image_name: &str) -> bool {
-    load_all_images(paths)
-        .iter()
-        .any(|img| img.name == image_name)
-}
-
-/// A test-local VCI home/system/temp rooted at `.ci/temp/<test_name>/`,
-/// keeping each system test isolated from the user's real images and
-/// from the other tests.
-struct TestEnv {
-    test_dir: PathBuf,
-    paths: VciGlobalPaths,
-}
-
-fn test_env(test_name: &str) -> TestEnv {
-    let test_dir = PathBuf::from(MANIFEST_DIR).join(".ci/temp").join(test_name);
-    let paths = system_tests_global_paths_no_wsl(
-        test_dir.join("home"),
-        test_dir.join("system"),
-        test_dir.join("temp"),
-    );
-    std::fs::create_dir_all(&test_dir).expect("Failed to create test temp directory");
-    TestEnv { test_dir, paths }
-}
-
-/// Registers the upstream cloud image described by `image_json` (relative to
-/// the repo root) as a VirtCI VM named `image_name`.
-///
-/// `image_file` is the upstream `.img` in `.ci/upstream/` that `image_json`
-/// points at, checked up front for a friendlier failure than mid-setup.
-fn register_image(env: &TestEnv, image_name: &str, image_json: &str, image_file: &str) {
-    let img = upstream_img_path(image_file);
-    assert!(
-        img.exists(),
-        "Missing upstream image {}. Fetch it first with .ci/upstream/fetch_ubuntu_images.sh (or .ps1).",
-        img.display()
-    );
-
-    // A previously failed run may have left the image registered.
-    if image_is_registered(&env.paths, image_name) {
-        run_virtci_with_args(&env.paths, &["remove", image_name, "--force"]);
-    }
-
-    run_virtci_with_args(
-        &env.paths,
-        &[
-            "setup", "--qemu", "--from", image_json, "--name", image_name,
-        ],
-    );
-    assert!(image_is_registered(&env.paths, image_name));
-}
-
-/// Writes `workflow_yaml` to a temporary YAML file and runs it.
-fn run_workflow(env: &TestEnv, workflow_yaml: &str) {
-    let workflow_path = env.test_dir.join("workflow.yml");
-    std::fs::write(&workflow_path, workflow_yaml).expect("Failed to write workflow file");
-
-    run_virtci_with_args(
-        &env.paths,
-        &["run", workflow_path.to_str().expect("Non-UTF8 test path")],
-    );
-}
-
-fn remove_image(env: &TestEnv, image_name: &str) {
-    run_virtci_with_args(&env.paths, &["remove", image_name, "--force"]);
-    assert!(!image_is_registered(&env.paths, image_name));
 }
 
 fn dir_contains_file_with_extension(dir: &Path, ext: &str) -> bool {
