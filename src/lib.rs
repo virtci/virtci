@@ -522,8 +522,7 @@ fn extract_yaml_workflows(
     let workflow_hash = blake3::hash(contents.as_bytes()).to_hex().to_string();
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
 
     let mut jobs = Vec::<run::Job>::new();
     for (name, yaml_job) in workflow {

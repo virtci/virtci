@@ -613,8 +613,7 @@ impl VmBackend for QemuBackend {
 
         let created_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs());
 
         let meta = CacheMetadata {
             format_version: cache::metadata::CACHE_FORMAT_VERSION,
