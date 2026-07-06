@@ -28,10 +28,10 @@ impl CacheNamespace {
     /// Precedence:
     /// 1. CLI `--no-cache`, arg `no_cache` -> disabled.
     /// 2. `is_fork` (a fork / external pull request) -> disabled, unconditionally. Caches are
-    /// never shared with forks so that an untrusted contributor cannot read a trusted cache
-    /// nor poison one.
+    ///    never shared with forks so that an untrusted contributor cannot read a trusted cache
+    ///    nor poison one.
     /// 3. CLI `--cache-namespace` -> try to use, interpolating `{owner}`/`{repo}`/`{ref}` from
-    /// `git_info`.
+    ///    `git_info`.
     /// 4. Derive from `git_info`.
     /// 5. No cache.
     ///

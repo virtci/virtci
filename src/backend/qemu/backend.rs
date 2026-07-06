@@ -108,6 +108,7 @@ impl QemuBackend {
     /// - `serial` How to wire the guest serial console. `Console` routes to
     ///   stdio for interactive `virtci boot --nographics` and `File` captures to a log file for
     ///   `virtci boot` (graphics), and for `virtci run` boot-progress monitoring.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         base_image: ImageDescription,
@@ -579,15 +580,13 @@ impl VmBackend for QemuBackend {
             .join(cache::slot_lock_filename(&cache::slot_rel(
                 namespace, &self.name, &image_id,
             )));
-        let _slot_lock = match FileLock::try_new(&lock_path) {
-            Ok(lock) => lock,
-            Err(_) => {
-                eprintln!(
-                    "Warning: cache slot for job '{}' is in use by another run; skipping cache write.",
-                    self.name
-                );
-                return Ok(());
-            }
+
+        let Ok(_slot_lock) = FileLock::try_new(&lock_path) else {
+            eprintln!(
+                "Warning: cache slot for job '{}' is in use by another run; skipping cache write.",
+                self.name
+            );
+            return Ok(());
         };
 
         // WE MUST RESPECT USER DISK LIMITS
@@ -772,11 +771,12 @@ fn acquire_image_lock(
 ///
 /// `cache` decides where the throwaway overlays/vars live and what they're backed by:
 /// - [`CachePlan::Produce`] puts them in the `.cache-staging` dir (same filesystem as the slot)
-/// backed by the base image.
+///   backed by the base image.
 /// - [`CachePlan::Consume`] puts them in the temp dir backed by the slot's cached artifacts (qcow2
-/// overlay chain).
+///   overlay chain).
 /// - [`CachePlan::Disabled`] puts them in the temp dir backed by the base image (overlay but not
-/// a chain).
+///   a chain).
+#[allow(clippy::too_many_arguments)]
 fn setup_run(
     name: &str,
     id: u16,

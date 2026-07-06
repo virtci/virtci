@@ -75,7 +75,7 @@ fn fs_query(path: &TargetPath, query: Query) -> Option<u64> {
             Query::Total => vci_fs_total_bytes_native(bytes.as_ptr(), bytes.len()),
         }
     };
-    (result >= 0).then_some(result as u64)
+    (result >= 0).then_some(result.try_into().expect("what"))
 }
 
 /// The nearest ancestor of `path` (including itself) that exists on disk. `stat` works fine over a

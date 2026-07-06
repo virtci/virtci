@@ -78,14 +78,13 @@ fn default_retain_bytes(cache_root: &TargetPath) -> Option<u64> {
 /// unparseable value warns and is treated as unset (`None`).
 fn parse_gb_env(name: &str) -> Option<u64> {
     let raw = std::env::var(name).ok()?;
-    match raw.trim().parse::<u64>() {
-        Ok(gb) => Some(gb),
-        Err(_) => {
-            eprintln!(
-                "VirtCI Warning: ignoring invalid {name}={raw:?} (want an integer number of GB)."
-            );
-            None
-        }
+    if let Ok(gb) = raw.trim().parse::<u64>() {
+        Some(gb)
+    } else {
+        eprintln!(
+            "VirtCI Warning: ignoring invalid {name}={raw:?} (want an integer number of GB)."
+        );
+        None
     }
 }
 
@@ -98,9 +97,8 @@ fn fits(cache_size: u64, free_after: Option<u64>, incoming: u64, limits: &CacheL
         .is_none_or(|budget| cache_size.saturating_add(incoming) <= budget);
     let retain_ok = match (limits.retain_bytes, free_after) {
         (Some(retain), Some(free)) => free >= retain,
-        // Can't measure free space: don't evict for a floor we can't check.
-        (Some(_), None) => true,
-        (None, _) => true,
+        // Can't measure free space so don't evict for a floor we can't check.
+        (Some(_), None) | (None, _) => true,
     };
     budget_ok && retain_ok
 }
