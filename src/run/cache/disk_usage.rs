@@ -132,7 +132,7 @@ fn file_allocated_native(path: &Path) -> u64 {
     let bytes = s.as_bytes();
     let result = unsafe { vci_file_allocated_bytes_native(bytes.as_ptr(), bytes.len()) };
     if result >= 0 {
-        result as u64
+        result.try_into().expect("what")
     } else {
         // Fall back to logical length; over-counts thin overlays but never under-counts, so limits
         // still hold (we just evict slightly earlier).
