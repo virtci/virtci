@@ -59,7 +59,7 @@ pub struct Job {
     #[serde(default)]
     pub host_env: Vec<String>,
     #[serde(default)]
-    pub cache: Cache,
+    pub cache: Option<Cache>,
     pub steps: Vec<Step>,
 }
 

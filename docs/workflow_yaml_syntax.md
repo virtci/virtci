@@ -93,7 +93,7 @@ windows-x64:
 
 ## `cache`
 
-Defaults to empty (produces no cache, and cannot use a cache).
+Without the `cache:` block, the job will produce no cache, and cannot use one. A present-but-empty block (`cache: {}`) opts in, keyed on the implicit inputs only (see below).
 
 Opt this job into workflow run caching. When enabled, a successful run writes its VM state (the QEMU disk overlay, UEFI vars, and any additional drives) into long-term LRU storage. A later run of the same job, against the same image, in the same [namespace](#cache-namespaces), can skip straight to that cached VM state instead of executing the workflow again from scratch, which can massively speed up runs.
 

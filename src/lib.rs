@@ -567,13 +567,15 @@ fn extract_yaml_workflows(
             wsl_distro: None,
         };
         let base_image_marker = backend::qemu::backend::base_image_marker(paths, &image_desc);
+        let caching_requested = yaml_job.cache.is_some();
+        let cache_cfg = yaml_job.cache.clone().unwrap_or_default();
         let cache_fingerprint = run::cache::metadata::Fingerprint::capture(
-            &yaml_job.cache,
+            &cache_cfg,
             &root_dir,
             workflow_hash.clone(),
             base_image_marker,
         );
-        let cache_ttl_secs = match yaml_job.cache.max_age.as_deref() {
+        let cache_ttl_secs = match cache_cfg.max_age.as_deref() {
             Some(s) => run::cache::parse_max_age(s)
                 .map_err(|e| eprintln!("Warning: Job '{name}': invalid cache.max_age: {e}"))
                 .ok(),
@@ -590,19 +592,21 @@ fn extract_yaml_workflows(
                 );
                 let image_id = run::cache::image_id(&image_desc);
                 let cache_root = backend::qemu::backend::cache_root_for_image(paths, &image_desc);
-                let cache_hit = match &namespace {
-                    run::cache::CacheNamespace::Enabled { namespace: ns } => {
-                        let slot = run::cache::slot_dir(&cache_root, ns, &name, &image_id);
-                        run::cache::metadata::CacheMetadata::read_from_slot(&slot)
-                            .is_some_and(|m| m.is_fresh_hit(&cache_fingerprint, now_secs))
-                    }
-                    run::cache::CacheNamespace::Disabled(_) => false,
-                };
+                let cache_hit = caching_requested
+                    && match &namespace {
+                        run::cache::CacheNamespace::Enabled { namespace: ns } => {
+                            let slot = run::cache::slot_dir(&cache_root, ns, &name, &image_id);
+                            run::cache::metadata::CacheMetadata::read_from_slot(&slot)
+                                .is_some_and(|m| m.is_fresh_hit(&cache_fingerprint, now_secs))
+                        }
+                        run::cache::CacheNamespace::Disabled(_) => false,
+                    };
                 let cache_plan = run::cache::CachePlan::new(
                     &namespace,
                     &cache_root,
                     &name,
                     &image_id,
+                    caching_requested,
                     cache_hit,
                 );
                 match &cache_plan {

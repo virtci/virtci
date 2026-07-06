@@ -171,8 +171,12 @@ impl CachePlan {
         cache_root: &TargetPath,
         job: &str,
         image_id: &str,
+        caching_requested: bool,
         cache_hit: bool,
     ) -> Self {
+        if !caching_requested {
+            return CachePlan::Disabled;
+        }
         match namespace {
             CacheNamespace::Disabled(_) => CachePlan::Disabled,
             CacheNamespace::Enabled { namespace } if cache_hit => CachePlan::Consume {
@@ -437,18 +441,23 @@ mod slot_tests {
 
         // Hit -> Consume (reads are never suppressed, even with no_write).
         assert!(matches!(
-            CachePlan::new(&enabled, &root, "job", "img", true),
+            CachePlan::new(&enabled, &root, "job", "img", true, true),
             CachePlan::Consume { .. }
         ));
         // Miss -> Produce.
         assert!(matches!(
-            CachePlan::new(&enabled, &root, "job", "img", false),
+            CachePlan::new(&enabled, &root, "job", "img", true, false),
             CachePlan::Produce { .. }
         ));
         // No namespace -> always disabled.
         let disabled = CacheNamespace::Disabled(super::DisabledReason::NoNamespaceSource);
         assert!(matches!(
-            CachePlan::new(&disabled, &root, "job", "img", true),
+            CachePlan::new(&disabled, &root, "job", "img", true, true),
+            CachePlan::Disabled
+        ));
+        // No `cache:` block -> disabled even with an enabled namespace and a would-be hit.
+        assert!(matches!(
+            CachePlan::new(&enabled, &root, "job", "img", false, true),
             CachePlan::Disabled
         ));
     }

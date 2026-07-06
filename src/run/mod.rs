@@ -61,13 +61,17 @@ const CACHE_SHUTDOWN_TIMEOUT: u64 = 120;
 /// valid number of seconds, otherwise falling back to [`CACHE_SHUTDOWN_TIMEOUT`].
 fn cache_shutdown_timeout() -> u64 {
     match std::env::var("VIRTCI_CACHE_SHUTDOWN_TIMEOUT") {
-        Ok(v) => if let Ok(secs) = v.trim().parse::<u64>() { secs } else {
-            eprintln!(
-                "VirtCI Warning: ignoring invalid VIRTCI_CACHE_SHUTDOWN_TIMEOUT={v:?} (want an integer \
+        Ok(v) => {
+            if let Ok(secs) = v.trim().parse::<u64>() {
+                secs
+            } else {
+                eprintln!(
+                    "VirtCI Warning: ignoring invalid VIRTCI_CACHE_SHUTDOWN_TIMEOUT={v:?} (want an integer \
                  number of seconds) using default of {CACHE_SHUTDOWN_TIMEOUT}s."
-            );
-            CACHE_SHUTDOWN_TIMEOUT
-        },
+                );
+                CACHE_SHUTDOWN_TIMEOUT
+            }
+        }
         Err(_) => CACHE_SHUTDOWN_TIMEOUT,
     }
 }
@@ -403,12 +407,12 @@ impl Job {
             && let Err(e) = self
                 .backend
                 .cache_run_files(&self.cache_fingerprint, self.cache_ttl_secs)
-            {
-                eprintln!(
-                    "{}",
-                    format!("Warning: failed to write workflow cache: {e:#}").yellow()
-                );
-            }
+        {
+            eprintln!(
+                "{}",
+                format!("Warning: failed to write workflow cache: {e:#}").yellow()
+            );
+        }
 
         Ok(())
     }

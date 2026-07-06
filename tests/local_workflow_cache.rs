@@ -83,6 +83,29 @@ fn produce(env: &TestEnv, workflow: &Path) -> Observation {
 
 #[test]
 #[ignore = "System Test"]
+fn cache_absent_block_produces_no_cache() {
+    let ni = native_image();
+    let env = test_env("cache_absent_block");
+    set_env(RETAIN_ENV, "0");
+    register_image(&env, ni.name, ni.json, ni.img_file);
+
+    let workflow = write_workflow(&env, &stamp_workflow(ni.name, &out_dir_str(&env), ""));
+    let obs = run_and_observe(&env, &workflow, &[]);
+    assert!(
+        !obs.slot_present,
+        "a job with no `cache:` block must not produce a cache slot"
+    );
+    assert!(
+        obs.stamp.is_some(),
+        "the run still succeeds and copies its stamp back even when caching is off"
+    );
+
+    remove_image(&env, ni.name);
+    unset_env(RETAIN_ENV);
+}
+
+#[test]
+#[ignore = "System Test"]
 fn cache_invalidates_on_files_modified() {
     let ni = native_image();
     let env = test_env("cache_files_modified");
@@ -91,7 +114,10 @@ fn cache_invalidates_on_files_modified() {
 
     let tracked = env.test_dir.join("tracked.txt");
     std::fs::write(&tracked, b"v1").expect("write tracked file");
-    let cache_block = format!("  cache:\n    files_modified:\n      - {}\n", slashed(&tracked));
+    let cache_block = format!(
+        "  cache:\n    files_modified:\n      - {}\n",
+        slashed(&tracked)
+    );
     let workflow = write_workflow(
         &env,
         &stamp_workflow(ni.name, &out_dir_str(&env), &cache_block),
@@ -197,7 +223,12 @@ fn cache_invalidates_on_workflow_change() {
     set_env(RETAIN_ENV, "0");
     register_image(&env, ni.name, ni.json, ni.img_file);
 
-    let workflow = write_workflow(&env, &stamp_workflow(ni.name, &out_dir_str(&env), ""));
+    let workflow = write_workflow(
+        &env,
+        // Present-but-empty block opts this job into caching on the implicit inputs only; an absent
+        // block would opt out of caching entirely.
+        &stamp_workflow(ni.name, &out_dir_str(&env), "  cache: {}\n"),
+    );
     let produced = produce(&env, &workflow);
 
     // Append a trailing comment: still valid YAML, but a different file hash.
@@ -223,7 +254,12 @@ fn cache_invalidates_on_base_image_change() {
     let config = write_base_image_json(&env, &ni, &base_copy);
     register_image_from_json(&env, ni.name, &config);
 
-    let workflow = write_workflow(&env, &stamp_workflow(ni.name, &out_dir_str(&env), ""));
+    let workflow = write_workflow(
+        &env,
+        // Present-but-empty block opts this job into caching on the implicit inputs only; an absent
+        // block would opt out of caching entirely.
+        &stamp_workflow(ni.name, &out_dir_str(&env), "  cache: {}\n"),
+    );
     let produced = produce(&env, &workflow);
 
     let future = SystemTime::now() + Duration::from_secs(3600);
@@ -276,7 +312,12 @@ fn cache_respects_storage_limit() {
     let env = test_env("cache_storage_limit");
     register_image(&env, ni.name, ni.json, ni.img_file);
 
-    let workflow = write_workflow(&env, &stamp_workflow(ni.name, &out_dir_str(&env), ""));
+    let workflow = write_workflow(
+        &env,
+        // Present-but-empty block opts this job into caching on the implicit inputs only; an absent
+        // block would opt out of caching entirely.
+        &stamp_workflow(ni.name, &out_dir_str(&env), "  cache: {}\n"),
+    );
 
     set_env(RETAIN_ENV, "100000000");
     let refused = run_and_observe(&env, &workflow, &[]);
@@ -314,6 +355,7 @@ fn cache_skips_marked_steps_on_hit() {
   image: {image}
   cpus: 2
   memory: 4G
+  cache: {{}}
   steps:
     - name: Cold-only stamp
       run: date +%s%N > ~/cold_stamp
