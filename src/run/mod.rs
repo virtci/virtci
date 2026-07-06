@@ -1021,6 +1021,9 @@ impl std::error::Error for ConnectError {}
 pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, ConnectError> {
     let mut config = client::Config {
         inactivity_timeout: None,
+        // make the connection itself a little more resilient from random NAT failures or whatever.
+        keepalive_interval: Some(std::time::Duration::from_secs(15)),
+        keepalive_max: 6,
         ..Default::default()
     };
 
