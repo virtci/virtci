@@ -139,7 +139,11 @@ mod tests {
 
         let ha = hash_file(&tp(a.clone())).unwrap();
         assert_eq!(ha, hash_file(&tp(a)).unwrap(), "same file hashes the same");
-        assert_eq!(ha, hash_file(&tp(b)).unwrap(), "same contents hash the same");
+        assert_eq!(
+            ha,
+            hash_file(&tp(b)).unwrap(),
+            "same contents hash the same"
+        );
         assert_ne!(ha, hash_file(&tp(c)).unwrap(), "different contents differ");
 
         let _ = std::fs::remove_dir_all(&dir);

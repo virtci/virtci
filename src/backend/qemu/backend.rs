@@ -15,7 +15,15 @@ use crate::{
     file_lock::FileLock,
     global_paths::{TargetPath, VciGlobalPaths},
     orphan::OrphanTracker,
-    run::{cache::CacheNamespace, run_id::ReservedRunId},
+    run::{
+        cache::{
+            self, CacheNamespace,
+            metadata::{
+                CacheMetadata, CachedVm, Fingerprint, PlannedQemuArtifact, QemuArtifactKind,
+            },
+        },
+        run_id::ReservedRunId,
+    },
     util::cpu_arch::Arch,
     vm_image::{HostExecTarget, ImageDescription, expand_path},
 };
@@ -65,6 +73,9 @@ pub struct QemuBackend {
     pub ssh_ip: String,
     pub host_temp_dir: PathBuf,
     pub exec_target_temp_dir: TargetPath,
+    /// Long-term cache root in the exec namespace (`.cache` under the user home, or its WSL2 UNC
+    /// equivalent). A successful run's slot is written under here by [`Self::cache_run_files`].
+    pub cache_dir: TargetPath,
 
     /// Shared or exclusive `vci_image_<name>.lock`
     pub image_lock: FileLock,
@@ -162,6 +173,7 @@ impl QemuBackend {
 
         let host_temp_dir = paths.temp.clone();
         let exec_target_temp_dir = temp_dir_target(paths, &exec_target);
+        let cache_dir = cache_dir_target(paths, &exec_target);
 
         Ok(QemuBackend {
             run_id,
@@ -176,6 +188,7 @@ impl QemuBackend {
             ssh_ip,
             host_temp_dir,
             exec_target_temp_dir,
+            cache_dir,
             image_lock: setup.image_lock,
             host_port: None,
             disk: setup.disk,
@@ -495,19 +508,73 @@ impl VmBackend for QemuBackend {
     /// 1. The main disk qcow2 overlay (required)
     /// 2. UEFI vars (optional)
     /// 3. Any additional drives (optional, array)
-    fn cache_run_files(&self, cache_namespace: &CacheNamespace) -> anyhow::Result<()> {
-        let _namespace = match cache_namespace {
+    ///
+    /// NOTE: Artifacts are put into the slot first, and the `cache.json` is written last. If it
+    /// fails midway, the reaper can get it.
+    fn cache_run_files(
+        &self,
+        namespace: &CacheNamespace,
+        fingerprint: &Fingerprint,
+        ttl_secs: Option<u64>,
+    ) -> anyhow::Result<()> {
+        let namespace = match namespace {
             CacheNamespace::Disabled(reason) => {
                 anyhow::bail!("no cache namespace to write the cache to: {reason}")
             }
             CacheNamespace::Enabled { namespace } => namespace,
         };
 
-        // step 1. write JSON file. If something fails after this, that's fine, it will be cleaned up as an orphan.
-        // step 2. rename the main disk from it's current path to the cache directory /namespace/here/{self.name}.qcow2 atomically.
-        // step 3. for UEFI vars, same if they exist?
-        // step 4. Not sure for the additional drives.
-        todo!("write QEMU run files into the cache slot")
+        // Only a temp overlay or copy can be put into the cache.
+        let disk = self.disk.temp().context(
+            "Cannot cache a run whose disk is the base image in place. Caching only applies to `virtci run`",
+        )?;
+
+        let mut planned = vec![PlannedQemuArtifact {
+            source: disk.clone(),
+            kind: QemuArtifactKind::Disk,
+            filename: "disk.qcow2".to_string(),
+        }];
+
+        if let Some(vars) = self.uefi_vars.as_ref().and_then(BackingFile::temp) {
+            planned.push(PlannedQemuArtifact {
+                source: vars.clone(),
+                kind: QemuArtifactKind::UefiVars,
+                filename: "vars.fd".to_string(),
+            });
+        }
+
+        for (index, drive) in self.additional_drives.iter().enumerate() {
+            if let Some(file) = drive.file.temp() {
+                planned.push(PlannedQemuArtifact {
+                    source: file.clone(),
+                    kind: QemuArtifactKind::AdditionalDrive { index },
+                    filename: format!("drive{index}.qcow2"),
+                });
+            }
+        }
+
+        let image_id = cache::image_id(&self.base_image);
+        let slot = cache::slot_dir(&self.cache_dir, namespace, &self.name, &image_id);
+
+        let artifacts = cache::metadata::move_qemu_artifacts_into_slot(&slot, &planned)?;
+
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let meta = CacheMetadata {
+            format_version: cache::metadata::CACHE_FORMAT_VERSION,
+            namespace: namespace.clone(),
+            job: self.name.clone(),
+            image_id,
+            created_at,
+            ttl_secs,
+            fingerprint: fingerprint.clone(),
+            vm: CachedVm::Qemu { artifacts },
+        };
+
+        meta.write_into_slot(&slot)
     }
 }
 
@@ -920,6 +987,24 @@ fn config_path_target_with_unc(
         TargetPath {
             path: PathBuf::from(exec_str),
         }
+    }
+}
+
+/// The long-term cache root in the exec namespace: the WSL2 distro's `.cache` (as a UNC path) for a
+/// WSL2 target, else the host's `.cache`. Mirrors [`temp_dir_target`]'s native/WSL split.
+fn cache_dir_target(paths: &VciGlobalPaths, exec_target: &HostExecTarget) -> TargetPath {
+    #[cfg(target_os = "windows")]
+    {
+        if let HostExecTarget::WSL2(_) = exec_target {
+            return paths.wsl_cache_dir();
+        }
+        return paths.cache_dir();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = exec_target;
+        paths.cache_dir()
     }
 }
 

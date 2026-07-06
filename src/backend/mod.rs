@@ -8,7 +8,7 @@ pub mod qemu;
 pub mod tart;
 
 use crate::{
-    run::cache::CacheNamespace,
+    run::cache::{CacheNamespace, metadata::Fingerprint},
     vm_image::{GuestOs, SshTarget},
 };
 
@@ -68,7 +68,17 @@ pub trait VmBackend {
         None
     }
 
-    fn cache_run_files(&self, cache_namespace: &CacheNamespace) -> anyhow::Result<()>;
+    /// Whether this run is running from a workflow cache.
+    fn is_cached_run(&self) -> bool;
+
+    /// Commit this run's VM files into its cache slot so a future run can reuse them.
+    /// Fingerprint is captured on the host-side notably, not inside the VM.
+    fn cache_run_files(
+        &self,
+        namespace: &CacheNamespace,
+        fingerprint: &Fingerprint,
+        ttl_secs: Option<u64>,
+    ) -> anyhow::Result<()>;
 }
 
 pub fn expand_path(path: &str) -> PathBuf {

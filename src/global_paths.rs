@@ -190,9 +190,12 @@ impl VciGlobalPaths {
 
         let wsl_info = self.wsl.as_ref().expect("Should have WSL paths");
 
+        let wsl_path = format!(
+            "{}/{cache_dir_name}",
+            wsl_info.user_home.trim_end_matches('/')
+        );
         TargetPath {
-            path: format!("{}/{cache_dir_name}", wsl_info.user_home),
-            #[cfg(target_os = "windows")]
+            path: wsl_info.to_unc(&wsl_path),
             wsl_distro: Some(wsl_info.distro.clone()),
         }
     }
@@ -258,7 +261,7 @@ pub fn wsl_path_to_unc(distro: &str, wsl_path: &str) -> PathBuf {
     PathBuf::from(format!(r"\\wsl.localhost\{distro}\{rel}"))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TargetPath {
     /// May be a file or directory.
     /// If [`ImageHome::in_wsl()`], has `\\wsl.localhost\<distro>\` prefixed.

@@ -26,34 +26,99 @@ pub struct CacheMetadata {
     /// TTL in seconds from `created_at`, if `cache.max_age` was set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl_secs: Option<u64>,
-    /// Disk artifact filename within the slot (e.g. `disk.qcow2`).
-    pub disk_artifact: String,
-    /// blake3 of the persisted disk artifact, for future integrity/verification on consume.
-    pub disk_hash: String,
     /// Captured invalidation inputs (the consume side recomputes the live values and compares).
     pub fingerprint: Fingerprint,
+    /// Backend-specific VM files.
     pub vm: CachedVm,
+}
+
+impl CacheMetadata {
+    /// The metadata file in a cache slot is ALWAYS "cache.json". Note that this works cause the
+    /// full cache slot path includes the workflow name.
+    pub const FILENAME: &'static str = "cache.json";
+
+    /// This writes the metadata into `slot_dir` as a JSON file [`CacheMetadata::FILENAME`].
+    /// This MUST be after writing the actual artifacts.
+    pub fn write_into_slot(&self, slot_dir: &TargetPath) -> anyhow::Result<()> {
+        std::fs::create_dir_all(&slot_dir.path)
+            .with_context(|| format!("failed to create cache slot {}", slot_dir.path.display()))?;
+
+        let json =
+            serde_json::to_string_pretty(self).context("failed to serialize cache metadata")?;
+        let tmp = slot_dir.join("cache.json.tmp");
+        std::fs::write(&tmp.path, json.as_bytes())
+            .with_context(|| format!("failed to write {}", tmp.path.display()))?;
+
+        tmp.atomic_file_rename(&slot_dir.join(Self::FILENAME))
+            .context("failed to commit cache.json into the slot")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CachedVm {
-    Qemu {},
+    Qemu { artifacts: Vec<QemuCachedArtifact> },
     Tart {},
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedArtifact {
-    /// Just the name of the file, not its path.
-    filename: String,
-    kind: ArtifactKind,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QemuCachedArtifact {
+    /// Just the name of the file within the slot (e.g. `disk.qcow2`), never a path.
+    pub filename: String,
+    pub kind: QemuArtifactKind,
     /// Cheap integrity marker for the artifact. See [`file_marker`]. Not a content hash.
-    marker: String,
+    pub marker: String,
 }
 
-impl CachedArtifact {}
+/// The role a [`QemuCachedArtifact`] plays when a run is later reconstructed from the slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QemuArtifactKind {
+    /// The main boot disk qcow2 overlay.
+    Disk,
+    /// The UEFI/OVMF variable store (`VARS.fd`).
+    UefiVars,
+    /// An additional `-drive` overlay. `index` matches the image's `additional_drives` ordering so
+    /// the consume side can re-wire each drive to the right slot.
+    AdditionalDrive { index: usize },
+}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ArtifactKind {}
+/// A artifact for QEMU that may be committed into the long term cache storage.
+pub struct PlannedQemuArtifact {
+    /// Artifact's current path. Must be on the same filesystem as the long term cache storage,
+    /// so basically just the cache staging directory.
+    pub source: TargetPath,
+    pub kind: QemuArtifactKind,
+    /// The name it takes within the slot (like `disk.qcow2`).
+    pub filename: String,
+}
+
+/// Move each temp artifact into the cache `slot_dir` via an atomic rename and return the resulting
+/// [`QemuCachedArtifact`] records.
+/// This is done first, then [`CacheMetadata::write_into_slot`] after.
+/// `slot_dir` must live in the same file system as the `planned` artifacts.
+pub fn move_qemu_artifacts_into_slot(
+    slot_dir: &TargetPath,
+    planned: &[PlannedQemuArtifact],
+) -> anyhow::Result<Vec<QemuCachedArtifact>> {
+    let mut artifacts = Vec::with_capacity(planned.len());
+    for art in planned {
+        let dest = slot_dir.join(&art.filename);
+        art.source.atomic_file_rename(&dest).with_context(|| {
+            format!(
+                "failed to move cache artifact {} -> {}",
+                art.source.path.display(),
+                dest.path.display()
+            )
+        })?;
+        let marker = file_marker(&dest)
+            .with_context(|| format!("failed to mark cache artifact {}", dest.path.display()))?;
+        artifacts.push(QemuCachedArtifact {
+            filename: art.filename.clone(),
+            kind: art.kind,
+            marker,
+        });
+    }
+    Ok(artifacts)
+}
 
 /// Snapshot of every input that can invalidate a cache, captured when the cache is produced.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -340,5 +405,148 @@ mod fingerprint_tests {
         assert!(mtime.parse::<u64>().is_ok(), "mtime is unix seconds");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod commit_tests {
+    use super::super::slot_dir;
+    use super::{
+        CACHE_FORMAT_VERSION, CacheMetadata, CachedVm, Fingerprint, PlannedQemuArtifact,
+        QemuArtifactKind, move_qemu_artifacts_into_slot,
+    };
+    use crate::global_paths::VciGlobalPaths;
+    use std::path::PathBuf;
+
+    fn test_paths(tag: &str) -> VciGlobalPaths {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".ci/temp")
+            .join(format!("cache_commit_{tag}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        VciGlobalPaths {
+            user_home: root.join("home"),
+            system_home: root.join("system"),
+            temp: root.join("temp"),
+            #[cfg(target_os = "windows")]
+            wsl: None,
+        }
+    }
+
+    #[test]
+    fn commit_moves_artifacts_into_the_slot_then_writes_metadata_last() {
+        let paths = test_paths("full");
+        let staging = paths.cache_staging_dir();
+        let cache = paths.cache_dir();
+        std::fs::create_dir_all(&staging.path).unwrap();
+
+        let disk_src = staging.join("vci-job-00001.qcow2");
+        let vars_src = staging.join("vci-job-00001-VARS.fd");
+        std::fs::write(&disk_src.path, b"disk-bytes!").unwrap(); // 11 bytes
+        std::fs::write(&vars_src.path, b"vars").unwrap();
+
+        let planned = vec![
+            PlannedQemuArtifact {
+                source: disk_src.clone(),
+                kind: QemuArtifactKind::Disk,
+                filename: "disk.qcow2".to_string(),
+            },
+            PlannedQemuArtifact {
+                source: vars_src.clone(),
+                kind: QemuArtifactKind::UefiVars,
+                filename: "vars.fd".to_string(),
+            },
+        ];
+
+        let slot = slot_dir(&cache, "owner/repo/main", "job", "imgid123");
+        let artifacts = move_qemu_artifacts_into_slot(&slot, &planned).unwrap();
+
+        assert!(!disk_src.path.exists(), "disk source was moved, not copied");
+        assert!(!vars_src.path.exists());
+        assert!(slot.join("disk.qcow2").path.exists());
+        assert!(slot.join("vars.fd").path.exists());
+        assert!(
+            slot.path.ends_with("owner/repo/main/job/imgid123"),
+            "slot is <cache>/<namespace>/<job>/<image_id>, got {}",
+            slot.path.display()
+        );
+
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].filename, "disk.qcow2");
+        assert_eq!(artifacts[0].kind, QemuArtifactKind::Disk);
+        assert!(
+            artifacts[0].marker.starts_with("11:"),
+            "marker is len:mtime for the 11-byte disk, got {}",
+            artifacts[0].marker
+        );
+
+        assert!(!slot.join(CacheMetadata::FILENAME).path.exists());
+
+        let meta = CacheMetadata {
+            format_version: CACHE_FORMAT_VERSION,
+            namespace: "owner/repo/main".to_string(),
+            job: "job".to_string(),
+            image_id: "imgid123".to_string(),
+            created_at: 42,
+            ttl_secs: Some(3600),
+            fingerprint: Fingerprint::default(),
+            vm: CachedVm::Qemu { artifacts },
+        };
+        meta.write_into_slot(&slot).unwrap();
+
+        let json = std::fs::read_to_string(&slot.join(CacheMetadata::FILENAME).path).unwrap();
+        let back: CacheMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.namespace, "owner/repo/main");
+        assert_eq!(back.created_at, 42);
+        assert_eq!(back.ttl_secs, Some(3600));
+        match back.vm {
+            CachedVm::Qemu { artifacts } => {
+                assert_eq!(artifacts.len(), 2);
+                assert_eq!(artifacts[1].kind, QemuArtifactKind::UefiVars);
+            }
+            CachedVm::Tart {} => panic!("expected a Qemu slot"),
+        }
+        assert!(!slot.join("cache.json.tmp").path.exists());
+
+        let _ = std::fs::remove_dir_all(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ci/temp/cache_commit_full"),
+        );
+    }
+
+    #[test]
+    fn commit_tracks_additional_drive_index_and_errors_on_missing_source() {
+        let paths = test_paths("drives");
+        let staging = paths.cache_staging_dir();
+        let cache = paths.cache_dir();
+        std::fs::create_dir_all(&staging.path).unwrap();
+
+        let drive_src = staging.join("vci-job-drive3-00001.qcow2");
+        std::fs::write(&drive_src.path, b"x").unwrap();
+        let slot = slot_dir(&cache, "ns", "job", "img");
+
+        let arts = move_qemu_artifacts_into_slot(
+            &slot,
+            &[PlannedQemuArtifact {
+                source: drive_src,
+                kind: QemuArtifactKind::AdditionalDrive { index: 3 },
+                filename: "drive3.qcow2".to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(arts[0].kind, QemuArtifactKind::AdditionalDrive { index: 3 });
+
+        let err = move_qemu_artifacts_into_slot(
+            &slot,
+            &[PlannedQemuArtifact {
+                source: staging.join("does-not-exist.qcow2"),
+                kind: QemuArtifactKind::Disk,
+                filename: "disk.qcow2".to_string(),
+            }],
+        );
+        assert!(err.is_err());
+
+        let _ = std::fs::remove_dir_all(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ci/temp/cache_commit_drives"),
+        );
     }
 }

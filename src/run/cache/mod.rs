@@ -7,6 +7,7 @@ pub mod metadata;
 use anyhow::Context;
 
 use crate::{
+    global_paths::TargetPath,
     util::git::{GitInfo, sanitize_git_path},
     vm_image::{BackendConfig, ImageDescription},
 };
@@ -142,6 +143,19 @@ pub fn image_id(image: &ImageDescription) -> String {
         }
     }
     truncate_hex(&h.finalize())
+}
+
+/// `<cache_root>/<namespace>/<job>/<image_id>`.
+pub fn slot_dir(cache_root: &TargetPath, namespace: &str, job: &str, image_id: &str) -> TargetPath {
+    let mut dir = cache_root.clone();
+    for component in namespace
+        .split('/')
+        .chain([job, image_id])
+        .filter(|c| !c.is_empty())
+    {
+        dir = dir.join(component);
+    }
+    dir
 }
 
 /// Parse a `cache.max_age` value into seconds. A bare integer is days.
