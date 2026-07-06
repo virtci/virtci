@@ -5,12 +5,12 @@
 //!
 //! ```sh
 //! ./.ci/upstream/fetch_ubuntu_images.sh
-//! cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --show-output
+//! cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --nocapture
 //! ```
 //!
 //! ```powershell
 //! .\.ci\upstream\fetch_ubuntu_images.ps1
-//! cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --show-output
+//! cargo test --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --nocapture
 //! ```
 
 use std::path::Path;
@@ -116,7 +116,7 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
         memory: 8G
 
     - name: Verify Online
-      run: curl -fsS --max-time 30 http://archive.ubuntu.com/ > /dev/null
+      run: curl -fsS --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 60 http://archive.ubuntu.com/ > /dev/null
 
     - name: Build Artifacts
       run: |

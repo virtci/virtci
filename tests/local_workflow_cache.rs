@@ -5,12 +5,12 @@
 //!
 //! ```sh
 //! ./.ci/upstream/fetch_ubuntu_images.sh
-//! cargo test --test local_workflow_cache -- --ignored --test-threads=1 --show-output
+//! cargo test --test local_workflow_cache -- --ignored --test-threads=1 --no-capture
 //! ```
 //!
 //! ```powershell
 //! .\.ci\upstream\fetch_ubuntu_images.ps1
-//! cargo test --test local_workflow_cache -- --ignored --test-threads=1 --show-output
+//! cargo test --test local_workflow_cache -- --ignored --test-threads=1 --no-capture
 //! ```
 
 use std::path::Path;
@@ -91,7 +91,7 @@ fn cache_invalidates_on_files_modified() {
 
     let tracked = env.test_dir.join("tracked.txt");
     std::fs::write(&tracked, b"v1").expect("write tracked file");
-    let cache_block = format!("  cache:\n files_modified:\n      {}\n", slashed(&tracked));
+    let cache_block = format!("  cache:\n    files_modified:\n      - {}\n", slashed(&tracked));
     let workflow = write_workflow(
         &env,
         &stamp_workflow(ni.name, &out_dir_str(&env), &cache_block),
