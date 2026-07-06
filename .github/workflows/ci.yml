@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run Checks and Dependency Audits
-        run: exec cargo run -- run .ci/check/ubuntu_check_x64.yml
+        run: exec cargo run -- run .ci/check/ubuntu_check_x64.yml --no-cache
 
   ubuntu-arm64-check:
     runs-on:
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run Checks and Dependency Audits
-        run: exec cargo run -- run .ci/check/ubuntu_check_arm64.yml
+        run: exec cargo run -- run .ci/check/ubuntu_check_arm64.yml --no-cache
 
   macos-arm64-check:
     runs-on:
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run Checks and Dependency Audits
-        run: exec cargo run -- run .ci/check/macos_check_arm64.yml
+        run: exec cargo run -- run .ci/check/macos_check_arm64.yml --no-cache
 
   windows-x64-check:
     runs-on:
@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run Checks and Dependency Audits
-        run: exec cargo run -- run .ci/check/windows_check_x64.yml
+        run: exec cargo run -- run .ci/check/windows_check_x64.yml --no-cache
 
   windows-arm64-check:
     runs-on:
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run Checks and Dependency Audits
-        run: exec cargo run -- run .ci/check/windows_check_arm64.yml
+        run: exec cargo run -- run .ci/check/windows_check_arm64.yml --no-cache
 
   ubuntu-x64-host-system-tests:
     needs: ubuntu-x64-check
@@ -90,7 +90,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
-        run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_x64.yml
+        run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_x64.yml --no-cache
 
   ubuntu-arm64-host-system-tests:
     needs: ubuntu-arm64-check
@@ -102,7 +102,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
-        run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_arm64.yml
+        run: exec cargo run -- run .ci/system_tests/ubuntu_system_tests_arm64.yml --no-cache
 
   macos-arm64-host-system-tests:
     needs: macos-arm64-check
@@ -114,7 +114,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
-        run: exec cargo run -- run .ci/system_tests/macos_system_tests_arm64.yml
+        run: exec cargo run -- run .ci/system_tests/macos_system_tests_arm64.yml --no-cache
 
   windows-x64-host-system-tests:
     needs: windows-x64-check
@@ -126,7 +126,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
-        run: exec cargo run -- run .ci/system_tests/windows_system_tests_x64.yml
+        run: exec cargo run -- run .ci/system_tests/windows_system_tests_x64.yml --no-cache
 
   windows-arm64-host-system-tests:
     needs: windows-arm64-check
@@ -138,4 +138,4 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Run System Tests
-        run: exec cargo run -- run .ci/system_tests/windows_system_tests_arm64.yml
+        run: exec cargo run -- run .ci/system_tests/windows_system_tests_arm64.yml --no-cache
