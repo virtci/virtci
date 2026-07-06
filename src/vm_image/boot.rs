@@ -78,6 +78,7 @@ fn boot_qemu(
         image_desc,
         paths,
         args.clone,
+        crate::run::cache::CachePlan::Disabled,
         !args.nographics,
         serial,
         orphans.clone(),

@@ -17,7 +17,7 @@ use crate::{
     orphan::OrphanTracker,
     run::{
         cache::{
-            self, CacheNamespace,
+            self, CachePlan,
             metadata::{
                 CacheMetadata, CachedVm, Fingerprint, PlannedQemuArtifact, QemuArtifactKind,
             },
@@ -76,6 +76,11 @@ pub struct QemuBackend {
     /// Long-term cache root in the exec namespace (`.cache` under the user home, or its WSL2 UNC
     /// equivalent). A successful run's slot is written under here by [`Self::cache_run_files`].
     pub cache_dir: TargetPath,
+    /// Chosen by the caller.
+    pub cache_plan: CachePlan,
+    /// Shared flock for a `cache_plan` `Consume` run. RAII will drop this.
+    #[allow(dead_code)]
+    cache_slot_lock: Option<FileLock>,
 
     /// Shared or exclusive `vci_image_<name>.lock`
     pub image_lock: FileLock,
@@ -108,6 +113,7 @@ impl QemuBackend {
         base_image: ImageDescription,
         paths: &VciGlobalPaths,
         clone: bool,
+        cache_plan: CachePlan,
         graphics: bool,
         serial: SerialKind,
         orphans: OrphanTracker,
@@ -161,6 +167,9 @@ impl QemuBackend {
         #[cfg(not(target_os = "windows"))]
         let ssh_ip: String = "127.0.0.1".to_string();
 
+        let (cache_plan, cache_slot_lock) =
+            finalize_cache_plan(cache_plan, &paths.temp, &name, &base_image);
+
         let setup = setup_run(
             &name,
             run_id.id,
@@ -169,6 +178,7 @@ impl QemuBackend {
             &exec_target,
             serial,
             clone,
+            &cache_plan,
         )?;
 
         let host_temp_dir = paths.temp.clone();
@@ -189,6 +199,8 @@ impl QemuBackend {
             host_temp_dir,
             exec_target_temp_dir,
             cache_dir,
+            cache_plan,
+            cache_slot_lock,
             image_lock: setup.image_lock,
             host_port: None,
             disk: setup.disk,
@@ -503,6 +515,14 @@ impl VmBackend for QemuBackend {
         Some(self.disk.target().path.as_path())
     }
 
+    fn is_cached_run(&self) -> bool {
+        matches!(self.cache_plan, CachePlan::Consume { .. })
+    }
+
+    fn produces_cache(&self) -> bool {
+        matches!(self.cache_plan, CachePlan::Produce { .. })
+    }
+
     /// A QEMU backend has 3 unique things it can write to a cache.
     ///
     /// 1. The main disk qcow2 overlay (required)
@@ -513,15 +533,12 @@ impl VmBackend for QemuBackend {
     /// fails midway, the reaper can get it.
     fn cache_run_files(
         &self,
-        namespace: &CacheNamespace,
         fingerprint: &Fingerprint,
         ttl_secs: Option<u64>,
     ) -> anyhow::Result<()> {
-        let namespace = match namespace {
-            CacheNamespace::Disabled(reason) => {
-                anyhow::bail!("no cache namespace to write the cache to: {reason}")
-            }
-            CacheNamespace::Enabled { namespace } => namespace,
+        let namespace = match &self.cache_plan {
+            CachePlan::Produce { namespace } => namespace,
+            CachePlan::Consume { .. } | CachePlan::Disabled => return Ok(()),
         };
 
         // Only a temp overlay or copy can be put into the cache.
@@ -555,6 +572,23 @@ impl VmBackend for QemuBackend {
 
         let image_id = cache::image_id(&self.base_image);
         let slot = cache::slot_dir(&self.cache_dir, namespace, &self.name, &image_id);
+
+        // Exclusive flock of the namespace cache for this workflow.
+        let lock_path = self
+            .host_temp_dir
+            .join(cache::slot_lock_filename(&cache::slot_rel(
+                namespace, &self.name, &image_id,
+            )));
+        let _slot_lock = match FileLock::try_new(&lock_path) {
+            Ok(lock) => lock,
+            Err(_) => {
+                eprintln!(
+                    "Warning: cache slot for job '{}' is in use by another run; skipping cache write.",
+                    self.name
+                );
+                return Ok(());
+            }
+        };
 
         let artifacts = cache::metadata::move_qemu_artifacts_into_slot(&slot, &planned)?;
 
@@ -712,9 +746,17 @@ fn acquire_image_lock(
     }
 }
 
-/// Set up everything a run needs in `exec_target`'s temp dir, short of acquiring the SSH port
-/// (that waits until launch). `clone` selects throwaway overlays/copies (`virtci run`) vs the
-/// image's own files in place (`virtci boot`), decided per artifact via [`BackingFile`].
+/// Set up everything a run needs, short of acquiring the SSH port (that waits until launch).
+/// `clone` selects throwaway overlays/copies (`virtci run`) vs the image's own files in place
+/// (`virtci boot`), decided per artifact via [`BackingFile`].
+///
+/// `cache` decides where the throwaway overlays/vars live and what they're backed by:
+/// - [`CachePlan::Produce`] puts them in the `.cache-staging` dir (same filesystem as the slot)
+/// backed by the base image.
+/// - [`CachePlan::Consume`] puts them in the temp dir backed by the slot's cached artifacts (qcow2
+/// overlay chain).
+/// - [`CachePlan::Disabled`] puts them in the temp dir backed by the base image (overlay but not
+/// a chain).
 fn setup_run(
     name: &str,
     id: u16,
@@ -723,12 +765,14 @@ fn setup_run(
     exec_target: &HostExecTarget,
     serial: SerialKind,
     clone: bool,
+    cache: &CachePlan,
 ) -> anyhow::Result<RunSetup> {
     let qemu_config = base_image.backend.as_qemu().expect("Expected QEMU config");
 
     let image_lock = acquire_image_lock(paths, &base_image.name, clone)?;
 
-    // May be inside WSL2.
+    // May be inside WSL2. TPM state and the serial log always live here. Only the cache
+    // promotable overlays/vars may instead go to the staging dir (see `artifact_dir`).
     let temp_dir = temp_dir_target(paths, exec_target);
     std::fs::create_dir_all(&temp_dir.path).with_context(|| {
         format!(
@@ -737,19 +781,49 @@ fn setup_run(
         )
     })?;
 
-    let disk = setup_disk(name, id, qemu_config, paths, exec_target, &temp_dir, clone)?;
+    let staging_dir = cache_staging_dir_target(paths, exec_target);
+    let producing = matches!(cache, CachePlan::Produce { .. });
+    if producing {
+        std::fs::create_dir_all(&staging_dir.path).with_context(|| {
+            format!(
+                "Failed to create cache staging directory {}",
+                staging_dir.path.display()
+            )
+        })?;
+    }
+    let artifact_dir = if producing { &staging_dir } else { &temp_dir };
+
+    let disk = setup_disk(
+        name,
+        id,
+        qemu_config,
+        paths,
+        exec_target,
+        artifact_dir,
+        clone,
+        cache,
+    )?;
     let (uefi_code, uefi_vars) = setup_uefi(
         name,
         id,
         qemu_config,
         paths,
         exec_target,
-        &temp_dir,
+        artifact_dir,
         clone,
         base_image.arch,
+        cache,
     )?;
-    let additional_drives =
-        setup_additional_drives(name, id, qemu_config, paths, exec_target, &temp_dir, clone)?;
+    let additional_drives = setup_additional_drives(
+        name,
+        id,
+        qemu_config,
+        paths,
+        exec_target,
+        artifact_dir,
+        clone,
+        cache,
+    )?;
 
     // swtpm state is always a fresh per-run scratch dir, even in base mode: the `.vci` does not
     // store vTPM state yet, so persisting it across boots is a separate, future feature.
@@ -789,16 +863,18 @@ fn setup_run(
     })
 }
 
-/// Main disk: a throwaway qcow2 overlay backed by the base (clone), or the base disk itself used
-/// in place so writes persist (base).
+/// Make the qcow2 overlay. If `cache` is [`CachePlan::Consume`], overlay is a chain of the cached
+/// overlay, otherwise just a normal overlay on the base.
+#[allow(clippy::too_many_arguments)]
 fn setup_disk(
     name: &str,
     id: u16,
     qemu_config: &crate::vm_image::QemuConfig,
     paths: &VciGlobalPaths,
     exec_target: &HostExecTarget,
-    temp_dir: &TargetPath,
+    artifact_dir: &TargetPath,
     clone: bool,
+    cache: &CachePlan,
 ) -> anyhow::Result<BackingFile> {
     if !clone {
         return Ok(BackingFile::Base(config_path_target_with_unc(
@@ -808,9 +884,11 @@ fn setup_disk(
         )));
     }
 
-    // Non-UNC path, but may be a path to be done inside WSL2.
-    let source_exec = expand_exec_path_no_unc(&qemu_config.image, exec_target, paths);
-    let overlay = temp_dir.join(&format!("vci-{name}-{id:05}.qcow2"));
+    let source_exec = match cache {
+        CachePlan::Consume { slot, .. } => slot.join("disk.qcow2").native_path(),
+        _ => expand_exec_path_no_unc(&qemu_config.image, exec_target, paths),
+    };
+    let overlay = artifact_dir.join(&format!("vci-{name}-{id:05}.qcow2"));
     create_backing_file(&source_exec, &overlay.native_path(), exec_target)
         .context("Failed to create the thin qcow2 overlay backing the clone")?;
     Ok(BackingFile::Temp(overlay))
@@ -823,9 +901,10 @@ fn setup_uefi(
     qemu_config: &crate::vm_image::QemuConfig,
     paths: &VciGlobalPaths,
     exec_target: &HostExecTarget,
-    temp_dir: &TargetPath,
+    artifact_dir: &TargetPath,
     clone: bool,
     arch: Arch,
+    cache: &CachePlan,
 ) -> anyhow::Result<(Option<String>, Option<BackingFile>)> {
     let Some(uefi) = &qemu_config.uefi else {
         return Ok((None, None));
@@ -866,8 +945,14 @@ fn setup_uefi(
         ),
     };
 
+    // UEFI vars are fresh per run, but copied from any cache one or otherwise.
+    let vars_src = match cache {
+        CachePlan::Consume { slot, .. } => slot.join("vars.fd"),
+        _ => vars_src,
+    };
+
     let vars_backing = if substitute.is_some() || clone {
-        let dest = temp_dir.join(&format!("vci-{name}-{id:05}-VARS.fd"));
+        let dest = artifact_dir.join(&format!("vci-{name}-{id:05}-VARS.fd"));
         let contents = std::fs::read(&vars_src.path)
             .with_context(|| format!("Failed to read UEFI vars {}", vars_src.path.display()))?;
         std::fs::write(&dest.path, &contents)
@@ -880,14 +965,16 @@ fn setup_uefi(
     Ok((Some(code), Some(vars_backing)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup_additional_drives(
     name: &str,
     id: u16,
     qemu_config: &crate::vm_image::QemuConfig,
     paths: &VciGlobalPaths,
     exec_target: &HostExecTarget,
-    temp_dir: &TargetPath,
+    artifact_dir: &TargetPath,
     clone: bool,
+    cache: &CachePlan,
 ) -> anyhow::Result<Vec<AdditionalDrive>> {
     let Some(specs) = &qemu_config.additional_drives else {
         return Ok(Vec::new());
@@ -905,8 +992,13 @@ fn setup_additional_drives(
         };
 
         let file = if clone {
-            let source = expand_exec_path_no_unc(file_path, exec_target, paths);
-            let overlay = temp_dir.join(&format!("vci-{name}-drive{idx}-{id:05}.qcow2"));
+            let source = match cache {
+                CachePlan::Consume { slot, .. } => {
+                    slot.join(&format!("drive{idx}.qcow2")).native_path()
+                }
+                _ => expand_exec_path_no_unc(file_path, exec_target, paths),
+            };
+            let overlay = artifact_dir.join(&format!("vci-{name}-drive{idx}-{id:05}.qcow2"));
             create_backing_file(&source, &overlay.native_path(), exec_target)
                 .with_context(|| format!("Failed to create overlay for additional drive {idx}"))?;
             BackingFile::Temp(overlay)
@@ -1005,6 +1097,99 @@ fn cache_dir_target(paths: &VciGlobalPaths, exec_target: &HostExecTarget) -> Tar
     {
         let _ = exec_target;
         paths.cache_dir()
+    }
+}
+
+/// Actually verifies the cache and decides whether to consume, produce, or do nothing.
+fn finalize_cache_plan(
+    plan: CachePlan,
+    host_temp: &Path,
+    job: &str,
+    base_image: &ImageDescription,
+) -> (CachePlan, Option<FileLock>) {
+    let CachePlan::Consume { namespace, slot } = &plan else {
+        return (plan, None);
+    };
+
+    let image_id = cache::image_id(base_image);
+    let rel = cache::slot_rel(namespace, job, &image_id);
+    let lock_path = host_temp.join(cache::slot_lock_filename(&rel));
+
+    let downgrade = |reason: &str| {
+        eprintln!("Warning: cached slot for job '{job}' {reason}; rebuilding from the base image.");
+        (
+            CachePlan::Produce {
+                namespace: namespace.clone(),
+            },
+            None,
+        )
+    };
+
+    match FileLock::try_new_shared(&lock_path) {
+        Ok(lock) => match CacheMetadata::read_from_slot(slot) {
+            Some(meta) if meta.verify_artifacts(slot) => (plan, Some(lock)),
+            _ => downgrade("failed its integrity check under lock"),
+        },
+        Err(_) => downgrade("is busy (being written by another run)"),
+    }
+}
+
+pub fn cache_root_for_image(paths: &VciGlobalPaths, base_image: &ImageDescription) -> TargetPath {
+    #[cfg(target_os = "windows")]
+    {
+        if base_image.wsl_distro.is_some() {
+            return paths.wsl_cache_dir();
+        }
+        return paths.cache_dir();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = base_image;
+        paths.cache_dir()
+    }
+}
+
+fn exec_target_for_image(base_image: &ImageDescription) -> HostExecTarget {
+    #[cfg(target_os = "windows")]
+    {
+        match &base_image.wsl_distro {
+            Some(distro) => HostExecTarget::WSL2(distro.clone()),
+            None => HostExecTarget::WindowsNative,
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = base_image;
+        HostExecTarget::MacOS
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = base_image;
+        HostExecTarget::Linux
+    }
+}
+
+pub fn base_image_marker(paths: &VciGlobalPaths, base_image: &ImageDescription) -> Option<String> {
+    let qemu = base_image.backend.as_qemu()?;
+    let exec_target = exec_target_for_image(base_image);
+    let disk = config_path_target_with_unc(&qemu.image, &exec_target, paths);
+    crate::run::cache::metadata::file_marker(&disk).ok()
+}
+
+fn cache_staging_dir_target(paths: &VciGlobalPaths, exec_target: &HostExecTarget) -> TargetPath {
+    #[cfg(target_os = "windows")]
+    {
+        if let HostExecTarget::WSL2(_) = exec_target {
+            return paths.wsl_cache_staging_dir();
+        }
+        return paths.cache_staging_dir();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = exec_target;
+        paths.cache_staging_dir()
     }
 }
 

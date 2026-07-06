@@ -52,6 +52,37 @@ impl CacheMetadata {
         tmp.atomic_file_rename(&slot_dir.join(Self::FILENAME))
             .context("failed to commit cache.json into the slot")
     }
+
+    pub fn read_from_slot(slot_dir: &TargetPath) -> Option<Self> {
+        let path = slot_dir.join(Self::FILENAME);
+        let bytes = std::fs::read(&path.path).ok()?;
+        let meta: Self = serde_json::from_slice(&bytes).ok()?;
+        if meta.format_version != CACHE_FORMAT_VERSION {
+            return None;
+        }
+        Some(meta)
+    }
+
+    /// Checks all artifacts are actually there.
+    pub fn verify_artifacts(&self, slot_dir: &TargetPath) -> bool {
+        match &self.vm {
+            CachedVm::Qemu { artifacts } => artifacts
+                .iter()
+                .all(|a| file_marker(&slot_dir.join(&a.filename)).is_ok_and(|m| m == a.marker)),
+            // Tart slots aren't produced yet, so nothing valid to consume.
+            CachedVm::Tart {} => false,
+        }
+    }
+
+    pub fn is_fresh_hit(&self, fresh: &Fingerprint, now_secs: u64) -> bool {
+        if self.fingerprint != *fresh {
+            return false;
+        }
+        match self.ttl_secs {
+            Some(ttl) => now_secs <= self.created_at.saturating_add(ttl),
+            None => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +152,7 @@ pub fn move_qemu_artifacts_into_slot(
 }
 
 /// Snapshot of every input that can invalidate a cache, captured when the cache is produced.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fingerprint {
     /// blake3 of the workflow YAML (whole file).
     pub workflow_hash: String,
@@ -140,9 +171,6 @@ pub struct Fingerprint {
     /// secrets. unset variables record `"unset"`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<InputHash>,
-    /// The run command as is. It's re-executed on consume.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
 }
 
 impl Fingerprint {
@@ -192,7 +220,6 @@ impl Fingerprint {
             files_modified,
             files_list,
             env,
-            run: cfg.run.clone(),
         }
     }
 }
@@ -336,7 +363,6 @@ mod fingerprint_tests {
                 "does-not-exist-b".to_string(),
             ],
             files_list: vec![],
-            run: Some("test -d .".to_string()),
             env: vec![
                 "VCI_CACHE_TEST_ENV".to_string(),
                 "VCI_CACHE_TEST_UNSET".to_string(),
@@ -355,7 +381,6 @@ mod fingerprint_tests {
 
         assert_eq!(fp.workflow_hash, "wfhash");
         assert_eq!(fp.base_image_marker.as_deref(), Some("123:456"));
-        assert_eq!(fp.run.as_deref(), Some("test -d ."));
 
         // Order preserved, missing files flagged.
         let paths: Vec<&str> = fp.files_modified.iter().map(|i| i.input.as_str()).collect();
@@ -548,5 +573,92 @@ mod commit_tests {
         let _ = std::fs::remove_dir_all(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ci/temp/cache_commit_drives"),
         );
+    }
+
+    #[test]
+    fn read_from_slot_round_trips_and_verify_artifacts_detects_tampering() {
+        let paths = test_paths("verify");
+        let staging = paths.cache_staging_dir();
+        let cache = paths.cache_dir();
+        std::fs::create_dir_all(&staging.path).unwrap();
+
+        let disk_src = staging.join("vci-job-00001.qcow2");
+        std::fs::write(&disk_src.path, b"disk").unwrap();
+        let slot = slot_dir(&cache, "ns", "job", "img");
+        let artifacts = move_qemu_artifacts_into_slot(
+            &slot,
+            &[PlannedQemuArtifact {
+                source: disk_src,
+                kind: QemuArtifactKind::Disk,
+                filename: "disk.qcow2".to_string(),
+            }],
+        )
+        .unwrap();
+        CacheMetadata {
+            format_version: CACHE_FORMAT_VERSION,
+            namespace: "ns".to_string(),
+            job: "job".to_string(),
+            image_id: "img".to_string(),
+            created_at: 1,
+            ttl_secs: None,
+            fingerprint: Fingerprint::default(),
+            vm: CachedVm::Qemu { artifacts },
+        }
+        .write_into_slot(&slot)
+        .unwrap();
+
+        let meta = CacheMetadata::read_from_slot(&slot).expect("committed slot is readable");
+        assert!(meta.verify_artifacts(&slot), "untouched artifacts verify");
+
+        std::fs::write(&slot.join("disk.qcow2").path, b"tampered-bytes").unwrap();
+        assert!(
+            !meta.verify_artifacts(&slot),
+            "a changed artifact fails its marker"
+        );
+
+        std::fs::remove_file(&slot.join("disk.qcow2").path).unwrap();
+        assert!(!meta.verify_artifacts(&slot), "a missing artifact fails");
+
+        let _ = std::fs::remove_dir_all(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".ci/temp/cache_commit_verify"),
+        );
+    }
+
+    #[test]
+    fn is_fresh_hit_requires_matching_fingerprint_and_live_ttl() {
+        let fp = Fingerprint {
+            workflow_hash: "abc".to_string(),
+            ..Default::default()
+        };
+        let other = Fingerprint {
+            workflow_hash: "different".to_string(),
+            ..Default::default()
+        };
+        let meta = CacheMetadata {
+            format_version: CACHE_FORMAT_VERSION,
+            namespace: "ns".to_string(),
+            job: "job".to_string(),
+            image_id: "img".to_string(),
+            created_at: 1000,
+            ttl_secs: Some(100),
+            fingerprint: fp.clone(),
+            vm: CachedVm::Qemu { artifacts: vec![] },
+        };
+
+        assert!(meta.is_fresh_hit(&fp, 1050), "same fingerprint, within TTL");
+        assert!(
+            !meta.is_fresh_hit(&fp, 1101),
+            "expired past created_at + ttl"
+        );
+        assert!(
+            !meta.is_fresh_hit(&other, 1050),
+            "different fingerprint misses"
+        );
+
+        let no_ttl = CacheMetadata {
+            ttl_secs: None,
+            ..meta
+        };
+        assert!(no_ttl.is_fresh_hit(&fp, u64::MAX), "no TTL never expires");
     }
 }

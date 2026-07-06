@@ -306,14 +306,16 @@ impl TartBackend {
 }
 
 impl VmBackend for TartBackend {
+    fn is_cached_run(&self) -> bool {
+        false
+    }
+
     fn cache_run_files(
         &self,
-        _namespace: &crate::run::cache::CacheNamespace,
         _fingerprint: &crate::run::cache::metadata::Fingerprint,
         _ttl_secs: Option<u64>,
     ) -> anyhow::Result<()> {
-        // Placeholder: tart caching (a named `tart clone` into the cache store) is not built yet.
-        anyhow::bail!("cache writing is not yet implemented for the tart backend")
+        Ok(())
     }
 
     fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()> {

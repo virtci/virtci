@@ -145,6 +145,69 @@ pub fn image_id(image: &ImageDescription) -> String {
     truncate_hex(&h.finalize())
 }
 
+/// How the run behaves with caching decided before the backend is constructed (backend can
+/// invalidate this though if cannot do cache stuff for whatever reason).
+#[derive(Clone)]
+pub enum CachePlan {
+    Disabled,
+    /// MAY produce a cache, and isn't using a cache. Will produce on run success if possible.
+    /// All artifacts are written to the same filesystem as the potential output long-term storage
+    /// cache directory.
+    Produce {
+        namespace: String,
+    },
+    /// Will read from a cache slot.
+    Consume {
+        namespace: String,
+        slot: TargetPath,
+    },
+}
+
+impl CachePlan {
+    pub fn new(
+        namespace: &CacheNamespace,
+        cache_root: &TargetPath,
+        job: &str,
+        image_id: &str,
+        cache_hit: bool,
+        no_write: bool,
+    ) -> Self {
+        match namespace {
+            CacheNamespace::Disabled(_) => CachePlan::Disabled,
+            CacheNamespace::Enabled { namespace } if cache_hit => CachePlan::Consume {
+                namespace: namespace.clone(),
+                slot: slot_dir(cache_root, namespace, job, image_id),
+            },
+            // Miss with writing suppressed: behave like a plain uncached run.
+            CacheNamespace::Enabled { .. } if no_write => CachePlan::Disabled,
+            CacheNamespace::Enabled { namespace } => CachePlan::Produce {
+                namespace: namespace.clone(),
+            },
+        }
+    }
+
+    /// The usable namespace, if any (both producing and consuming carry one).
+    pub fn namespace(&self) -> Option<&str> {
+        match self {
+            CachePlan::Disabled => None,
+            CachePlan::Produce { namespace } | CachePlan::Consume { namespace, .. } => {
+                Some(namespace)
+            }
+        }
+    }
+}
+
+/// Slot location relative to cache root. `<namespace>/<job>/<image_id>`. Can be converted to a path
+/// when appropriate.
+pub fn slot_rel(namespace: &str, job: &str, image_id: &str) -> String {
+    format!("{}/{job}/{image_id}", namespace.trim_matches('/'))
+}
+
+/// flock file name.
+pub fn slot_lock_filename(slot_rel: &str) -> String {
+    format!("vci-cache-{}.lock", short_hash(slot_rel.as_bytes()))
+}
+
 /// `<cache_root>/<namespace>/<job>/<image_id>`.
 pub fn slot_dir(cache_root: &TargetPath, namespace: &str, job: &str, image_id: &str) -> TargetPath {
     let mut dir = cache_root.clone();
@@ -326,6 +389,73 @@ mod tests {
             false,
             Some("{ref}"),
             Some(&gi("o", "r", "bad ref")),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::{CacheNamespace, CachePlan, slot_lock_filename, slot_rel};
+    use crate::global_paths::TargetPath;
+    use std::path::PathBuf;
+
+    fn cache_root() -> TargetPath {
+        TargetPath {
+            path: PathBuf::from("/cache"),
+            #[cfg(target_os = "windows")]
+            wsl_distro: None,
+        }
+    }
+
+    #[test]
+    fn slot_rel_and_lock_name_are_stable_and_walk_reconstructible() {
+        // Producer/consumer derive the key from (namespace, job, image); the reaper derives it from
+        // the slot's path relative to the cache root. Both must agree, including a multi-part,
+        // slash-edged namespace.
+        let from_parts = slot_rel("/owner/repo/main/", "job", "img");
+        assert_eq!(from_parts, "owner/repo/main/job/img");
+        // What the reaper computes from `<root>/owner/repo/main/job/img` stripped of `<root>`:
+        let from_walk = "owner/repo/main/job/img";
+        assert_eq!(
+            slot_lock_filename(&from_parts),
+            slot_lock_filename(from_walk),
+            "lock name matches between the writer and the reaper"
+        );
+
+        // Distinct slots get distinct lock files.
+        assert_ne!(
+            slot_lock_filename(&slot_rel("ns", "job-a", "img")),
+            slot_lock_filename(&slot_rel("ns", "job-b", "img")),
+        );
+    }
+
+    #[test]
+    fn plan_hit_consumes_miss_produces_and_no_write_disables() {
+        let root = cache_root();
+        let enabled = CacheNamespace::Enabled {
+            namespace: "ns".to_string(),
+        };
+
+        // Hit -> Consume (reads are never suppressed, even with no_write).
+        assert!(matches!(
+            CachePlan::new(&enabled, &root, "job", "img", true, true),
+            CachePlan::Consume { .. }
+        ));
+        // Miss -> Produce.
+        assert!(matches!(
+            CachePlan::new(&enabled, &root, "job", "img", false, false),
+            CachePlan::Produce { .. }
+        ));
+        // Miss with no_write -> disabled (cold boot, writes nothing).
+        assert!(matches!(
+            CachePlan::new(&enabled, &root, "job", "img", false, true),
+            CachePlan::Disabled
+        ));
+        // No namespace -> always disabled.
+        let disabled = CacheNamespace::Disabled(super::DisabledReason::NoNamespaceSource);
+        assert!(matches!(
+            CachePlan::new(&disabled, &root, "job", "img", true, false),
+            CachePlan::Disabled
         ));
     }
 }

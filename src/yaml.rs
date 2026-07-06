@@ -81,9 +81,6 @@ pub struct Cache {
     /// new C++ source.
     #[serde(default)]
     pub files_list: Vec<String>,
-    /// Shell command to run, invalidating if the exit code is non zero.
-    #[serde(default)]
-    pub run: Option<String>,
     /// Invalidate if the hash of any of the environment variables provided has changed.
     #[serde(default)]
     pub env: Vec<String>,

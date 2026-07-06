@@ -53,6 +53,28 @@ pub const DEFAULT_VM_START_IDLE_TIMEOUT: u64 = 120;
 /// keeps spewing to serial without ever reaching SSH, so the idle timer never trips).
 pub const DEFAULT_VM_START_MAX_TIMEOUT: u64 = 1800;
 
+/// How long to wait for a VM to shut down (disk flush as well) before just SIGKILLing that thing.
+/// Overridable via the `VIRTCI_CACHE_SHUTDOWN_TIMEOUT` environment variable (in seconds).
+const CACHE_SHUTDOWN_TIMEOUT: u64 = 120;
+
+/// Resolve the graceful cache-shutdown timeout, honoring `VIRTCI_CACHE_SHUTDOWN_TIMEOUT` if set to a
+/// valid number of seconds, otherwise falling back to [`CACHE_SHUTDOWN_TIMEOUT`].
+fn cache_shutdown_timeout() -> u64 {
+    match std::env::var("VIRTCI_CACHE_SHUTDOWN_TIMEOUT") {
+        Ok(v) => match v.trim().parse::<u64>() {
+            Ok(secs) => secs,
+            Err(_) => {
+                eprintln!(
+                    "VirtCI Warning: ignoring invalid VIRTCI_CACHE_SHUTDOWN_TIMEOUT={v:?} (want an integer \
+                     number of seconds) using default of {CACHE_SHUTDOWN_TIMEOUT}s."
+                );
+                CACHE_SHUTDOWN_TIMEOUT
+            }
+        },
+        Err(_) => CACHE_SHUTDOWN_TIMEOUT,
+    }
+}
+
 /// How often, while waiting for SSH, to print a "still booting" progress line.
 const BOOT_STATUS_INTERVAL: u64 = 30;
 
@@ -177,6 +199,10 @@ pub struct Job {
     /// until the first boot completes.
     pub ssh_retry_budget: Option<Duration>,
     pub git_info: Option<GitInfo>,
+    /// Cache inputs captured host-side.
+    pub cache_fingerprint: cache::metadata::Fingerprint,
+    /// TTL (seconds) for a produced cache, from `cache.max_age`.
+    pub cache_ttl_secs: Option<u64>,
 }
 
 impl Job {
@@ -199,6 +225,8 @@ pub struct Step {
     pub timeout: u64,
     pub env: HashMap<String, String>,
     pub continue_on_error: bool,
+    /// Skip this step if the run is running from a cache, thus doesn't need to be executed.
+    pub skip_if_cached: bool,
 }
 
 pub enum StepKind {
@@ -317,6 +345,7 @@ impl Job {
             .magenta()
         );
 
+        let is_cached_run = self.backend.is_cached_run();
         for i in 0..self.steps.len() {
             if i == 0 && skip_first {
                 continue;
@@ -325,6 +354,18 @@ impl Job {
                 .name
                 .clone()
                 .unwrap_or_else(|| format!("Step {}", i + 1));
+
+            if is_cached_run && self.steps[i].skip_if_cached {
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}: {step_name} will be skipped (running from cache)",
+                        i + 1
+                    )
+                    .dimmed()
+                );
+                continue;
+            }
             let continue_on_error = self.steps[i].continue_on_error;
 
             let git_provider = GitProvider::detect_provider();
@@ -332,7 +373,7 @@ impl Job {
             if let Some(provider) = &git_provider
                 && matches!(provider, GitProvider::GitHub)
             {
-                println!("::group::VCI Step {}: {}", i + 1, step_name);
+                println!("::group::VirtCI Step {}: {}", i + 1, step_name);
             } else {
                 println!(
                     "{}",
@@ -360,7 +401,71 @@ impl Job {
             }
         }
 
+        let clean_shutdown = self.stop_vm_for_capture().await;
+        if clean_shutdown {
+            if let Err(e) = self
+                .backend
+                .cache_run_files(&self.cache_fingerprint, self.cache_ttl_secs)
+            {
+                eprintln!(
+                    "{}",
+                    format!("Warning: failed to write workflow cache: {e:#}").yellow()
+                );
+            }
+        }
+
         Ok(())
+    }
+
+    /// Stop the VM before its disk is captured into the cache. Needs to gracefully shutdown so the
+    /// thing doesn't get corrupted and disk can be flushed. SIGKILL when necessary, but that
+    /// means the cache cannot be written.
+    /// Returns `true` when it is safe to capture the disk into the cache.
+    async fn stop_vm_for_capture(&mut self) -> bool {
+        use colored::Colorize;
+
+        if !self.backend.produces_cache() {
+            self.backend.stop_vm();
+            return false;
+        }
+
+        let shutdown_cmd = match self.backend.os() {
+            GuestOs::Windows => "Stop-Computer -Force",
+            _ => "sudo shutdown -h now",
+        };
+        println!("{}", "Powering off the VM to cache a good disk...".dimmed());
+
+        {
+            let ssh = self.ssh();
+            let empty_env = std::collections::HashMap::new();
+            let fut = command::run_command(&ssh, shutdown_cmd, None, &empty_env, self.backend.os());
+            let _ = tokio::time::timeout(Duration::from_secs(15), fut).await;
+        }
+
+        let timeout = cache_shutdown_timeout();
+        let deadline = Instant::now() + Duration::from_secs(timeout);
+        let mut clean = false;
+        loop {
+            if self.backend.vm_has_exited() {
+                clean = true;
+                break;
+            }
+            if Instant::now() >= deadline {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "VirtCI Warning: VM did not power off within {timeout}s so forcing stop and \
+                         skipping cache write (disk may be corrupted)."
+                    )
+                    .yellow()
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
+        self.backend.stop_vm();
+        clean
     }
 
     async fn run_step(&mut self, step_idx: usize) -> anyhow::Result<()> {
