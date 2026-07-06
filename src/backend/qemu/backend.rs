@@ -590,6 +590,26 @@ impl VmBackend for QemuBackend {
             }
         };
 
+        // WE MUST RESPECT USER DISK LIMITS
+        let incoming_bytes: u64 = planned
+            .iter()
+            .map(|art| cache::disk_usage::path_allocated_bytes(&art.source))
+            .sum();
+        let limits = cache::lru::CacheLimits::from_env(&self.cache_dir);
+        if !cache::lru::make_room_for(
+            &self.cache_dir,
+            &self.host_temp_dir,
+            &limits,
+            incoming_bytes,
+        ) {
+            eprintln!(
+                "Warning: skipping cache write for job '{}' to stay within the configured disk \
+                 limits (VIRTCI_CACHE_BUDGET_GB / VIRTCI_CACHE_RETAIN_GB).",
+                self.name
+            );
+            return Ok(());
+        }
+
         let artifacts = cache::metadata::move_qemu_artifacts_into_slot(&slot, &planned)?;
 
         let created_at = std::time::SystemTime::now()
@@ -1127,7 +1147,10 @@ fn finalize_cache_plan(
 
     match FileLock::try_new_shared(&lock_path) {
         Ok(lock) => match CacheMetadata::read_from_slot(slot) {
-            Some(meta) if meta.verify_artifacts(slot) => (plan, Some(lock)),
+            Some(meta) if meta.verify_artifacts(slot) => {
+                cache::lru::touch_slot(slot);
+                (plan, Some(lock))
+            }
             _ => downgrade("failed its integrity check under lock"),
         },
         Err(_) => downgrade("is busy (being written by another run)"),

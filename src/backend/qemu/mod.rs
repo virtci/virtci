@@ -295,17 +295,19 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
     }
 
     #[cfg(target_os = "windows")]
-    let cache_roots: Vec<PathBuf> = {
-        let mut roots = vec![paths.cache_dir().path];
+    let cache_roots: Vec<crate::global_paths::TargetPath> = {
+        let mut roots = vec![paths.cache_dir()];
         if paths.wsl.is_some() {
-            roots.push(paths.wsl_cache_dir().path);
+            roots.push(paths.wsl_cache_dir());
         }
         roots
     };
     #[cfg(not(target_os = "windows"))]
-    let cache_roots: Vec<PathBuf> = vec![paths.cache_dir().path];
+    let cache_roots: Vec<crate::global_paths::TargetPath> = vec![paths.cache_dir()];
     for root in &cache_roots {
-        reap_partial_cache_slots(root, root, lock_dir);
+        reap_partial_cache_slots(&root.path, &root.path, lock_dir);
+        let limits = crate::run::cache::lru::CacheLimits::from_env(root);
+        crate::run::cache::lru::enforce_limits(root, lock_dir, &limits);
     }
 }
 

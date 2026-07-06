@@ -1,3 +1,6 @@
+// Copyright (C) 2026 gabkhanfig
+// SPDX-License-Identifier: GPL-2.0-only
+
 use std::path::{Path, PathBuf};
 
 use virtci::{global_paths::VciGlobalPaths, run_virtci_with_args, vm_image::list::load_all_images};

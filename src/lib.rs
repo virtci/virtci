@@ -605,7 +605,6 @@ fn extract_yaml_workflows(
                     &name,
                     &image_id,
                     cache_hit,
-                    yaml_job.cache.no_write_cache,
                 );
                 match &cache_plan {
                     run::cache::CachePlan::Consume { .. } => println!(

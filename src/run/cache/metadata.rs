@@ -367,7 +367,6 @@ mod fingerprint_tests {
                 "VCI_CACHE_TEST_ENV".to_string(),
                 "VCI_CACHE_TEST_UNSET".to_string(),
             ],
-            no_write_cache: false,
             max_age: None,
         };
 

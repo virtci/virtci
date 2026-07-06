@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 #[cfg(target_os = "windows")]
@@ -178,7 +178,7 @@ impl VciGlobalPaths {
         let cache_dir_name = if staging { ".cache-staging" } else { ".cache" };
 
         TargetPath {
-            path: self.user_home.join(cache_dir_name),
+            path: cache_home_base(&self.user_home).join(cache_dir_name),
             #[cfg(target_os = "windows")]
             wsl_distro: None,
         }
@@ -190,15 +190,28 @@ impl VciGlobalPaths {
 
         let wsl_info = self.wsl.as_ref().expect("Should have WSL paths");
 
-        let wsl_path = format!(
-            "{}/{cache_dir_name}",
-            wsl_info.user_home.trim_end_matches('/')
-        );
+        let base = wsl_cache_home_base(&wsl_info.user_home);
+        let wsl_path = format!("{}/{cache_dir_name}", base.trim_end_matches('/'));
         TargetPath {
             path: wsl_info.to_unc(&wsl_path),
             wsl_distro: Some(wsl_info.distro.clone()),
         }
     }
+}
+
+fn cache_home_base(user_home: &Path) -> PathBuf {
+    if let Some(over) = std::env::var_os("VIRTCI_CACHE_HOME") {
+        return PathBuf::from(over);
+    }
+    user_home.to_path_buf()
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_cache_home_base(wsl_user_home: &str) -> String {
+    if let Some(over) = std::env::var_os("VIRTCI_WSL_CACHE_HOME") {
+        return over.to_string_lossy().into_owned();
+    }
+    wsl_user_home.to_string()
 }
 
 /// All paths are WSL-namespace Linux paths stored as `String`, so they're build with '/'

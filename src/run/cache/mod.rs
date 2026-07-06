@@ -1,7 +1,9 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+pub mod disk_usage;
 pub mod file;
+pub mod lru;
 pub mod metadata;
 
 use anyhow::Context;
@@ -170,7 +172,6 @@ impl CachePlan {
         job: &str,
         image_id: &str,
         cache_hit: bool,
-        no_write: bool,
     ) -> Self {
         match namespace {
             CacheNamespace::Disabled(_) => CachePlan::Disabled,
@@ -178,8 +179,6 @@ impl CachePlan {
                 namespace: namespace.clone(),
                 slot: slot_dir(cache_root, namespace, job, image_id),
             },
-            // Miss with writing suppressed: behave like a plain uncached run.
-            CacheNamespace::Enabled { .. } if no_write => CachePlan::Disabled,
             CacheNamespace::Enabled { namespace } => CachePlan::Produce {
                 namespace: namespace.clone(),
             },
@@ -438,23 +437,18 @@ mod slot_tests {
 
         // Hit -> Consume (reads are never suppressed, even with no_write).
         assert!(matches!(
-            CachePlan::new(&enabled, &root, "job", "img", true, true),
+            CachePlan::new(&enabled, &root, "job", "img", true),
             CachePlan::Consume { .. }
         ));
         // Miss -> Produce.
         assert!(matches!(
-            CachePlan::new(&enabled, &root, "job", "img", false, false),
+            CachePlan::new(&enabled, &root, "job", "img", false),
             CachePlan::Produce { .. }
-        ));
-        // Miss with no_write -> disabled (cold boot, writes nothing).
-        assert!(matches!(
-            CachePlan::new(&enabled, &root, "job", "img", false, true),
-            CachePlan::Disabled
         ));
         // No namespace -> always disabled.
         let disabled = CacheNamespace::Disabled(super::DisabledReason::NoNamespaceSource);
         assert!(matches!(
-            CachePlan::new(&disabled, &root, "job", "img", true, false),
+            CachePlan::new(&disabled, &root, "job", "img", true),
             CachePlan::Disabled
         ));
     }

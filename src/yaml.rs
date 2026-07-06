@@ -84,11 +84,6 @@ pub struct Cache {
     /// Invalidate if the hash of any of the environment variables provided has changed.
     #[serde(default)]
     pub env: Vec<String>,
-    /// Don't bother writing an updated cache even if this workflow run can write an update cache.
-    /// Cache files can only be written if there was a cache miss. This flag can prevent writing
-    /// regardless, whether it's to conserve storage, or the workflow is fast and simple enough.
-    #[serde(default)]
-    pub no_write_cache: bool,
     /// If this workflow writes a cache, sets its TTL to this value. No post-fix defaults to
     /// integer as days, but can be post-fixed.
     ///
