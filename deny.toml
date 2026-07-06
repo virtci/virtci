@@ -19,14 +19,6 @@ allow = [
   "GPL-2.0-only",
 ]
 
-[[licenses.exceptions]]
-allow = ["LGPL-2.1-or-later"]
-crate = "mp4parse"
-
-[[licenses.exceptions]]
-allow = ["OpenSSL"]
-crate = "aws-lc-sys"
-
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
