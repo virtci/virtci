@@ -428,7 +428,10 @@ impl VmBackend for QemuBackend {
     }
 
     fn offline_enforce_cmd(&self) -> Option<&'static str> {
-        // Do both the restrict slirp AND also disable the default route.
+        // WSL2 exec target + Windows VM restrict INSIDE the VM
+        // WSL2 exec target + Linux/other VM, also restrict INSIDE the VM
+        // Native exec target + windows VM, restrict slirp and inside VM.
+        // Native exec target + non windows, restrict slirp only.
         match self.base_image.os {
             crate::vm_image::GuestOs::Windows => Some(
                 "$peer = ($env:SSH_CONNECTION -split ' ')[0]; \
@@ -437,11 +440,12 @@ impl VmBackend for QemuBackend {
                  if ($LASTEXITCODE -ne 0) { exit 1 }; \
                  route delete ::/0 2>&1 | Out-Null; exit 0",
             ),
-            _ => Some(
+            _ if matches!(self.exec_target, HostExecTarget::WSL2(_)) => Some(
                 "peer=\"${SSH_CONNECTION%% *}\" && \
                  { sudo ip route add \"$peer/32\" via 10.0.2.2 2>/dev/null || true; } && \
                  sudo ip route del default && (sudo ip -6 route del default || true)",
             ),
+            _ => None,
         }
     }
 
