@@ -428,14 +428,7 @@ impl VmBackend for QemuBackend {
     }
 
     fn offline_enforce_cmd(&self) -> Option<&'static str> {
-        // slirp's `restrict=yes` breaks host->guest SSH on WSL2 (see `build_qemu_args`),
-        // so offline is enforced in-guest by deleting the default route.
-        // The tart backend does this. The subnet route remains, so SSH via the slirp gateway keeps
-        // working. Route tables are in-memory and reset on VM restart, so toggling works.
-        // Absolutely not as good as the restrict.
-        if !matches!(self.exec_target, HostExecTarget::WSL2(_)) {
-            return None;
-        }
+        // Do both the restrict slirp AND also disable the default route.
         match self.base_image.os {
             crate::vm_image::GuestOs::Windows => Some(
                 "$peer = ($env:SSH_CONNECTION -split ' ')[0]; \

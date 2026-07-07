@@ -128,10 +128,8 @@ windows-system-tests-arm64:
       restart:
         offline: true
 
-    - name: Try Windows Reset Fix
-      run: |
-        Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
-        Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False
+    - name: Show Offline Routing State
+      run: route print -4
 
     - name: Workflow Run Local Workflow Cache Tests
       workdir: virtci

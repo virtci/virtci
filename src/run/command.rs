@@ -2,10 +2,74 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use russh::ChannelMsg;
+use russh::client;
 
-use crate::{run::connect_resilient, vm_image::GuestOs, vm_image::SshTarget};
+use crate::{
+    run::{ClientHandler, connect_resilient},
+    vm_image::GuestOs,
+    vm_image::SshTarget,
+};
+
+#[derive(Default)]
+struct ChannelOutcome {
+    saw_eof: bool,
+    saw_close: bool,
+    exit_signal: Option<String>,
+    bytes: usize,
+}
+
+async fn diagnose_missing_exit_status(
+    handle: &client::Handle<ClientHandler>,
+    outcome: &ChannelOutcome,
+    elapsed: Duration,
+) -> String {
+    let transport = match tokio::time::timeout(
+        Duration::from_secs(10),
+        handle.channel_open_session(),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {
+            "transport still alive (a fresh session opened) and only this channel was closed \
+                      by the server, no exit-status was sent"
+                .to_string()
+        }
+        Ok(Err(e)) => format!(
+            "transport is dead (opening a fresh session failed: {e}) and the SSH connection itself \
+             dropped, not just the channel"
+        ),
+        Err(_) => "transport is dead (opening a fresh session hung >10s) since the SSH connection \
+                   itself is wedged"
+            .to_string(),
+    };
+
+    let mut seen = Vec::new();
+    if outcome.saw_eof {
+        seen.push("EOF".to_string());
+    }
+    if outcome.saw_close {
+        seen.push("Close".to_string());
+    }
+    if let Some(sig) = &outcome.exit_signal {
+        seen.push(format!("ExitSignal({sig})"));
+    }
+    let seen = if seen.is_empty() {
+        "none (channel went straight to closed)".to_string()
+    } else {
+        seen.join(", ")
+    };
+
+    format!(
+        "SSH channel closed without providing an exit status \
+         [{transport}; channel messages seen before close: {seen}; \
+         {} bytes received over {:.1}s]",
+        outcome.bytes,
+        elapsed.as_secs_f64(),
+    )
+}
 
 pub struct CommandResult {
     pub exit_code: u32,
@@ -45,16 +109,20 @@ pub async fn run_command(
     let mut stderr_str = String::new();
     let mut exit_code: u32 = 0;
     let mut got_exit_status = false;
+    let mut outcome = ChannelOutcome::default();
+    let exec_at = Instant::now();
 
     loop {
         match channel.wait().await {
             Some(ChannelMsg::Data { data }) => {
+                outcome.bytes += data.len();
                 let s = String::from_utf8_lossy(&data);
                 print!("{s}");
                 std::io::Write::flush(&mut std::io::stdout()).ok();
                 stdout_str.push_str(&s);
             }
             Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
+                outcome.bytes += data.len();
                 let s = String::from_utf8_lossy(&data);
                 eprint!("{s}");
                 std::io::Write::flush(&mut std::io::stderr()).ok();
@@ -64,6 +132,15 @@ pub async fn run_command(
                 exit_code = exit_status;
                 got_exit_status = true;
             }
+            Some(ChannelMsg::Eof) => outcome.saw_eof = true,
+            Some(ChannelMsg::Close) => outcome.saw_close = true,
+            Some(ChannelMsg::ExitSignal {
+                signal_name,
+                error_message,
+                ..
+            }) => {
+                outcome.exit_signal = Some(format!("{signal_name:?}: {error_message}"));
+            }
             None => {
                 break;
             }
@@ -71,15 +148,20 @@ pub async fn run_command(
         }
     }
 
+    if !got_exit_status {
+        let diag = diagnose_missing_exit_status(&handle, &outcome, exec_at.elapsed()).await;
+        handle
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .ok();
+        return Err(diag);
+    }
+
     channel.close().await.ok();
     handle
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
-
-    if !got_exit_status {
-        return Err("SSH channel closed without providing an exit status".to_string());
-    }
 
     Ok(CommandResult {
         exit_code,
@@ -177,16 +259,31 @@ pub async fn run_command_binary(
     let mut stderr = Vec::new();
     let mut exit_code: u32 = 0;
     let mut got_exit_status = false;
+    let mut outcome = ChannelOutcome::default();
+    let exec_at = Instant::now();
 
     loop {
         match channel.wait().await {
-            Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
+            Some(ChannelMsg::Data { data }) => {
+                outcome.bytes += data.len();
+                stdout.extend_from_slice(&data);
+            }
             Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
+                outcome.bytes += data.len();
                 stderr.extend_from_slice(&data);
             }
             Some(ChannelMsg::ExitStatus { exit_status }) => {
                 exit_code = exit_status;
                 got_exit_status = true;
+            }
+            Some(ChannelMsg::Eof) => outcome.saw_eof = true,
+            Some(ChannelMsg::Close) => outcome.saw_close = true,
+            Some(ChannelMsg::ExitSignal {
+                signal_name,
+                error_message,
+                ..
+            }) => {
+                outcome.exit_signal = Some(format!("{signal_name:?}: {error_message}"));
             }
             None => {
                 break;
@@ -195,15 +292,20 @@ pub async fn run_command_binary(
         }
     }
 
+    if !got_exit_status {
+        let diag = diagnose_missing_exit_status(&handle, &outcome, exec_at.elapsed()).await;
+        handle
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .ok();
+        return Err(diag);
+    }
+
     channel.close().await.ok();
     handle
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
-
-    if !got_exit_status {
-        return Err("SSH channel closed without providing an exit status".to_string());
-    }
 
     Ok(BinaryCommandResult {
         exit_code,
