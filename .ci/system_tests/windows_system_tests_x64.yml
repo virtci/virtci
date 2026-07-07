@@ -91,6 +91,11 @@ windows-system-tests-x64:
       workdir: virtci
       run: cargo test --locked --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture
 
+    - name: Try Windows Reset Fix
+      run: |
+        Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
+        Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False
+
     - name: Go Offline For Cache Generation Tests
       restart:
         offline: true
