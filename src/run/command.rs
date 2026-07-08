@@ -68,8 +68,7 @@ pub fn wrap_with_timeout(user_cmd: &str, secs: u64, mech: TimeoutMechanism) -> S
                  ( sleep {secs}; : > \"$f\"; kill -TERM -\"$c\" 2>/dev/null; sleep 5; \
                  kill -KILL -\"$c\" 2>/dev/null ) & w=$!; wait \"$c\"; s=$?; \
                  kill \"$w\" 2>/dev/null; kill -- -\"$w\" 2>/dev/null; \
-                 if [ -s \"$f\" ]; then rm -f \"$f\"; exit {code}; fi; rm -f \"$f\"; exit \"$s\"",
-                code = TIMEOUT_EXIT_CODE,
+                 if [ -s \"$f\" ]; then rm -f \"$f\"; exit {TIMEOUT_EXIT_CODE}; fi; rm -f \"$f\"; exit \"$s\""
             );
             format!("bash -c '{watchdog}' _ {}", posix_single_quote(user_cmd))
         }
@@ -92,8 +91,7 @@ fn windows_timeout_wrapper(user_cmd: &str, secs: u64) -> String {
          finally {{ Stop-Job $__vciWd -ErrorAction SilentlyContinue; \
          Remove-Job $__vciWd -Force -ErrorAction SilentlyContinue }}; \
          if (Test-Path $__vciFlag) {{ Remove-Item $__vciFlag -Force -ErrorAction SilentlyContinue; \
-         exit {code} }}; exit $__vciCode",
-        code = TIMEOUT_EXIT_CODE,
+         exit {TIMEOUT_EXIT_CODE} }}; exit $__vciCode"
     )
 }
 
