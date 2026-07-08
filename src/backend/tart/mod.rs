@@ -281,7 +281,7 @@ impl TartBackend {
 
     /// Spawn the real `tart run` for `clone_name`, retrying if Tart refuses
     /// because the host is at the macOS concurrent-VM cap.
-    fn spawn_tart_run_with_cap_retry(&self, clone_name: &str) -> anyhow::Result<Child> {.
+    fn spawn_tart_run_with_cap_retry(&self, clone_name: &str) -> anyhow::Result<Child> {
         const SURVIVE_POLLS: u32 = 8;
         const SURVIVE_INTERVAL_MS: u64 = 250;
 
