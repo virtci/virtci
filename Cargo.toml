@@ -10,7 +10,7 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
 serde_json = "1.0.149"
 serde_with = "3.17.0"
-russh = { version = "0.60.0", default-features = false, features = [
+russh = { version = "0.60.3", default-features = false, features = [
   "aws-lc-rs",
 ] }
 aws-lc-rs = { version = "1", features = ["prebuilt-nasm"] }
@@ -31,7 +31,8 @@ glob = "0.3.3"
 rust-embed = "8"
 mime_guess = "2"
 tiny_http = "0.12"
-anyhow = "1.0.102"
+anyhow = "1.0.103"
+blake3 = "1.8.5"
 
 [build-dependencies]
 cc = "1.2.27"

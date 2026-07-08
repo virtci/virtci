@@ -91,6 +91,133 @@ windows-x64:
   # Rest of workflow ...
 ```
 
+## `cache`
+
+Without the `cache:` block, the job will produce no cache, and cannot use one. A present-but-empty block (`cache: {}`) opts in, keyed on the implicit inputs only (see below).
+
+Opt this job into workflow run caching. When enabled, a successful run writes its VM state (the QEMU disk overlay, UEFI vars, and any additional drives) into long-term LRU storage. A later run of the same job, against the same image, in the same [namespace](#cache-namespaces), can skip straight to that cached VM state instead of executing the workflow again from scratch, which can massively speed up runs.
+
+A cache is only usable if none of its inputs have changed since it was written. Some inputs are checked implicitly and are not configurable:
+
+- The workflow YAML file's contents changed.
+- The base VM image (its backing qcow2 / backend identity) was modified.
+- The cache's TTL (see [`max_age`](#cachemax_age)) has expired.
+- The [namespace](#cache-namespaces) differs.
+- Storage limits evicted it (see [cache storage](#cache-storage)).
+
+The `cache` block adds your own invalidation inputs on top of those. If you set none of the sub-fields, the job still caches, keyed only on the implicit inputs above.
+
+```yaml
+ubuntu-x64:
+  image: ubuntu-server-x64
+  cache:
+    files_modified:
+      - Cargo.lock
+      - rust-toolchain.toml
+    files_list:
+      - "src/**/*.rs"
+    env:
+      - RUSTFLAGS
+    max_age: 7D
+  steps:
+    - name: Fetch and build dependencies
+      run: cargo build --release
+      # Skip this expensive step entirely on a cache hit
+      skip_if_cached: true
+```
+
+A run that was served from a cache will never write a new cache. This is almost always unnecessary, and it makes parallel jobs reading the same cache simpler and safer.
+
+### `cache.files_modified`
+
+Defaults to empty.
+
+An array of files whose contents are tracked on the host system. If the hash of any listed file's contents changes, the cache is invalidated. A file that is missing at capture time is recorded as missing (and matches only if still missing later). Paths are resolved relative to the working directory the run was invoked from.
+
+Only the hash of the contents is stored, never the contents themselves.
+
+```yaml
+cache:
+  files_modified:
+    - Cargo.lock
+    - package-lock.json
+```
+
+### `cache.files_list`
+
+Defaults to empty.
+
+An array of glob patterns whose set of matching file names is tracked (not their contents) on the host system. Adding or removing a matching file invalidates the cache, whereas editing the contents of an already-matched file does not (use [`files_modified`](#cachefiles_modified) for that). Useful for catching a newly added source file that should trigger a rebuild.
+
+```yaml
+cache:
+  files_list:
+    # Invalidate when a C++ source is added or removed
+    - "src/**/*.cpp"
+    - "src/**/*.hpp"
+```
+
+### `cache.env`
+
+Defaults to empty.
+
+An array of environment variable names. If the hash of any listed variable's value changes, the cache is invalidated. An unset variable is recorded as unset (and matches only if still unset later).
+
+Only the hash of the value is stored, never the value itself, so this is safe to use with secrets.
+
+```yaml
+cache:
+  env:
+    - RUSTFLAGS
+    - NODE_ENV
+```
+
+### `cache.max_age`
+
+Defaults to no expiry.
+
+A string setting the TTL (time-to-live) of a cache this job writes. Once a cache is older than this, it is treated as a miss. A bare integer is interpreted as days. A post-fix overrides the unit:
+
+- `S`/`s` = seconds
+- `M`/`m` = minutes
+- `H`/`h` = hours
+- `D`/`d` = days
+
+```yaml
+cache:
+  # Rebuild from scratch at least weekly
+  max_age: 7D
+```
+
+```yaml
+cache:
+  # 90 minutes
+  max_age: 90M
+```
+
+### Cache Namespaces
+
+A namespace isolates caches. Different namespaces never share cache slots. A job's cache slot lives at `<namespace>/<job>/<image>`.
+
+The namespace is resolved in this order:
+
+1. `--no-cache` on the command line disables caching entirely even if the workflow supports it.
+2. If the run is detected as a fork / external pull request, caching is disabled unconditionally. Caches are never shared with forks, so an untrusted contributor can neither read a trusted cache nor set one maliciously.
+3. `--cache-namespace <template>` on the command line, if given. The template may contain `{owner}`, `{repo}`, and `{ref}` tokens, which are auto-filled from the detected git provider and sanitized. For example `--cache-namespace "hi/{repo}/{ref}"`. A template that uses a token with no git provider to fill it disables caching rather than collapsing distinct refs together.
+4. Otherwise, if a git provider CI environment is detected, the namespace defaults to `{owner}/{repo}/{ref}`. This lets each branch (and each PR) accumulate and reuse its own cache.
+5. If none of the above yields a namespace, such as a local run with no `--cache-namespace`, caching is disabled.
+
+Detected git providers are GitHub Actions, GitLab CI, Forgejo/Codeberg Actions, Gitea Actions, and Bitbucket Pipelines, read from each provider's CI environment variables.
+
+### Cache Storage
+
+Caches are written under `VIRTCI_CACHE_HOME` (or `VIRTCI_WSL_CACHE_HOME` for WSL2-hosted VMs), defaulting to a directory inside the VirtCI user / wsl2 user home. Storage is bounded and least-recently-used entries are evicted first:
+
+- `VIRTCI_CACHE_BUDGET_GB` caps the total usable cache size. Unset uses as much as available (subject to the retention floor below); `0` disables the cap.
+- `VIRTCI_CACHE_RETAIN_GB` refuses to write new cache entries once the disk holding the cache has less than this much free space. Unset applies an automatic low-disk floor (1/8 of the disk under 1,800 GB, 1/16 at or above) and `0` disables the check.
+
+See [env_vars.md](/docs/env_vars.md) for the full list, including `VIRTCI_CACHE_SHUTDOWN_TIMEOUT`.
+
 ## `steps`
 
 Array of steps to execute in top-to-bottom order.
@@ -450,4 +577,34 @@ steps:
     run: ctest --test-dir build
     # Continue to the rest of the workflow if the tests fail
     continue_on_error: true
+```
+
+### `steps.skip_if_cached`
+
+Defaults to `false`.
+
+If `true`, this step is skipped when the run is served from a workflow cache (see [`cache`](#cache)), since the cached VM already reflects the result of having run it. On a normal (non-cached) run the step executes as usual. If `false`, the step always runs.
+
+This is meant for steps whose only effect is already baked into the cached VM state, like as fetching and building dependencies. Do not use it for steps that must run every time (copying in the latest source, running tests, compiling probably).
+
+```yaml
+steps:
+  - name: Fetch and build dependencies
+    # Already present in the cached VM, no need to redo it on a hit
+    run: cargo fetch
+    skip_if_cached: true
+
+  - name: Copy in latest source
+    # Should always copy since the cache doesn't have this run's code
+    copy:
+      from: ./src
+      to: vm:~/src
+
+  - name: Fetch and build dependencies
+    # Should recompile
+    run: cargo build
+
+  - name: Test
+    # Should always test
+    run: cargo test
 ```

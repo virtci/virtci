@@ -58,7 +58,41 @@ pub struct Job {
     pub memory: Option<String>,
     #[serde(default)]
     pub host_env: Vec<String>,
+    #[serde(default)]
+    pub cache: Option<Cache>,
     pub steps: Vec<Step>,
+}
+
+/// User defined things to check if changed to cause a workflow cache to be considered invalid for
+/// this workflow run.
+/// There are some implicit things that are not user specifiy-able:
+/// - Backing image chain modified
+/// - Workflow YAML changed
+/// - TTL (Cache has lived long enough)
+/// - Cache namespace
+/// - Storage limits
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cache {
+    /// Invalidate if a specific list of files has their contents changed.
+    #[serde(default)]
+    pub files_modified: Vec<String>,
+    /// Invalidate if the list of files in the list of directories changed, for instance adding a
+    /// new C++ source.
+    #[serde(default)]
+    pub files_list: Vec<String>,
+    /// Invalidate if the hash of any of the environment variables provided has changed.
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// If this workflow writes a cache, sets its TTL to this value. No post-fix defaults to
+    /// integer as days, but can be post-fixed.
+    ///
+    /// - `S`/`s` = seconds
+    /// - `M`/`m` = minutes
+    /// - `H`/`h` = hours
+    /// - `D`/`d` = days
+    #[serde(default)]
+    pub max_age: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +108,9 @@ pub struct Step {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub continue_on_error: bool,
+    /// Don't bother running this step if running from a cached workflow.
+    #[serde(default)]
+    pub skip_if_cached: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

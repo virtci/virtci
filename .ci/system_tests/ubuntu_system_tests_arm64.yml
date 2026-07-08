@@ -74,3 +74,11 @@ ubuntu-system-tests-arm64:
     - name: Full CI/CD Workflow Run Tests
       workdir: virtci
       run: . "$HOME/.cargo/env" &&  cargo test --locked --test ubuntu_vms_full_workflow_run -- --ignored --test-threads=1 --no-capture
+
+    - name: Go Offline For Cache Generation Tests
+      restart:
+        offline: true
+
+    - name: Workflow Run Local Workflow Cache Tests
+      workdir: virtci
+      run: . "$HOME/.cargo/env" &&  cargo test --locked --test local_workflow_cache -- --ignored --test-threads=1 --no-capture

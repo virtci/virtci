@@ -1,6 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "windows")]
 use anyhow::Context;
 #[cfg(target_os = "windows")]
 use std::process::Command;
@@ -145,6 +144,74 @@ impl VciGlobalPaths {
         }
         vec
     }
+
+    /// Get the directory of the long-term LRU cache storage for `virtci run` runs.
+    pub fn cache_dir(&self) -> TargetPath {
+        self.cache_dir_impl(false)
+    }
+
+    /// Get the temporary directory of the cache storage for `virtci run` runs, to be moved to the
+    /// long term one when possible.
+    /// The staging one exists because atomic file rename doesn't work without doing a full copy
+    /// or byte move across file systems, and tmpfs usually is it's own file system on linux.
+    pub fn cache_staging_dir(&self) -> TargetPath {
+        self.cache_dir_impl(true)
+    }
+
+    /// Get the directory of the long-term LRU cache storage for `virtci run` runs in a WSL2
+    /// distro.
+    #[cfg(target_os = "windows")]
+    pub fn wsl_cache_dir(&self) -> TargetPath {
+        self.wsl_cache_dir_impl(false)
+    }
+
+    /// Get the temporary directory of the cache storage for `virtci run` runs in a WSL2 distro,
+    /// to be moved to the long term one when possible.
+    /// The staging one exists because atomic file rename doesn't work without doing a full copy
+    /// or byte move across file systems, and tmpfs usually is it's own file system on linux.
+    #[cfg(target_os = "windows")]
+    pub fn wsl_cache_staging_dir(&self) -> TargetPath {
+        self.wsl_cache_dir_impl(true)
+    }
+
+    fn cache_dir_impl(&self, staging: bool) -> TargetPath {
+        let cache_dir_name = if staging { ".cache-staging" } else { ".cache" };
+
+        TargetPath {
+            path: cache_home_base(&self.user_home).join(cache_dir_name),
+            #[cfg(target_os = "windows")]
+            wsl_distro: None,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn wsl_cache_dir_impl(&self, staging: bool) -> TargetPath {
+        let cache_dir_name = if staging { ".cache-staging" } else { ".cache" };
+
+        let wsl_info = self.wsl.as_ref().expect("Should have WSL paths");
+
+        let base = wsl_cache_home_base(&wsl_info.user_home);
+        let wsl_path = format!("{}/{cache_dir_name}", base.trim_end_matches('/'));
+        TargetPath {
+            path: wsl_info.to_unc(&wsl_path),
+            wsl_distro: Some(wsl_info.distro.clone()),
+        }
+    }
+}
+
+fn cache_home_base(user_home: &Path) -> PathBuf {
+    if let Some(over) = std::env::var_os("VIRTCI_CACHE_HOME") {
+        return PathBuf::from(over);
+    }
+    user_home.to_path_buf()
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_cache_home_base(wsl_user_home: &str) -> String {
+    if let Some(over) = std::env::var_os("VIRTCI_WSL_CACHE_HOME") {
+        return over.to_string_lossy().into_owned();
+    }
+    wsl_user_home.to_string()
 }
 
 /// All paths are WSL-namespace Linux paths stored as `String`, so they're build with '/'
@@ -207,7 +274,7 @@ pub fn wsl_path_to_unc(distro: &str, wsl_path: &str) -> PathBuf {
     PathBuf::from(format!(r"\\wsl.localhost\{distro}\{rel}"))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TargetPath {
     /// May be a file or directory.
     /// If [`ImageHome::in_wsl()`], has `\\wsl.localhost\<distro>\` prefixed.
@@ -248,6 +315,67 @@ impl TargetPath {
             wsl_distro: self.wsl_distro.clone(),
         }
     }
+
+    /// Atomically renames the file at `self` to `new_path`.
+    /// Generally this is only used to promote a `.cache-staging` file into a `.cache` file.
+    /// This only works well under the same file system, making is a true rename, not a
+    /// cross-filesystem/device copy. For the caches, they live in the `user_home` directory so
+    /// it works well. `rename`/`mv` both require the destination's parent directory to already exist,
+    /// so the directory hierarchy necessary is created here.
+    pub fn atomic_file_rename(&self, new_path: &TargetPath) -> anyhow::Result<()> {
+        // `PathBuf::parent()` works for a UNC path too (it just strips the final component), and
+        // `create_dir_all` over `\\wsl.localhost\...` creates the directory inside the WSL fs.
+        if let Some(parent) = new_path.path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create cache directory {}", parent.display())
+            })?;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            match (&self.wsl_distro, &new_path.wsl_distro) {
+                // do the rename inside the distro
+                (Some(src_distro), Some(dst_distro)) => {
+                    anyhow::ensure!(
+                        src_distro == dst_distro,
+                        "cannot atomically rename across different WSL distros ({src_distro} -> \
+                         {dst_distro})"
+                    );
+                    return wsl_move(src_distro, &self.native_path(), &new_path.native_path());
+                }
+                // windows native so fallthrough.
+                (None, None) => {}
+                _ => anyhow::bail!(
+                    "cannot atomically rename between the Windows host and a WSL2 distro; they are \
+                     different filesystems"
+                ),
+            }
+        }
+
+        std::fs::rename(&self.path, &new_path.path).with_context(|| {
+            format!(
+                "failed to rename {} -> {}",
+                self.path.display(),
+                new_path.path.display()
+            )
+        })
+    }
+}
+
+/// Rename a file inside a WSL2 distro via `wsl -d <distro> -- mv -f`, using in-WSL paths. Mirrors
+/// the `wsl_copy` precedent so in-namespace moves never go through the Windows->WSL bridge.
+#[cfg(target_os = "windows")]
+fn wsl_move(distro: &str, src: &str, dst: &str) -> anyhow::Result<()> {
+    let output = Command::new("wsl")
+        .args(["-d", distro, "--", "mv", "-f", src, dst])
+        .output()
+        .with_context(|| format!("failed to run `wsl mv {src} {dst}`"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "`wsl mv {src} {dst}` failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
 }
 
 fn default_user_home_path() -> PathBuf {

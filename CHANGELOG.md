@@ -7,6 +7,46 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - `virtci copy` to copy files to and from actively running VMs. Supports all of the same functionality as the `virtci run` YAML `copy` step.
+- Added workflow run caching for QEMU VMs only for `virtci run`, which writes opt-in workflow runs to LRU storage, allowing them to be used by subsequent runs to massively speed up runs.
+  - Added `cache` field to the top level `job` YAML scheme for workflow files (same area where you define `image` and related fields). `cache` has the following sub-fields to determine whether a workflow can use the cache or not:
+    - `files_modified` to check if a list of files have had their contents changed. Note, only the hash of the contents is stored.
+    - `files_list` check if the actual list of files in a directory has changed. Supports globbing.
+    - `env` check if any environment variables in a list have changed. Note, only hash of the variable is stored.
+    - `max_age` Set the TTL of this cache. Postfix with `S`/`s` for seconds, `M`/`m` for minutes, `H`/`h` for hours, and `D`/`d` for days.
+  - The cache can also become invalidated for a run with a few more conditions:
+    - If the YAML file itself changes.
+    - If the base image was modified.
+    - If the TTL `max_age` has expired.
+    - Storage limits reached, evicting least-recently-used caches (see the `VIRTCI_CACHE_BUDGET_GB` and `VIRTCI_CACHE_RETAIN_GB` environment variables below).
+  - If a workflow was ran from a cache, it won't write a new one. In most cases it is unnecessary, and makes it easier to parallelize cache usage.
+  - Integrate with git providers (GitHub, GitLab, Forgejo/Codeberg, Gitea, Bitbucket), reading each provider's CI environment variables.
+  - Support cache namespaces, in which different workflows can produce independent caches, and the same workflow can write to different caches. A job's cache lives at `<namespace>/<job>/<image>`, so different namespaces never share cache slots.
+  - If you are running through a git provider's CI, use the repo owner, repo name, and branch to determine the namespace (`{owner}/{repo}/{ref}`), so a PR can cache workflow steps.
+  - If you are using git provider's CI, fork PRs are rejected from using workflow caches as a security precaution, detected from the git providers defined environment variables. This prevents an untrusted contributor from reading or poisoning a trusted cache.
+  - Added `skip_if_cached` field to a run step to skip the execution of that step if running from a cache.
+  - Added `--no-cache` flag to `virtci run` to run a workflow without using or producing any cache.
+  - Added `--cache-namespace` flag to `virtci run` to set the cache namespace explicitly. Supports `{owner}`, `{repo}`, and `{ref}` tokens that are auto-filled from the detected git provider and sanitized (`--cache-namespace "thing/{repo}/{ref}"`). Defaults to `{owner}/{repo}/{ref}` when a git provider is detected.
+  - If a cache can be produced, and would overwrite a previous cache, if another run is using the previous cache, do not write the cache. This is usually not necessary and avoids massive concurrency issues.
+  - See [workflow_yaml_syntax.md](/docs/workflow_yaml_syntax.md#cache) for full details.
+- `VIRTCI_CACHE_HOME` environment variable to specify where cache files (and staged ones) can be written to. This is within the VirtCI home directory by default. This is relevant as there are other environment variables to control cache disk usage, so they can live on a separate drive entirely.
+- `VIRTCI_WSL_CACHE_HOME` environment variable to specify where WSL2 cache files (and staged ones) can be written to. This is within the VirtCI home directory by default.
+- `VIRTCI_CACHE_SHUTDOWN_TIMEOUT` environment variable to control the maximum time a cacheable VM run can take to shutdown before the VM is killed and the cache write is skipped to avoid disk corruption. A run that can produce a cache needs the disk to not be corrupted, so that will try to gracefully shutdown the VM (flushing the disk) rather than SIGKILLing it.
+- `VIRTCI_CACHE_BUDGET_GB` environment variable to control the maximum amount of storage the usable cache can actually take up. Does LRU eviction. By default, this is unset and VirtCI will use as much as it needs until it hits the low disk detection. Set to `0` to not check.
+- `VIRTCI_CACHE_RETAIN_GB` environment variable to prevent writing usable cache storage if there is only that much space left on the disk that owns the cache directory (either `VIRTCI_CACHE_HOME`/`VIRTCI_WSL_CACHE_HOME` or within `VIRTCI_USER_HOME`/`VIRTCI_WSL_USER_HOME`/default location). If unset does low disk detection:
+  - If the disk where the VirtCI run cache lives has less than 1,800 GB, ensure the user still has 1/8th of their disk available.
+    - Disk = 512GB (about 477GB usable), retain about 60GB.
+    - Disk = 1TB (about 931GB usable), retain about 116GB.
+  - If the disk where the VirtCI run cache lives has greater than or equal to 1,800 GB, ensure the user still has 1/16th of their disk available.
+    - Disk = 2TB (about 1862GB usable), retain about 116GB.
+    - Disk = 4TB (about 3725GB usable), retain about 223GB.
+
+### Changed
+
+- A `virtci run` step without a timeout no longer defaults to 2 hours. It will now run with no timeout.
+
+### Fixed
+
+- Fixed a `virtci run` step reaching a timeout not actually stopping the execution of the step inside the VM sometimes.
 
 ## Version 0.3.1 - 2026-06-11
 
@@ -18,7 +58,7 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Added check for if using a QEMU binary built for a different host architecture.
   - It can fail for seemingly no reason under emulators like Prism, Rosetta 2, or FEX, but `qemu-system-* --version` works, leading to very confusing situations.
   - As of June 7th 2026, winget installs x86_64 built QEMU binaries (intended to run on x86_64 host) even on a Windows arm64 host.
-- `VIRTCI_VM_START_IDLE_TIMEOUT` environment variable to control the time required for a VM start to be considered hanging if no boot progress is being made in seconds. Defaults to 300.
+- `VIRTCI_VM_START_IDLE_TIMEOUT` environment variable to control the time required for a VM start to be considered hanging if no boot progress is being made in seconds. Defaults to 120.
 - `VIRTCI_VM_START_MAX_TIMEOUT` environment variable to control the maximum time a `virtci run` workflow can take to start a VM, aborting the run past that time in seconds. Defaults to 1800.
 - `VIRTCI_SSH_CONNECT_TIMEOUT` environment variable to control the maximum time a VirtCI will wait to establish connection to the VM over SSH seconds. Defaults to 60 per SSH attempt.
 

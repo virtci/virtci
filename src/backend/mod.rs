@@ -7,7 +7,10 @@ pub mod exec;
 pub mod qemu;
 pub mod tart;
 
-use crate::vm_image::{GuestOs, SshTarget};
+use crate::{
+    run::cache::metadata::Fingerprint,
+    vm_image::{GuestOs, SshTarget},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct VmStartConfig {
@@ -64,6 +67,30 @@ pub trait VmBackend {
     fn disk_image_path(&self) -> Option<&Path> {
         None
     }
+
+    /// Whether this run is running from a workflow cache.
+    fn is_cached_run(&self) -> bool;
+
+    /// Whether this run will produce a run cache if it succeeds and has a usable namespace.
+    /// This also means the run will need to gracefully shutdown, rather than SIGKILLing which
+    /// would normally corrupt it.
+    fn produces_cache(&self) -> bool {
+        false
+    }
+
+    /// Whether the VM process has already exited.
+    fn vm_has_exited(&mut self) -> bool {
+        self.vm_exit_error().is_some()
+    }
+
+    /// Commit this run's VM files into its cache slot so a future run can reuse them.
+    /// Fingerprint is captured on the host-side notably, not inside the VM.
+    /// No-op if no cache should be produced by this run.
+    fn cache_run_files(
+        &self,
+        fingerprint: &Fingerprint,
+        ttl_secs: Option<u64>,
+    ) -> anyhow::Result<()>;
 }
 
 pub fn expand_path(path: &str) -> PathBuf {

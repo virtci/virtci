@@ -2,10 +2,165 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use russh::ChannelMsg;
+use russh::client;
 
-use crate::{run::connect_resilient, vm_image::GuestOs, vm_image::SshTarget};
+use crate::{
+    run::{ClientHandler, connect_resilient},
+    vm_image::GuestOs,
+    vm_image::SshTarget,
+};
+
+/// Exit code of GNU timeout.
+pub const TIMEOUT_EXIT_CODE: u32 = 124;
+
+/// How to enforce a timeout inside the VM itself, rather than orphaning. Also works with host-side
+/// tokio timeout. Use [`probe_timeout_mechanism`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeoutMechanism {
+    ///  `timeout(1)` GNU coreutils, busybox, bsd.
+    Timeout,
+    /// macOS basically. `set -m`.
+    BashJobControl,
+    /// `taskkill /T`.
+    WindowsTaskkill,
+    /// No in-VM timeout mechanism
+    Unwrapped,
+}
+
+pub async fn probe_timeout_mechanism(ssh: &SshTarget, os: GuestOs) -> TimeoutMechanism {
+    if os == GuestOs::Windows {
+        return TimeoutMechanism::WindowsTaskkill;
+    }
+    // Prints "t" if `timeout` exists and/or "b" if `bash` exists.
+    let probe = "command -v timeout >/dev/null 2>&1 && printf t; \
+                 command -v bash >/dev/null 2>&1 && printf b";
+    match run_command(ssh, probe, None, &HashMap::new(), os).await {
+        Ok(res) if res.stdout.contains('t') => TimeoutMechanism::Timeout,
+        Ok(res) if res.stdout.contains('b') => TimeoutMechanism::BashJobControl,
+        _ => TimeoutMechanism::Unwrapped,
+    }
+}
+
+fn posix_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Wrap a command so it can be forcekilled after `secs` seconds. Returns the command
+/// unchanged for [`TimeoutMechanism::Unwrapped`] or a non-positive timeout. On expiry the wrapper
+/// exits [`TIMEOUT_EXIT_CODE`].
+pub fn wrap_with_timeout(user_cmd: &str, secs: u64, mech: TimeoutMechanism) -> String {
+    if secs == 0 || mech == TimeoutMechanism::Unwrapped {
+        return user_cmd.to_string();
+    }
+    match mech {
+        TimeoutMechanism::Timeout => {
+            format!(
+                "timeout -k 5 {secs} /bin/sh -c {}",
+                posix_single_quote(user_cmd)
+            )
+        }
+        TimeoutMechanism::BashJobControl => {
+            let watchdog = format!(
+                "set -m; f=$(mktemp); ( exec /bin/sh -c \"$1\" ) & c=$!; \
+                 ( sleep {secs}; : > \"$f\"; kill -TERM -\"$c\" 2>/dev/null; sleep 5; \
+                 kill -KILL -\"$c\" 2>/dev/null ) & w=$!; wait \"$c\"; s=$?; \
+                 kill \"$w\" 2>/dev/null; kill -- -\"$w\" 2>/dev/null; \
+                 if [ -s \"$f\" ]; then rm -f \"$f\"; exit {TIMEOUT_EXIT_CODE}; fi; rm -f \"$f\"; exit \"$s\""
+            );
+            format!("bash -c '{watchdog}' _ {}", posix_single_quote(user_cmd))
+        }
+        TimeoutMechanism::WindowsTaskkill => windows_timeout_wrapper(user_cmd, secs),
+        TimeoutMechanism::Unwrapped => user_cmd.to_string(),
+    }
+}
+
+fn windows_timeout_wrapper(user_cmd: &str, secs: u64) -> String {
+    const WATCHDOG: &str = "$to=[int]$env:VCI_WD_TO; $fl=$env:VCI_WD_FLAG; \
+         $sp=[int]$env:VCI_WD_SELF; Start-Sleep -Seconds $to; \
+         New-Item -ItemType File -Force -Path $fl | Out-Null; \
+         Get-CimInstance Win32_Process -Filter ('ParentProcessId={0}' -f $sp) | \
+         Where-Object { $_.ProcessId -ne $PID } | \
+         ForEach-Object { & taskkill /T /F /PID $_.ProcessId 2>$null | Out-Null }";
+
+    let wd = WATCHDOG.replace('\'', "''");
+    let prefix = format!(
+        "$env:VCI_WD_TO='{secs}'; \
+         $env:VCI_WD_FLAG=(Join-Path $env:TEMP ('vci_to_'+[guid]::NewGuid().ToString('N'))); \
+         $env:VCI_WD_SELF=$PID; $__vciFlag=$env:VCI_WD_FLAG; \
+         $__vciEnc=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('{wd}')); \
+         $__vciWd=Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList \
+         '-NoProfile','-NonInteractive','-EncodedCommand',$__vciEnc"
+    );
+    let suffix = format!(
+        "$__vciCode=$LASTEXITCODE; \
+         Stop-Process -Id $__vciWd.Id -Force -ErrorAction SilentlyContinue; \
+         if(Test-Path $__vciFlag){{ Remove-Item $__vciFlag -Force -ErrorAction SilentlyContinue; \
+         exit {TIMEOUT_EXIT_CODE} }}; if($null -eq $__vciCode){{ $__vciCode=0 }}; exit $__vciCode"
+    );
+
+    format!("{prefix}\n{user_cmd}\n{suffix}")
+}
+
+#[derive(Default)]
+struct ChannelOutcome {
+    saw_eof: bool,
+    saw_close: bool,
+    exit_signal: Option<String>,
+    bytes: usize,
+}
+
+async fn diagnose_missing_exit_status(
+    handle: &client::Handle<ClientHandler>,
+    outcome: &ChannelOutcome,
+    elapsed: Duration,
+) -> String {
+    let transport = match tokio::time::timeout(
+        Duration::from_secs(10),
+        handle.channel_open_session(),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {
+            "transport still alive (a fresh session opened) and only this channel was closed \
+                      by the server, no exit-status was sent"
+                .to_string()
+        }
+        Ok(Err(e)) => format!(
+            "transport is dead (opening a fresh session failed: {e}) and the SSH connection itself \
+             dropped, not just the channel"
+        ),
+        Err(_) => "transport is dead (opening a fresh session hung >10s) since the SSH connection \
+                   itself is wedged"
+            .to_string(),
+    };
+
+    let mut seen = Vec::new();
+    if outcome.saw_eof {
+        seen.push("EOF".to_string());
+    }
+    if outcome.saw_close {
+        seen.push("Close".to_string());
+    }
+    if let Some(sig) = &outcome.exit_signal {
+        seen.push(format!("ExitSignal({sig})"));
+    }
+    let seen = if seen.is_empty() {
+        "none (channel went straight to closed)".to_string()
+    } else {
+        seen.join(", ")
+    };
+
+    format!(
+        "SSH channel closed without providing an exit status \
+         [{transport}; channel messages seen before close: {seen}; \
+         {} bytes received over {:.1}s]",
+        outcome.bytes,
+        elapsed.as_secs_f64(),
+    )
+}
 
 pub struct CommandResult {
     pub exit_code: u32,
@@ -45,16 +200,20 @@ pub async fn run_command(
     let mut stderr_str = String::new();
     let mut exit_code: u32 = 0;
     let mut got_exit_status = false;
+    let mut outcome = ChannelOutcome::default();
+    let exec_at = Instant::now();
 
     loop {
         match channel.wait().await {
             Some(ChannelMsg::Data { data }) => {
+                outcome.bytes += data.len();
                 let s = String::from_utf8_lossy(&data);
                 print!("{s}");
                 std::io::Write::flush(&mut std::io::stdout()).ok();
                 stdout_str.push_str(&s);
             }
             Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
+                outcome.bytes += data.len();
                 let s = String::from_utf8_lossy(&data);
                 eprint!("{s}");
                 std::io::Write::flush(&mut std::io::stderr()).ok();
@@ -64,6 +223,15 @@ pub async fn run_command(
                 exit_code = exit_status;
                 got_exit_status = true;
             }
+            Some(ChannelMsg::Eof) => outcome.saw_eof = true,
+            Some(ChannelMsg::Close) => outcome.saw_close = true,
+            Some(ChannelMsg::ExitSignal {
+                signal_name,
+                error_message,
+                ..
+            }) => {
+                outcome.exit_signal = Some(format!("{signal_name:?}: {error_message}"));
+            }
             None => {
                 break;
             }
@@ -71,15 +239,20 @@ pub async fn run_command(
         }
     }
 
+    if !got_exit_status {
+        let diag = diagnose_missing_exit_status(&handle, &outcome, exec_at.elapsed()).await;
+        handle
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .ok();
+        return Err(diag);
+    }
+
     channel.close().await.ok();
     handle
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
-
-    if !got_exit_status {
-        return Err("SSH channel closed without providing an exit status".to_string());
-    }
 
     Ok(CommandResult {
         exit_code,
@@ -177,16 +350,31 @@ pub async fn run_command_binary(
     let mut stderr = Vec::new();
     let mut exit_code: u32 = 0;
     let mut got_exit_status = false;
+    let mut outcome = ChannelOutcome::default();
+    let exec_at = Instant::now();
 
     loop {
         match channel.wait().await {
-            Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
+            Some(ChannelMsg::Data { data }) => {
+                outcome.bytes += data.len();
+                stdout.extend_from_slice(&data);
+            }
             Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
+                outcome.bytes += data.len();
                 stderr.extend_from_slice(&data);
             }
             Some(ChannelMsg::ExitStatus { exit_status }) => {
                 exit_code = exit_status;
                 got_exit_status = true;
+            }
+            Some(ChannelMsg::Eof) => outcome.saw_eof = true,
+            Some(ChannelMsg::Close) => outcome.saw_close = true,
+            Some(ChannelMsg::ExitSignal {
+                signal_name,
+                error_message,
+                ..
+            }) => {
+                outcome.exit_signal = Some(format!("{signal_name:?}: {error_message}"));
             }
             None => {
                 break;
@@ -195,19 +383,103 @@ pub async fn run_command_binary(
         }
     }
 
+    if !got_exit_status {
+        let diag = diagnose_missing_exit_status(&handle, &outcome, exec_at.elapsed()).await;
+        handle
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .ok();
+        return Err(diag);
+    }
+
     channel.close().await.ok();
     handle
         .disconnect(russh::Disconnect::ByApplication, "", "en")
         .await
         .ok();
 
-    if !got_exit_status {
-        return Err("SSH channel closed without providing an exit status".to_string());
-    }
-
     Ok(BinaryCommandResult {
         exit_code,
         stdout,
         stderr,
     })
+}
+
+#[cfg(test)]
+mod timeout_wrap_tests {
+    use super::{TIMEOUT_EXIT_CODE, TimeoutMechanism, wrap_with_timeout};
+
+    #[test]
+    fn unwrapped_or_zero_timeout_passes_through_verbatim() {
+        let cmd = "cargo test --locked";
+        assert_eq!(
+            wrap_with_timeout(cmd, 30, TimeoutMechanism::Unwrapped),
+            cmd,
+            "Unwrapped must not alter the command"
+        );
+        assert_eq!(
+            wrap_with_timeout(cmd, 0, TimeoutMechanism::Timeout),
+            cmd,
+            "a zero timeout means no deadline, so no wrapping"
+        );
+    }
+
+    #[test]
+    fn timeout_mechanism_wraps_and_single_quote_escapes() {
+        let wrapped = wrap_with_timeout("echo it's fine", 5, TimeoutMechanism::Timeout);
+        assert_eq!(wrapped, "timeout -k 5 5 /bin/sh -c 'echo it'\\''s fine'");
+    }
+
+    #[test]
+    fn bash_mechanism_is_self_contained_and_reports_124() {
+        let wrapped = wrap_with_timeout("make", 12, TimeoutMechanism::BashJobControl);
+        assert!(
+            wrapped.starts_with("bash -c '"),
+            "runs under bash: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("set -m"),
+            "needs job control for the pgroup"
+        );
+        assert!(
+            wrapped.contains("sleep 12"),
+            "the deadline is baked in: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("kill -TERM -\"$c\""),
+            "must group-kill the whole tree (negative PID targets the process group)"
+        );
+        assert!(wrapped.contains(&format!("exit {TIMEOUT_EXIT_CODE}")));
+        assert!(
+            wrapped.ends_with("_ 'make'"),
+            "user command passed as the $1 positional: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn windows_mechanism_runs_body_top_level_with_a_detached_encoded_watchdog() {
+        let wrapped = wrap_with_timeout("cargo build", 20, TimeoutMechanism::WindowsTaskkill);
+
+        // The body must sit at TOP LEVEL, newline-delimited — not inside a `try {`/`Start-Job {`
+        // block, which is what hangs multi-line commands over Windows OpenSSH.
+        assert!(
+            wrapped.contains("\ncargo build\n"),
+            "body must be at top level: {wrapped}"
+        );
+        assert!(
+            !wrapped.contains("Start-Job"),
+            "Start-Job can hang over SSH"
+        );
+        assert!(!wrapped.contains("try {"), "no brace block around the body");
+        // Watchdog is a detached process delivered as base64 (immune to quoting), fed via env vars.
+        assert!(wrapped.contains("Start-Process powershell"));
+        assert!(wrapped.contains("-EncodedCommand"));
+        assert!(wrapped.contains("$env:VCI_WD_SELF=$PID"));
+        assert!(wrapped.contains("taskkill /T /F"));
+        assert!(
+            wrapped.contains("$_.ProcessId -ne $PID"),
+            "must not kill itself"
+        );
+        assert!(wrapped.contains(&format!("exit {TIMEOUT_EXIT_CODE}")));
+    }
 }

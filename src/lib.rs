@@ -21,6 +21,8 @@ use std::sync::OnceLock;
 
 use argh::FromArgs;
 
+use crate::util::git::GitInfo;
+
 /// PID of the QEMU process running the qcow2 for `virtci boot` (no --clone).
 pub static QEMU_BOOT_GRACEFUL_PID: OnceLock<u32> = OnceLock::new();
 
@@ -246,14 +248,14 @@ fn run_cleanup(args: cli::CleanupArgs, paths: &VciGlobalPaths) {
         .collect();
 
     if files.is_empty() {
-        println!("{}", "No temporary VCI files found".dimmed());
+        println!("{}", "No temporary VirtCI files found".dimmed());
         return;
     }
 
     if args.list {
         println!(
             "{}",
-            format!("Found {} temporary VCI file(s):", files.len()).cyan()
+            format!("Found {} temporary VirtCI file(s):", files.len()).cyan()
         );
         for file in &files {
             println!("  {}", file.display());
@@ -274,7 +276,7 @@ fn run_cleanup(args: cli::CleanupArgs, paths: &VciGlobalPaths) {
     // confirm each deletion, very important
     println!(
         "{}",
-        format!("Found {} temporary VCI file(s)", files.len()).cyan()
+        format!("Found {} temporary VirtCI file(s)", files.len()).cyan()
     );
     for file in &files {
         print!("Delete {}? [y/N] ", file.display());
@@ -509,8 +511,18 @@ fn extract_yaml_workflows(
     paths: &VciGlobalPaths,
     orphans: &orphan::OrphanTracker,
 ) -> anyhow::Result<Vec<run::Job>> {
+    use colored::Colorize;
+
     let workflow: yaml::Workflow =
         yaml::parse_workflow(contents).context("Failed to parse workflow YAML")?;
+
+    let git_info = GitInfo::detect();
+    // NO CACHE FOR FORKS
+    let is_fork = util::git::is_fork_or_external_pr();
+    let workflow_hash = blake3::hash(contents.as_bytes()).to_hex().to_string();
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
 
     let mut jobs = Vec::<run::Job>::new();
     for (name, yaml_job) in workflow {
@@ -548,13 +560,78 @@ fn extract_yaml_workflows(
             "Job '{name}': must have at least one step"
         );
 
+        // Decide cache stuff now.
+        let root_dir = global_paths::TargetPath {
+            path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            #[cfg(target_os = "windows")]
+            wsl_distro: None,
+        };
+        let base_image_marker = backend::qemu::backend::base_image_marker(paths, &image_desc);
+        let caching_requested = yaml_job.cache.is_some();
+        let cache_cfg = yaml_job.cache.clone().unwrap_or_default();
+        let cache_fingerprint = run::cache::metadata::Fingerprint::capture(
+            &cache_cfg,
+            &root_dir,
+            workflow_hash.clone(),
+            base_image_marker,
+        );
+        let cache_ttl_secs = match cache_cfg.max_age.as_deref() {
+            Some(s) => run::cache::parse_max_age(s)
+                .map_err(|e| eprintln!("Warning: Job '{name}': invalid cache.max_age: {e}"))
+                .ok(),
+            None => None,
+        };
+
         let backend: Box<dyn backend::VmBackend> = match &image_desc.backend {
             vm_image::BackendConfig::Qemu(_) => {
+                let namespace = run::cache::CacheNamespace::resolve(
+                    args.no_cache,
+                    is_fork,
+                    args.cache_namespace.as_deref(),
+                    git_info.as_ref(),
+                );
+                let image_id = run::cache::image_id(&image_desc);
+                let cache_root = backend::qemu::backend::cache_root_for_image(paths, &image_desc);
+                let cache_hit = caching_requested
+                    && match &namespace {
+                        run::cache::CacheNamespace::Enabled { namespace: ns } => {
+                            let slot = run::cache::slot_dir(&cache_root, ns, &name, &image_id);
+                            run::cache::metadata::CacheMetadata::read_from_slot(&slot)
+                                .is_some_and(|m| m.is_fresh_hit(&cache_fingerprint, now_secs))
+                        }
+                        run::cache::CacheNamespace::Disabled(_) => false,
+                    };
+                let cache_plan = run::cache::CachePlan::new(
+                    &namespace,
+                    &cache_root,
+                    &name,
+                    &image_id,
+                    caching_requested,
+                    cache_hit,
+                );
+                match &cache_plan {
+                    run::cache::CachePlan::Consume { .. } => println!(
+                        "{}",
+                        format!("Cache hit for job '{name}' so booting from cached VM state.")
+                            .dimmed()
+                    ),
+                    run::cache::CachePlan::Produce { namespace } => println!(
+                        "{}",
+                        format!(
+                            "Cache miss for job '{name}' (namespace '{namespace}') so will cache on \
+                             success."
+                        )
+                        .dimmed()
+                    ),
+                    run::cache::CachePlan::Disabled => {}
+                }
+
                 let mut b = backend::qemu::backend::QemuBackend::new(
                     name.clone(),
                     image_desc,
                     paths,
                     true,
+                    cache_plan,
                     false,
                     backend::qemu::backend::SerialKind::File,
                     orphans.clone(),
@@ -576,6 +653,10 @@ fn extract_yaml_workflows(
             host_env: yaml_job.host_env,
             steps,
             ssh_retry_budget: None,
+            timeout_mech: None,
+            git_info: git_info.clone(),
+            cache_fingerprint,
+            cache_ttl_secs,
         });
     }
 
@@ -604,10 +685,8 @@ fn resolve_step(job_name: &str, step: &yaml::Step) -> anyhow::Result<run::Step> 
             })
         }
     };
-    let timeout = match &step.timeout {
-        Some(s) => yaml::parse_timeout_seconds(s),
-        None => run::MAX_TIMEOUT,
-    };
+
+    let timeout = step.timeout.as_deref().map(yaml::parse_timeout_seconds);
     Ok(run::Step {
         name: step.name.clone(),
         kind,
@@ -615,5 +694,6 @@ fn resolve_step(job_name: &str, step: &yaml::Step) -> anyhow::Result<run::Step> 
         timeout,
         env: step.env.clone(),
         continue_on_error: step.continue_on_error,
+        skip_if_cached: step.skip_if_cached,
     })
 }

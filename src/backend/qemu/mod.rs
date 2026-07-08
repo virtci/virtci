@@ -202,16 +202,18 @@ pub fn create_backing_file(
 pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
     let lock_dir = paths.temp.as_path();
 
+    // TODO flock over 9p fine if the WSL one doing too? Not sure.
     #[cfg(target_os = "windows")]
     let payload_dirs: Vec<PathBuf> = {
-        let mut dirs = vec![lock_dir.to_path_buf()];
+        let mut dirs = vec![lock_dir.to_path_buf(), paths.cache_staging_dir().path];
         if let Some(wsl) = &paths.wsl {
             dirs.push(wsl.to_unc(&wsl.temp));
+            dirs.push(paths.wsl_cache_staging_dir().path);
         }
         dirs
     };
     #[cfg(not(target_os = "windows"))]
-    let payload_dirs: Vec<PathBuf> = vec![lock_dir.to_path_buf()];
+    let payload_dirs: Vec<PathBuf> = vec![lock_dir.to_path_buf(), paths.cache_staging_dir().path];
 
     // 1. Active-run identity locks: reap orphans by marker, then delete payload.
     for entry in dir_entries(lock_dir) {
@@ -290,6 +292,50 @@ pub fn cleanup_stale_qemu_files(paths: &VciGlobalPaths) {
 
         let _ = std::fs::remove_file(lock.get_path());
         drop(lock);
+    }
+
+    #[cfg(target_os = "windows")]
+    let cache_roots: Vec<crate::global_paths::TargetPath> = {
+        let mut roots = vec![paths.cache_dir()];
+        if paths.wsl.is_some() {
+            roots.push(paths.wsl_cache_dir());
+        }
+        roots
+    };
+    #[cfg(not(target_os = "windows"))]
+    let cache_roots: Vec<crate::global_paths::TargetPath> = vec![paths.cache_dir()];
+    for root in &cache_roots {
+        reap_partial_cache_slots(&root.path, &root.path, lock_dir);
+        let limits = crate::run::cache::lru::CacheLimits::from_env(root);
+        crate::run::cache::lru::enforce_limits(root, lock_dir, &limits);
+    }
+}
+
+fn reap_partial_cache_slots(cache_root: &Path, dir: &Path, host_temp: &Path) {
+    if dir.join("disk.qcow2").exists() {
+        if dir
+            .join(crate::run::cache::metadata::CacheMetadata::FILENAME)
+            .exists()
+        {
+            return;
+        }
+        let Ok(rel) = dir.strip_prefix(cache_root) else {
+            return;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        let lock_path = host_temp.join(crate::run::cache::slot_lock_filename(&rel));
+        if let Ok(lock) = FileLock::try_new(&lock_path) {
+            let _ = std::fs::remove_dir_all(dir);
+            let _ = std::fs::remove_file(lock.get_path());
+            drop(lock);
+        }
+        return;
+    }
+
+    for entry in dir_entries(dir) {
+        if entry.path().is_dir() {
+            reap_partial_cache_slots(cache_root, &entry.path(), host_temp);
+        }
     }
 }
 

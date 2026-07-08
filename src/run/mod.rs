@@ -1,6 +1,7 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+pub mod cache;
 mod command;
 pub mod copy;
 pub mod run_id;
@@ -20,6 +21,7 @@ use russh::keys::ssh_key;
 use crate::{
     VciGlobalPaths,
     backend::{VmBackend, VmStartConfig},
+    util::git::{GitInfo, GitProvider},
     vm_image::{GuestOs, SshTarget},
     yaml,
 };
@@ -50,6 +52,29 @@ pub const DEFAULT_VM_START_IDLE_TIMEOUT: u64 = 120;
 /// let a legitimately slow TCG boot finish, while still bounding a VM that fails *noisily* (one that
 /// keeps spewing to serial without ever reaching SSH, so the idle timer never trips).
 pub const DEFAULT_VM_START_MAX_TIMEOUT: u64 = 1800;
+
+/// How long to wait for a VM to shut down (disk flush as well) before just SIGKILLing that thing.
+/// Overridable via the `VIRTCI_CACHE_SHUTDOWN_TIMEOUT` environment variable (in seconds).
+const CACHE_SHUTDOWN_TIMEOUT: u64 = 120;
+
+/// Resolve the graceful cache-shutdown timeout, honoring `VIRTCI_CACHE_SHUTDOWN_TIMEOUT` if set to a
+/// valid number of seconds, otherwise falling back to [`CACHE_SHUTDOWN_TIMEOUT`].
+fn cache_shutdown_timeout() -> u64 {
+    match std::env::var("VIRTCI_CACHE_SHUTDOWN_TIMEOUT") {
+        Ok(v) => {
+            if let Ok(secs) = v.trim().parse::<u64>() {
+                secs
+            } else {
+                eprintln!(
+                    "VirtCI Warning: ignoring invalid VIRTCI_CACHE_SHUTDOWN_TIMEOUT={v:?} (want an integer \
+                 number of seconds) using default of {CACHE_SHUTDOWN_TIMEOUT}s."
+                );
+                CACHE_SHUTDOWN_TIMEOUT
+            }
+        }
+        Err(_) => CACHE_SHUTDOWN_TIMEOUT,
+    }
+}
 
 /// How often, while waiting for SSH, to print a "still booting" progress line.
 const BOOT_STATUS_INTERVAL: u64 = 30;
@@ -146,11 +171,6 @@ fn ssh_connect_timeout() -> Duration {
     Duration::from_secs(secs)
 }
 
-/// Neat
-fn is_github_actions() -> bool {
-    std::env::var("GITHUB_ACTIONS").is_ok()
-}
-
 pub fn validate_run_name(name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!name.is_empty(), "job name must not be empty");
     if let Some(bad) = name
@@ -179,6 +199,15 @@ pub struct Job {
     /// (re)boot. Stamped onto each [`SshTarget`] the job hands to a step via [`Job::ssh`]. `None`
     /// until the first boot completes.
     pub ssh_retry_budget: Option<Duration>,
+    /// Best in-guest timeout-enforcement mechanism, probed once on the first successful boot (the
+    /// guest OS/toolset doesn't change across restarts). `None` until then; a step running before it
+    /// is set just relies on the host-side backstop.
+    pub timeout_mech: Option<command::TimeoutMechanism>,
+    pub git_info: Option<GitInfo>,
+    /// Cache inputs captured host-side.
+    pub cache_fingerprint: cache::metadata::Fingerprint,
+    /// TTL (seconds) for a produced cache, from `cache.max_age`.
+    pub cache_ttl_secs: Option<u64>,
 }
 
 impl Job {
@@ -197,10 +226,11 @@ pub struct Step {
     pub name: Option<String>,
     pub kind: StepKind,
     pub workdir: Option<String>,
-    /// Seconds
-    pub timeout: u64,
+    pub timeout: Option<u64>,
     pub env: HashMap<String, String>,
     pub continue_on_error: bool,
+    /// Skip this step if the run is running from a cache, thus doesn't need to be executed.
+    pub skip_if_cached: bool,
 }
 
 pub enum StepKind {
@@ -310,6 +340,14 @@ impl Job {
             }
         }
 
+        // Probe once for the best way to enforce step timeouts *in the guest* (kill the whole
+        // process tree, not just abandon the channel). The guest's toolset is stable across
+        // restarts, so this need only happen on the first boot.
+        if self.timeout_mech.is_none() {
+            self.timeout_mech =
+                Some(command::probe_timeout_mechanism(&ssh_target, self.backend.os()).await);
+        }
+
         println!(
             "{}",
             format!(
@@ -319,6 +357,7 @@ impl Job {
             .magenta()
         );
 
+        let is_cached_run = self.backend.is_cached_run();
         for i in 0..self.steps.len() {
             if i == 0 && skip_first {
                 continue;
@@ -327,10 +366,26 @@ impl Job {
                 .name
                 .clone()
                 .unwrap_or_else(|| format!("Step {}", i + 1));
+
+            if is_cached_run && self.steps[i].skip_if_cached {
+                println!(
+                    "{}",
+                    format!(
+                        "Step {}: {step_name} will be skipped (running from cache)",
+                        i + 1
+                    )
+                    .dimmed()
+                );
+                continue;
+            }
             let continue_on_error = self.steps[i].continue_on_error;
 
-            if is_github_actions() {
-                println!("::group::VCI Step {}: {}", i + 1, step_name);
+            let git_provider = GitProvider::detect_provider();
+
+            if let Some(provider) = &git_provider
+                && matches!(provider, GitProvider::GitHub)
+            {
+                println!("::group::VirtCI Step {}: {}", i + 1, step_name);
             } else {
                 println!(
                     "{}",
@@ -340,7 +395,9 @@ impl Job {
 
             let result = self.run_step(i).await;
 
-            if is_github_actions() {
+            if let Some(provider) = &git_provider
+                && matches!(provider, GitProvider::GitHub)
+            {
                 println!("::endgroup::");
             }
 
@@ -356,14 +413,77 @@ impl Job {
             }
         }
 
+        let clean_shutdown = self.stop_vm_for_capture().await;
+        if clean_shutdown
+            && let Err(e) = self
+                .backend
+                .cache_run_files(&self.cache_fingerprint, self.cache_ttl_secs)
+        {
+            eprintln!(
+                "{}",
+                format!("Warning: failed to write workflow cache: {e:#}").yellow()
+            );
+        }
+
         Ok(())
+    }
+
+    /// Stop the VM before its disk is captured into the cache. Needs to gracefully shutdown so the
+    /// thing doesn't get corrupted and disk can be flushed. SIGKILL when necessary, but that
+    /// means the cache cannot be written.
+    /// Returns `true` when it is safe to capture the disk into the cache.
+    async fn stop_vm_for_capture(&mut self) -> bool {
+        use colored::Colorize;
+
+        if !self.backend.produces_cache() {
+            self.backend.stop_vm();
+            return false;
+        }
+
+        let shutdown_cmd = match self.backend.os() {
+            GuestOs::Windows => "Stop-Computer -Force",
+            _ => "sudo shutdown -h now",
+        };
+        println!("{}", "Powering off the VM to cache a good disk...".dimmed());
+
+        {
+            let ssh = self.ssh();
+            let empty_env = std::collections::HashMap::new();
+            let fut = command::run_command(&ssh, shutdown_cmd, None, &empty_env, self.backend.os());
+            let _ = tokio::time::timeout(Duration::from_secs(15), fut).await;
+        }
+
+        let timeout = cache_shutdown_timeout();
+        let deadline = Instant::now() + Duration::from_secs(timeout);
+        let mut clean = false;
+        loop {
+            if self.backend.vm_has_exited() {
+                clean = true;
+                break;
+            }
+            if Instant::now() >= deadline {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "VirtCI Warning: VM did not power off within {timeout}s so forcing stop and \
+                         skipping cache write (disk may be corrupted)."
+                    )
+                    .yellow()
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
+        self.backend.stop_vm();
+        clean
     }
 
     async fn run_step(&mut self, step_idx: usize) -> anyhow::Result<()> {
         use colored::Colorize;
 
         let step = &self.steps[step_idx];
-        let timeout_duration = Duration::from_secs(step.timeout);
+        let explicit_timeout = step.timeout.filter(|&t| t > 0);
 
         match &step.kind {
             StepKind::Run(command) => {
@@ -385,27 +505,55 @@ impl Job {
                     env.insert(key.clone(), value.clone());
                 }
 
+                let mech = self
+                    .timeout_mech
+                    .unwrap_or(command::TimeoutMechanism::Unwrapped);
+                let in_guest_timeout =
+                    explicit_timeout.is_some() && mech != command::TimeoutMechanism::Unwrapped;
+                let effective_command = match explicit_timeout {
+                    Some(t) if in_guest_timeout => command::wrap_with_timeout(command, t, mech),
+                    _ => command.clone(),
+                };
+                let host_timeout = match explicit_timeout {
+                    None => None,
+                    Some(t) if in_guest_timeout => {
+                        Some(Duration::from_secs(t + std::cmp::max(10, t / 2)))
+                    }
+                    Some(t) => Some(Duration::from_secs(t)),
+                };
+
                 let ssh = self.ssh();
                 let command_future = command::run_command(
                     &ssh,
-                    command,
+                    &effective_command,
                     step.workdir.as_deref(),
                     &env,
                     self.backend.os(),
                 );
 
-                let result = tokio::time::timeout(timeout_duration, command_future)
-                    .await
-                    .map_err(|_| {
-                        eprintln!(
-                            "{}",
-                            format!("  Command timed out after {}s", step.timeout)
-                                .red()
-                                .bold()
-                        );
-                        anyhow::anyhow!("Timed out after {}s", step.timeout)
-                    })?
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                let result = match host_timeout {
+                    Some(dur) => tokio::time::timeout(dur, command_future)
+                        .await
+                        .map_err(|_| {
+                            let secs = explicit_timeout.unwrap_or(0);
+                            eprintln!(
+                                "{}",
+                                format!("  Command timed out after {secs}s").red().bold()
+                            );
+                            anyhow::anyhow!("Timed out after {secs}s")
+                        })?
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                    None => command_future.await.map_err(|e| anyhow::anyhow!(e))?,
+                };
+
+                if in_guest_timeout && result.exit_code == command::TIMEOUT_EXIT_CODE {
+                    let secs = explicit_timeout.unwrap_or(0);
+                    eprintln!(
+                        "{}",
+                        format!("  Command timed out after {secs}s").red().bold()
+                    );
+                    anyhow::bail!("Timed out after {secs}s");
+                }
 
                 if result.exit_code != 0 {
                     anyhow::bail!("Exit code: {}", result.exit_code);
@@ -415,13 +563,16 @@ impl Job {
                 let ssh = self.ssh();
                 let guest_os = self.backend.os();
 
-                let copy_future =
-                    copy::run_copy_spec(&ssh, copy_spec, guest_os, Some(timeout_duration));
+                let copy_timeout = explicit_timeout.map(Duration::from_secs);
+                let copy_future = copy::run_copy_spec(&ssh, copy_spec, guest_os, copy_timeout);
 
-                tokio::time::timeout(timeout_duration, copy_future)
-                    .await
-                    .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", step.timeout))?
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                match copy_timeout {
+                    Some(dur) => tokio::time::timeout(dur, copy_future)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", dur.as_secs()))?
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                    None => copy_future.await.map_err(|e| anyhow::anyhow!(e))?,
+                }
             }
             StepKind::Restart(restart) => {
                 println!(
@@ -912,6 +1063,9 @@ impl std::error::Error for ConnectError {}
 pub async fn connect(ssh: &SshTarget) -> Result<client::Handle<ClientHandler>, ConnectError> {
     let mut config = client::Config {
         inactivity_timeout: None,
+        // make the connection itself a little more resilient from random NAT failures or whatever.
+        keepalive_interval: Some(std::time::Duration::from_secs(15)),
+        keepalive_max: 6,
         ..Default::default()
     };
 
