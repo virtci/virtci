@@ -32,7 +32,8 @@ pub enum TimeoutMechanism {
 
 pub async fn probe_timeout_mechanism(ssh: &SshTarget, os: GuestOs) -> TimeoutMechanism {
     if os == GuestOs::Windows {
-        return TimeoutMechanism::WindowsTaskkill;
+        // TODO Flip back to `WindowsTaskkill` once the wrapper is fixed.
+        return TimeoutMechanism::Unwrapped;
     }
     // Prints "t" if `timeout` exists and/or "b" if `bash` exists.
     let probe = "command -v timeout >/dev/null 2>&1 && printf t; \
