@@ -43,6 +43,8 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - A `virtci run` step without a timeout no longer defaults to 2 hours. It will now run with no timeout.
+- Will now re-try while trying to boot a macOS VM with the Tart backend as it respects Apple's EULA outlined max macOS VMs on a single host of 2.
+  - After about 2 hours, it will give up retrying.
 
 ### Fixed
 

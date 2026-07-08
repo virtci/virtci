@@ -18,7 +18,8 @@ use crate::{
 
 /// If tart max VMs, retry every 30 seconds.
 const CAP_RETRY_INTERVAL_S: u64 = 30;
-const CAP_MAX_RETRIES: u32 = 120;
+/// Makes it about 2 hours.
+const CAP_MAX_RETRIES: u32 = 240;
 
 pub struct TartRunner {
     pub is_base_mode: bool,
