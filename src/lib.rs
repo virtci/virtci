@@ -653,6 +653,7 @@ fn extract_yaml_workflows(
             host_env: yaml_job.host_env,
             steps,
             ssh_retry_budget: None,
+            timeout_mech: None,
             git_info: git_info.clone(),
             cache_fingerprint,
             cache_ttl_secs,

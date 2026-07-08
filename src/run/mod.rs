@@ -199,6 +199,10 @@ pub struct Job {
     /// (re)boot. Stamped onto each [`SshTarget`] the job hands to a step via [`Job::ssh`]. `None`
     /// until the first boot completes.
     pub ssh_retry_budget: Option<Duration>,
+    /// Best in-guest timeout-enforcement mechanism, probed once on the first successful boot (the
+    /// guest OS/toolset doesn't change across restarts). `None` until then; a step running before it
+    /// is set just relies on the host-side backstop.
+    pub timeout_mech: Option<command::TimeoutMechanism>,
     pub git_info: Option<GitInfo>,
     /// Cache inputs captured host-side.
     pub cache_fingerprint: cache::metadata::Fingerprint,
@@ -335,6 +339,14 @@ impl Job {
                     );
                 }
             }
+        }
+
+        // Probe once for the best way to enforce step timeouts *in the guest* (kill the whole
+        // process tree, not just abandon the channel). The guest's toolset is stable across
+        // restarts, so this need only happen on the first boot.
+        if self.timeout_mech.is_none() {
+            self.timeout_mech =
+                Some(command::probe_timeout_mechanism(&ssh_target, self.backend.os()).await);
         }
 
         println!(
@@ -494,16 +506,32 @@ impl Job {
                     env.insert(key.clone(), value.clone());
                 }
 
+                // Enforce the timeout *in the guest* so a slow/hung command's whole process tree is
+                // killed rather than orphaned. The host-side `tokio` timeout stays as a backstop,
+                // set a grace period longer so the in-guest killer is what normally fires (and
+                // reports the clean 124 → "timed out"); it only trips if the wrapper itself wedges.
+                let mech = self
+                    .timeout_mech
+                    .unwrap_or(command::TimeoutMechanism::Unwrapped);
+                let in_guest_timeout =
+                    step.timeout > 0 && mech != command::TimeoutMechanism::Unwrapped;
+                let effective_command = command::wrap_with_timeout(command, step.timeout, mech);
+                let host_timeout = if in_guest_timeout {
+                    Duration::from_secs(step.timeout + std::cmp::max(10, step.timeout / 2))
+                } else {
+                    timeout_duration
+                };
+
                 let ssh = self.ssh();
                 let command_future = command::run_command(
                     &ssh,
-                    command,
+                    &effective_command,
                     step.workdir.as_deref(),
                     &env,
                     self.backend.os(),
                 );
 
-                let result = tokio::time::timeout(timeout_duration, command_future)
+                let result = tokio::time::timeout(host_timeout, command_future)
                     .await
                     .map_err(|_| {
                         eprintln!(
@@ -515,6 +543,18 @@ impl Job {
                         anyhow::anyhow!("Timed out after {}s", step.timeout)
                     })?
                     .map_err(|e| anyhow::anyhow!(e))?;
+
+                // The in-guest wrapper reports 124 when it kills the command for exceeding the
+                // deadline; surface that as a timeout rather than a generic non-zero exit.
+                if in_guest_timeout && result.exit_code == command::TIMEOUT_EXIT_CODE {
+                    eprintln!(
+                        "{}",
+                        format!("  Command timed out after {}s", step.timeout)
+                            .red()
+                            .bold()
+                    );
+                    anyhow::bail!("Timed out after {}s", step.timeout);
+                }
 
                 if result.exit_code != 0 {
                     anyhow::bail!("Exit code: {}", result.exit_code);

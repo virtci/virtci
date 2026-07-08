@@ -13,6 +13,90 @@ use crate::{
     vm_image::SshTarget,
 };
 
+/// Exit code of GNU timeout.
+pub const TIMEOUT_EXIT_CODE: u32 = 124;
+
+/// How to enforce a timeout inside the VM itself, rather than orphaning. Also works with host-side
+/// tokio timeout. Use [`probe_timeout_mechanism`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeoutMechanism {
+    ///  `timeout(1)` GNU coreutils, busybox, bsd.
+    Timeout,
+    /// macOS basically. `set -m`.
+    BashJobControl,
+    /// `taskkill /T`.
+    WindowsTaskkill,
+    /// No in-VM timeout mechanism
+    Unwrapped,
+}
+
+pub async fn probe_timeout_mechanism(ssh: &SshTarget, os: GuestOs) -> TimeoutMechanism {
+    if os == GuestOs::Windows {
+        return TimeoutMechanism::WindowsTaskkill;
+    }
+    // Prints "t" if `timeout` exists and/or "b" if `bash` exists.
+    let probe = "command -v timeout >/dev/null 2>&1 && printf t; \
+                 command -v bash >/dev/null 2>&1 && printf b";
+    match run_command(ssh, probe, None, &HashMap::new(), os).await {
+        Ok(res) if res.stdout.contains('t') => TimeoutMechanism::Timeout,
+        Ok(res) if res.stdout.contains('b') => TimeoutMechanism::BashJobControl,
+        _ => TimeoutMechanism::Unwrapped,
+    }
+}
+
+fn posix_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Wrap a command so it can be forcekilled after `secs` seconds. Returns the command
+/// unchanged for [`TimeoutMechanism::Unwrapped`] or a non-positive timeout. On expiry the wrapper
+/// exits [`TIMEOUT_EXIT_CODE`].
+pub fn wrap_with_timeout(user_cmd: &str, secs: u64, mech: TimeoutMechanism) -> String {
+    if secs == 0 || mech == TimeoutMechanism::Unwrapped {
+        return user_cmd.to_string();
+    }
+    match mech {
+        TimeoutMechanism::Timeout => {
+            format!(
+                "timeout -k 5 {secs} /bin/sh -c {}",
+                posix_single_quote(user_cmd)
+            )
+        }
+        TimeoutMechanism::BashJobControl => {
+            let watchdog = format!(
+                "set -m; f=$(mktemp); ( exec /bin/sh -c \"$1\" ) & c=$!; \
+                 ( sleep {secs}; : > \"$f\"; kill -TERM -\"$c\" 2>/dev/null; sleep 5; \
+                 kill -KILL -\"$c\" 2>/dev/null ) & w=$!; wait \"$c\"; s=$?; \
+                 kill \"$w\" 2>/dev/null; kill -- -\"$w\" 2>/dev/null; \
+                 if [ -s \"$f\" ]; then rm -f \"$f\"; exit {code}; fi; rm -f \"$f\"; exit \"$s\"",
+                code = TIMEOUT_EXIT_CODE,
+            );
+            format!("bash -c '{watchdog}' _ {}", posix_single_quote(user_cmd))
+        }
+        TimeoutMechanism::WindowsTaskkill => windows_timeout_wrapper(user_cmd, secs),
+        TimeoutMechanism::Unwrapped => user_cmd.to_string(),
+    }
+}
+
+fn windows_timeout_wrapper(user_cmd: &str, secs: u64) -> String {
+    format!(
+        "$__vciTo = {secs}; $__vciSelf = $PID; \
+         $__vciFlag = Join-Path $env:TEMP ('vci_to_' + [guid]::NewGuid().ToString('N')); \
+         $__vciWd = Start-Job -ScriptBlock {{ \
+         Start-Sleep -Seconds $using:__vciTo; \
+         New-Item -ItemType File -Force -Path $using:__vciFlag | Out-Null; \
+         Get-CimInstance Win32_Process -Filter ('ParentProcessId=' + $using:__vciSelf) | \
+         Where-Object {{ $_.ProcessId -ne $PID }} | \
+         ForEach-Object {{ & taskkill /T /F /PID $_.ProcessId 2>$null | Out-Null }} }}; \
+         try {{ {user_cmd}; $__vciCode = $LASTEXITCODE; if ($null -eq $__vciCode) {{ $__vciCode = 0 }} }} \
+         finally {{ Stop-Job $__vciWd -ErrorAction SilentlyContinue; \
+         Remove-Job $__vciWd -Force -ErrorAction SilentlyContinue }}; \
+         if (Test-Path $__vciFlag) {{ Remove-Item $__vciFlag -Force -ErrorAction SilentlyContinue; \
+         exit {code} }}; exit $__vciCode",
+        code = TIMEOUT_EXIT_CODE,
+    )
+}
+
 #[derive(Default)]
 struct ChannelOutcome {
     saw_eof: bool,
@@ -312,4 +396,75 @@ pub async fn run_command_binary(
         stdout,
         stderr,
     })
+}
+
+#[cfg(test)]
+mod timeout_wrap_tests {
+    use super::{TIMEOUT_EXIT_CODE, TimeoutMechanism, wrap_with_timeout};
+
+    #[test]
+    fn unwrapped_or_zero_timeout_passes_through_verbatim() {
+        let cmd = "cargo test --locked";
+        assert_eq!(
+            wrap_with_timeout(cmd, 30, TimeoutMechanism::Unwrapped),
+            cmd,
+            "Unwrapped must not alter the command"
+        );
+        assert_eq!(
+            wrap_with_timeout(cmd, 0, TimeoutMechanism::Timeout),
+            cmd,
+            "a zero timeout means no deadline, so no wrapping"
+        );
+    }
+
+    #[test]
+    fn timeout_mechanism_wraps_and_single_quote_escapes() {
+        let wrapped = wrap_with_timeout("echo it's fine", 5, TimeoutMechanism::Timeout);
+        assert_eq!(wrapped, "timeout -k 5 5 /bin/sh -c 'echo it'\\''s fine'");
+    }
+
+    #[test]
+    fn bash_mechanism_is_self_contained_and_reports_124() {
+        let wrapped = wrap_with_timeout("make", 12, TimeoutMechanism::BashJobControl);
+        assert!(
+            wrapped.starts_with("bash -c '"),
+            "runs under bash: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("set -m"),
+            "needs job control for the pgroup"
+        );
+        assert!(
+            wrapped.contains("sleep 12"),
+            "the deadline is baked in: {wrapped}"
+        );
+        assert!(
+            wrapped.contains("kill -TERM -\"$c\""),
+            "must group-kill the whole tree (negative PID targets the process group)"
+        );
+        assert!(wrapped.contains(&format!("exit {TIMEOUT_EXIT_CODE}")));
+        assert!(
+            wrapped.ends_with("_ 'make'"),
+            "user command passed as the $1 positional: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn windows_mechanism_uses_a_real_scriptblock_not_a_nested_command_string() {
+        let wrapped = wrap_with_timeout("cargo build", 20, TimeoutMechanism::WindowsTaskkill);
+
+        assert!(wrapped.contains("Start-Job -ScriptBlock"));
+        assert!(
+            !wrapped.contains("-Command"),
+            "no fragile nested command string"
+        );
+        assert!(wrapped.contains("$using:__vciSelf"));
+        assert!(wrapped.contains("taskkill /T /F"));
+        assert!(
+            wrapped.contains("$_.ProcessId -ne $PID"),
+            "must not kill itself"
+        );
+        assert!(wrapped.contains("cargo build"), "user command runs inline");
+        assert!(wrapped.contains(&format!("exit {TIMEOUT_EXIT_CODE}")));
+    }
 }
