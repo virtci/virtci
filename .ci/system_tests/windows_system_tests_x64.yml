@@ -94,10 +94,30 @@ windows-system-tests-x64:
     - name: Go Offline For Cache Generation Tests
       restart:
         offline: true
-
-    - name: Show Offline Routing State
-      run: route print -4
+    - name: Enforce Offline Egress Lockdown
+      run: |
+        $ErrorActionPreference = "Continue"
+        $peer = ($env:SSH_CONNECTION -split ' ')[0]
+        Write-Host "SSH peer (only permitted egress): $peer"
+        Write-Host ("SynSent connections before lockdown: " + (Get-NetTCPConnection -State SynSent -ErrorAction SilentlyContinue | Measure-Object).Count)
+        Get-DnsClientServerAddress -AddressFamily IPv4 | Format-Table -AutoSize | Out-String | Write-Host
+        New-NetFirewallRule -DisplayName "vci-offline-allow-peer" -Direction Outbound -RemoteAddress $peer -Action Allow -Profile Any -Enabled True | Out-Null
+        Set-NetFirewallProfile -Profile Domain,Private,Public -DefaultOutboundAction Block -Enabled True
+        route print -4
 
     - name: Workflow Run Local Workflow Cache Tests
       workdir: virtci
+      continue_on_error: true
       run: cargo test --locked --test local_workflow_cache -- --ignored --test-threads=1 --no-capture
+
+    - name: Post-Mortem Network State
+      continue_on_error: true
+      run: |
+        $ErrorActionPreference = "Continue"
+        Write-Host "=== :22 connections ==="
+        Get-NetTCPConnection | Where-Object { $_.RemotePort -eq 22 -or $_.LocalPort -eq 22 } | Format-Table State,LocalAddress,LocalPort,RemoteAddress,RemotePort -AutoSize | Out-String | Write-Host
+        Write-Host ("SynSent connections: " + (Get-NetTCPConnection -State SynSent -ErrorAction SilentlyContinue | Measure-Object).Count)
+        Write-Host "=== adapters ==="
+        Get-NetAdapter | Format-Table Name,Status,LinkSpeed -AutoSize | Out-String | Write-Host
+        Write-Host "=== qemu processes ==="
+        Get-Process qemu* -ErrorAction SilentlyContinue | Format-Table Id,ProcessName,WS -AutoSize | Out-String | Write-Host
