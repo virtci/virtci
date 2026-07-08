@@ -572,7 +572,7 @@ impl Job {
                         .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", dur.as_secs()))?
                         .map_err(|e| anyhow::anyhow!(e))?,
                     None => copy_future.await.map_err(|e| anyhow::anyhow!(e))?,
-                };
+                }
             }
             StepKind::Restart(restart) => {
                 println!(
