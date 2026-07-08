@@ -40,6 +40,10 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
     - Disk = 2TB (about 1862GB usable), retain about 116GB.
     - Disk = 4TB (about 3725GB usable), retain about 223GB.
 
+### Changed
+
+- A `virtci run` step without a timeout no longer defaults to 2 hours. It will now run with no timeout.
+
 ### Fixed
 
 - Fixed a `virtci run` step reaching a timeout not actually stopping the execution of the step inside the VM sometimes.

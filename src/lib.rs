@@ -685,10 +685,8 @@ fn resolve_step(job_name: &str, step: &yaml::Step) -> anyhow::Result<run::Step> 
             })
         }
     };
-    let timeout = match &step.timeout {
-        Some(s) => yaml::parse_timeout_seconds(s),
-        None => run::MAX_TIMEOUT,
-    };
+
+    let timeout = step.timeout.as_deref().map(yaml::parse_timeout_seconds);
     Ok(run::Step {
         name: step.name.clone(),
         kind,

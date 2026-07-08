@@ -32,8 +32,7 @@ pub enum TimeoutMechanism {
 
 pub async fn probe_timeout_mechanism(ssh: &SshTarget, os: GuestOs) -> TimeoutMechanism {
     if os == GuestOs::Windows {
-        // TODO Flip back to `WindowsTaskkill` once the wrapper is fixed.
-        return TimeoutMechanism::Unwrapped;
+        return TimeoutMechanism::WindowsTaskkill;
     }
     // Prints "t" if `timeout` exists and/or "b" if `bash` exists.
     let probe = "command -v timeout >/dev/null 2>&1 && printf t; \
@@ -79,21 +78,30 @@ pub fn wrap_with_timeout(user_cmd: &str, secs: u64, mech: TimeoutMechanism) -> S
 }
 
 fn windows_timeout_wrapper(user_cmd: &str, secs: u64) -> String {
-    format!(
-        "$__vciTo = {secs}; $__vciSelf = $PID; \
-         $__vciFlag = Join-Path $env:TEMP ('vci_to_' + [guid]::NewGuid().ToString('N')); \
-         $__vciWd = Start-Job -ScriptBlock {{ \
-         Start-Sleep -Seconds $using:__vciTo; \
-         New-Item -ItemType File -Force -Path $using:__vciFlag | Out-Null; \
-         Get-CimInstance Win32_Process -Filter ('ParentProcessId=' + $using:__vciSelf) | \
-         Where-Object {{ $_.ProcessId -ne $PID }} | \
-         ForEach-Object {{ & taskkill /T /F /PID $_.ProcessId 2>$null | Out-Null }} }}; \
-         try {{ {user_cmd}; $__vciCode = $LASTEXITCODE; if ($null -eq $__vciCode) {{ $__vciCode = 0 }} }} \
-         finally {{ Stop-Job $__vciWd -ErrorAction SilentlyContinue; \
-         Remove-Job $__vciWd -Force -ErrorAction SilentlyContinue }}; \
-         if (Test-Path $__vciFlag) {{ Remove-Item $__vciFlag -Force -ErrorAction SilentlyContinue; \
-         exit {TIMEOUT_EXIT_CODE} }}; exit $__vciCode"
-    )
+    const WATCHDOG: &str = "$to=[int]$env:VCI_WD_TO; $fl=$env:VCI_WD_FLAG; \
+         $sp=[int]$env:VCI_WD_SELF; Start-Sleep -Seconds $to; \
+         New-Item -ItemType File -Force -Path $fl | Out-Null; \
+         Get-CimInstance Win32_Process -Filter ('ParentProcessId={0}' -f $sp) | \
+         Where-Object { $_.ProcessId -ne $PID } | \
+         ForEach-Object { & taskkill /T /F /PID $_.ProcessId 2>$null | Out-Null }";
+
+    let wd = WATCHDOG.replace('\'', "''");
+    let prefix = format!(
+        "$env:VCI_WD_TO='{secs}'; \
+         $env:VCI_WD_FLAG=(Join-Path $env:TEMP ('vci_to_'+[guid]::NewGuid().ToString('N'))); \
+         $env:VCI_WD_SELF=$PID; $__vciFlag=$env:VCI_WD_FLAG; \
+         $__vciEnc=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('{wd}')); \
+         $__vciWd=Start-Process powershell -PassThru -WindowStyle Hidden -ArgumentList \
+         '-NoProfile','-NonInteractive','-EncodedCommand',$__vciEnc"
+    );
+    let suffix = format!(
+        "$__vciCode=$LASTEXITCODE; \
+         Stop-Process -Id $__vciWd.Id -Force -ErrorAction SilentlyContinue; \
+         if(Test-Path $__vciFlag){{ Remove-Item $__vciFlag -Force -ErrorAction SilentlyContinue; \
+         exit {TIMEOUT_EXIT_CODE} }}; if($null -eq $__vciCode){{ $__vciCode=0 }}; exit $__vciCode"
+    );
+
+    format!("{prefix}\n{user_cmd}\n{suffix}")
 }
 
 #[derive(Default)]
@@ -449,21 +457,29 @@ mod timeout_wrap_tests {
     }
 
     #[test]
-    fn windows_mechanism_uses_a_real_scriptblock_not_a_nested_command_string() {
+    fn windows_mechanism_runs_body_top_level_with_a_detached_encoded_watchdog() {
         let wrapped = wrap_with_timeout("cargo build", 20, TimeoutMechanism::WindowsTaskkill);
 
-        assert!(wrapped.contains("Start-Job -ScriptBlock"));
+        // The body must sit at TOP LEVEL, newline-delimited — not inside a `try {`/`Start-Job {`
+        // block, which is what hangs multi-line commands over Windows OpenSSH.
         assert!(
-            !wrapped.contains("-Command"),
-            "no fragile nested command string"
+            wrapped.contains("\ncargo build\n"),
+            "body must be at top level: {wrapped}"
         );
-        assert!(wrapped.contains("$using:__vciSelf"));
+        assert!(
+            !wrapped.contains("Start-Job"),
+            "Start-Job can hang over SSH"
+        );
+        assert!(!wrapped.contains("try {"), "no brace block around the body");
+        // Watchdog is a detached process delivered as base64 (immune to quoting), fed via env vars.
+        assert!(wrapped.contains("Start-Process powershell"));
+        assert!(wrapped.contains("-EncodedCommand"));
+        assert!(wrapped.contains("$env:VCI_WD_SELF=$PID"));
         assert!(wrapped.contains("taskkill /T /F"));
         assert!(
             wrapped.contains("$_.ProcessId -ne $PID"),
             "must not kill itself"
         );
-        assert!(wrapped.contains("cargo build"), "user command runs inline");
         assert!(wrapped.contains(&format!("exit {TIMEOUT_EXIT_CODE}")));
     }
 }

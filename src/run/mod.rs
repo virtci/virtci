@@ -226,8 +226,7 @@ pub struct Step {
     pub name: Option<String>,
     pub kind: StepKind,
     pub workdir: Option<String>,
-    /// Seconds
-    pub timeout: u64,
+    pub timeout: Option<u64>,
     pub env: HashMap<String, String>,
     pub continue_on_error: bool,
     /// Skip this step if the run is running from a cache, thus doesn't need to be executed.
@@ -484,7 +483,7 @@ impl Job {
         use colored::Colorize;
 
         let step = &self.steps[step_idx];
-        let timeout_duration = Duration::from_secs(step.timeout);
+        let explicit_timeout = step.timeout.filter(|&t| t > 0);
 
         match &step.kind {
             StepKind::Run(command) => {
@@ -506,20 +505,21 @@ impl Job {
                     env.insert(key.clone(), value.clone());
                 }
 
-                // Enforce the timeout *in the guest* so a slow/hung command's whole process tree is
-                // killed rather than orphaned. The host-side `tokio` timeout stays as a backstop,
-                // set a grace period longer so the in-guest killer is what normally fires (and
-                // reports the clean 124 → "timed out"); it only trips if the wrapper itself wedges.
                 let mech = self
                     .timeout_mech
                     .unwrap_or(command::TimeoutMechanism::Unwrapped);
                 let in_guest_timeout =
-                    step.timeout > 0 && mech != command::TimeoutMechanism::Unwrapped;
-                let effective_command = command::wrap_with_timeout(command, step.timeout, mech);
-                let host_timeout = if in_guest_timeout {
-                    Duration::from_secs(step.timeout + std::cmp::max(10, step.timeout / 2))
-                } else {
-                    timeout_duration
+                    explicit_timeout.is_some() && mech != command::TimeoutMechanism::Unwrapped;
+                let effective_command = match explicit_timeout {
+                    Some(t) if in_guest_timeout => command::wrap_with_timeout(command, t, mech),
+                    _ => command.clone(),
+                };
+                let host_timeout = match explicit_timeout {
+                    None => None,
+                    Some(t) if in_guest_timeout => {
+                        Some(Duration::from_secs(t + std::cmp::max(10, t / 2)))
+                    }
+                    Some(t) => Some(Duration::from_secs(t)),
                 };
 
                 let ssh = self.ssh();
@@ -531,29 +531,28 @@ impl Job {
                     self.backend.os(),
                 );
 
-                let result = tokio::time::timeout(host_timeout, command_future)
-                    .await
-                    .map_err(|_| {
-                        eprintln!(
-                            "{}",
-                            format!("  Command timed out after {}s", step.timeout)
-                                .red()
-                                .bold()
-                        );
-                        anyhow::anyhow!("Timed out after {}s", step.timeout)
-                    })?
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                let result = match host_timeout {
+                    Some(dur) => tokio::time::timeout(dur, command_future)
+                        .await
+                        .map_err(|_| {
+                            let secs = explicit_timeout.unwrap_or(0);
+                            eprintln!(
+                                "{}",
+                                format!("  Command timed out after {secs}s").red().bold()
+                            );
+                            anyhow::anyhow!("Timed out after {secs}s")
+                        })?
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                    None => command_future.await.map_err(|e| anyhow::anyhow!(e))?,
+                };
 
-                // The in-guest wrapper reports 124 when it kills the command for exceeding the
-                // deadline; surface that as a timeout rather than a generic non-zero exit.
                 if in_guest_timeout && result.exit_code == command::TIMEOUT_EXIT_CODE {
+                    let secs = explicit_timeout.unwrap_or(0);
                     eprintln!(
                         "{}",
-                        format!("  Command timed out after {}s", step.timeout)
-                            .red()
-                            .bold()
+                        format!("  Command timed out after {secs}s").red().bold()
                     );
-                    anyhow::bail!("Timed out after {}s", step.timeout);
+                    anyhow::bail!("Timed out after {secs}s");
                 }
 
                 if result.exit_code != 0 {
@@ -564,13 +563,16 @@ impl Job {
                 let ssh = self.ssh();
                 let guest_os = self.backend.os();
 
-                let copy_future =
-                    copy::run_copy_spec(&ssh, copy_spec, guest_os, Some(timeout_duration));
+                let copy_timeout = explicit_timeout.map(Duration::from_secs);
+                let copy_future = copy::run_copy_spec(&ssh, copy_spec, guest_os, copy_timeout);
 
-                tokio::time::timeout(timeout_duration, copy_future)
-                    .await
-                    .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", step.timeout))?
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                match copy_timeout {
+                    Some(dur) => tokio::time::timeout(dur, copy_future)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("Copy timed out after {}s", dur.as_secs()))?
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                    None => copy_future.await.map_err(|e| anyhow::anyhow!(e))?,
+                };
             }
             StepKind::Restart(restart) => {
                 println!(
