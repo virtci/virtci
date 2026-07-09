@@ -68,6 +68,12 @@ pub trait VmBackend {
         None
     }
 
+    /// Count of IO operations (reads and writes across all drives) that the VM has done. Very
+    /// useful to actually track progress.
+    fn vm_disk_io_ops(&self) -> Option<u64> {
+        None
+    }
+
     /// Whether this run is running from a workflow cache.
     fn is_cached_run(&self) -> bool;
 

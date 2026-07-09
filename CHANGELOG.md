@@ -51,6 +51,7 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Fixed a `virtci run` step reaching a timeout not actually stopping the execution of the step inside the VM sometimes.
 - Fixed YAML workflow `timeout` in a step not accepting integers.
 - Fixed empty strings in a YAML workflow `timeout` setting the timeout to 2 hours silently.
+- Fixed Windows `virtci run` boot progress detection being too strict and checking values that may not always get updated, leading to flakiness when booting some VMs, notably TCG emulated ones (those were the only occurrences observed).
 
 ## Version 0.3.1 - 2026-06-11
 

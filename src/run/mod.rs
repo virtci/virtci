@@ -83,11 +83,12 @@ const BOOT_STATUS_INTERVAL: u64 = 30;
 /// Deliberately coarse: a WSL2 sample shells out to the distro, and the idle timeout it feeds is
 /// measured in minutes, so there's no need to sample every poll.
 const CPU_SAMPLE_INTERVAL: u64 = 15;
-/// Minimum share of one CPU core (`1 / CPU_PROGRESS_DIVISOR`) the VM must burn over a sample
-/// interval for it to count as boot progress. Set so an actively-emulating guest (which pegs a
-/// core under TCG) clears it easily, while the idle housekeeping of a halted/wedged guest's
-/// process does not masquerade as progress. `20` => 5%.
-const CPU_PROGRESS_DIVISOR: u64 = 20;
+/// VM must do 1% CPU time progress to determine that it is making at least some progress.
+const CPU_PROGRESS_DIVISOR: u64 = 100;
+
+/// If the VM seems idle, wait `base_idle + (elapsed / IDLE_SCALE_DIVISOR)` amount of time until it's
+/// condiered hanged.
+const IDLE_SCALE_DIVISOR: u64 = 4;
 
 /// Once SSH first becomes functional, we don't trust it immediately: a VM that has *just* reached a
 /// usable SSH state is often still finishing first-boot work (cloud-init creating the user and
@@ -772,6 +773,160 @@ async fn exec_trivial(handle: &client::Handle<ClientHandler>, os: GuestOs) -> bo
     }
 }
 
+/// Actually count the bytes in the log rather than `stat`ing the file cause Windows seemingly
+/// does the writes in bursts? Not sure why.
+struct SerialCounter {
+    path: Option<std::path::PathBuf>,
+    file: Option<std::fs::File>,
+    total: u64,
+}
+
+impl SerialCounter {
+    fn new(path: Option<std::path::PathBuf>) -> Self {
+        Self {
+            path,
+            file: None,
+            total: 0,
+        }
+    }
+
+    fn poll(&mut self) -> u64 {
+        if self.file.is_none()
+            && let Some(p) = &self.path
+        {
+            self.file = std::fs::File::open(p).ok();
+        }
+        if let Some(f) = &mut self.file
+            && let Ok(n) = std::io::copy(f, &mut std::io::sink())
+        {
+            self.total = self.total.saturating_add(n);
+        }
+        self.total
+    }
+}
+
+struct BootSignals {
+    /// SSH reached at least the banner/listening stage this tick.
+    ssh_progress: bool,
+    /// Total bytes drained from the serial log so far.
+    serial_bytes: u64,
+    /// Number of times the qcow2 disk fingerprint has advanced so far.
+    disk_changes: u64,
+    /// QMP block-layer IO operations count. `None` if not sampled/available this tick.
+    io_ops: Option<u64>,
+    /// Cumulative QEMU process CPU nanoseconds, `None` if not sampled this tick.
+    cpu_ns: Option<u64>,
+}
+
+enum BootVerdict {
+    Booting,
+    Stuck,
+    MaxTimeout,
+}
+
+struct BootStatus {
+    idle: Duration,
+    effective_idle: Duration,
+    verdict: BootVerdict,
+}
+
+struct BootWatch {
+    base_idle: Duration,
+    max_timeout: Duration,
+    cpu_sample_interval: Duration,
+    /// Elapsed time at which progress was last observed.
+    last_progress: Duration,
+    last_serial: u64,
+    last_disk_changes: u64,
+    last_io_ops: Option<u64>,
+    last_cpu: Option<u64>,
+    /// Elapsed time of the last successful CPU sample. Re-try on failed read.
+    last_cpu_at: Duration,
+}
+
+impl BootWatch {
+    fn new(
+        base_idle: Duration,
+        max_timeout: Duration,
+        cpu_sample_interval: Duration,
+        initial_cpu: Option<u64>,
+        initial_io: Option<u64>,
+    ) -> Self {
+        Self {
+            base_idle,
+            max_timeout,
+            cpu_sample_interval,
+            last_progress: Duration::ZERO,
+            last_serial: 0,
+            last_disk_changes: 0,
+            last_io_ops: initial_io,
+            last_cpu: initial_cpu,
+            last_cpu_at: Duration::ZERO,
+        }
+    }
+
+    /// Whether enough time has passed since the last successful CPU sample to take another.
+    fn slow_sample_due(&self, elapsed: Duration) -> bool {
+        elapsed.saturating_sub(self.last_cpu_at) >= self.cpu_sample_interval
+    }
+
+    /// How long the idle window can be. Scales with progress elapsed boot time.
+    fn effective_idle(&self, elapsed: Duration) -> Duration {
+        let scaled = self.base_idle + (Duration::from_secs(elapsed.as_secs() / IDLE_SCALE_DIVISOR));
+        scaled.min(self.max_timeout)
+    }
+
+    fn observe(&mut self, elapsed: Duration, sig: &BootSignals) -> BootStatus {
+        let mut progress = sig.ssh_progress;
+
+        if sig.serial_bytes > self.last_serial {
+            self.last_serial = sig.serial_bytes;
+            progress = true;
+        }
+        if sig.disk_changes > self.last_disk_changes {
+            self.last_disk_changes = sig.disk_changes;
+            progress = true;
+        }
+        if let Some(io) = sig.io_ops {
+            if self.last_io_ops.is_some_and(|prev| io > prev) {
+                progress = true;
+            }
+            self.last_io_ops = Some(io.max(self.last_io_ops.unwrap_or(0)));
+        }
+        if let Some(cpu) = sig.cpu_ns {
+            if let Some(prev) = self.last_cpu {
+                let cpu_delta = cpu.saturating_sub(prev);
+                let wall_ns = u64::try_from(elapsed.saturating_sub(self.last_cpu_at).as_nanos())
+                    .unwrap_or(u64::MAX);
+                if wall_ns > 0 && cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
+                    progress = true;
+                }
+            }
+            self.last_cpu = Some(cpu);
+            self.last_cpu_at = elapsed;
+        }
+
+        if progress {
+            self.last_progress = elapsed;
+        }
+
+        let idle = elapsed.saturating_sub(self.last_progress);
+        let effective_idle = self.effective_idle(elapsed);
+        let verdict = if idle >= effective_idle {
+            BootVerdict::Stuck
+        } else if elapsed >= self.max_timeout {
+            BootVerdict::MaxTimeout
+        } else {
+            BootVerdict::Booting
+        };
+        BootStatus {
+            idle,
+            effective_idle,
+            verdict,
+        }
+    }
+}
+
 /// Returns the seconds until SSH was ready.
 /// Wait for SSH to become reachable. Uses idle timeout of `idle_timeout_secs`. If the serial log
 /// of the VM is growing, then boot progress is considered "in progress", and the idle timeout
@@ -785,15 +940,8 @@ pub async fn wait_for_ssh_watching(
     use colored::Colorize;
 
     let serial_path = backend.serial_log_path().map(std::path::Path::to_path_buf);
-    let serial_size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).ok();
+    let mut serial = SerialCounter::new(serial_path.clone());
 
-    let mut last_size = serial_path.as_deref().and_then(serial_size).unwrap_or(0);
-    let mut status_size = last_size;
-
-    // Two extra liveness signals beyond serial growth, both of which stay active during the
-    // serial-silent, CPU-bound late-boot phase that cross-arch TCG makes long enough to trip the
-    // idle timeout: the VM process burning CPU, and the guest writing to its disk. A "fingerprint"
-    // of `(len, mtime)` catches in-place writes that don't grow the file.
     let disk_path = backend.disk_image_path().map(std::path::Path::to_path_buf);
     let disk_fingerprint = |p: &std::path::Path| {
         std::fs::metadata(p)
@@ -801,6 +949,7 @@ pub async fn wait_for_ssh_watching(
             .map(|m| (m.len(), m.modified().ok()))
     };
     let mut last_disk = disk_path.as_deref().and_then(disk_fingerprint);
+    let mut disk_changes: u64 = 0;
 
     let idle_timeout = Duration::from_secs(idle_timeout_secs);
     let max_timeout = Duration::from_secs(max_timeout_secs);
@@ -809,22 +958,28 @@ pub async fn wait_for_ssh_watching(
 
     let os = backend.os();
     let start = Instant::now();
-    let mut last_progress = start;
     let mut last_status = start;
     let mut banner_seen = false;
-    let mut last_cpu = backend.vm_cpu_time_ns();
-    let mut last_cpu_at = start;
+    let mut status_bytes = serial.poll();
+
+    let mut watch = BootWatch::new(
+        idle_timeout,
+        max_timeout,
+        cpu_sample_interval,
+        backend.vm_cpu_time_ns(),
+        backend.vm_disk_io_ops(),
+    );
 
     loop {
         if let Some(err) = backend.vm_exit_error() {
             anyhow::bail!("VM process exited while waiting for SSH: {err}");
         }
 
+        let mut ssh_progress = false;
         match probe_ssh(ssh, os).await {
             SshProgress::Ready => break,
             SshProgress::Listening => {
-                // It's listening which means boot progress should be happening.
-                // Can't login yet though.
+                // Listening means boot progress is happening; can't log in yet though.
                 if !banner_seen {
                     banner_seen = true;
                     println!(
@@ -834,84 +989,78 @@ pub async fn wait_for_ssh_watching(
                             .dimmed()
                     );
                 }
-                last_progress = Instant::now();
+                ssh_progress = true;
             }
             SshProgress::NotReady => {}
         }
 
-        if let Some(size) = serial_path.as_deref().and_then(serial_size)
-            && size > last_size
-        {
-            last_size = size;
-            last_progress = Instant::now();
-        }
+        let serial_bytes = serial.poll();
 
         // Disk-write liveness: a grown file or a bumped mtime both mean the guest just wrote.
         if let Some(fp) = disk_path.as_deref().and_then(disk_fingerprint)
             && last_disk.as_ref().is_none_or(|prev| fp > *prev)
         {
             last_disk = Some(fp);
-            last_progress = Instant::now();
+            disk_changes += 1;
         }
 
-        let now = Instant::now();
+        let elapsed = start.elapsed();
 
-        // CPU-time liveness, on a slower cadence (a WSL2 sample shells out to the distro). Counts
-        // only if the VM burned a meaningful share of a core since the last sample, so an idle
-        // process doesn't keep a wedged guest alive. Only advance the anchor on a successful
-        // sample, so a transient read failure just retries rather than skewing the next interval.
-        if now.duration_since(last_cpu_at) >= cpu_sample_interval
-            && let Some(cpu) = backend.vm_cpu_time_ns()
-        {
-            if let Some(prev) = last_cpu {
-                let cpu_delta = cpu.saturating_sub(prev);
-                let wall_ns = u64::try_from(now.duration_since(last_cpu_at).as_nanos())?;
-                if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
-                    last_progress = now;
-                }
-            }
-            last_cpu = Some(cpu);
-            last_cpu_at = now;
-        }
+        let (cpu_ns, io_ops) = if watch.slow_sample_due(elapsed) {
+            (backend.vm_cpu_time_ns(), backend.vm_disk_io_ops())
+        } else {
+            (None, None)
+        };
 
-        let idle = now.duration_since(last_progress);
-        let elapsed = now.duration_since(start);
+        let status = watch.observe(
+            elapsed,
+            &BootSignals {
+                ssh_progress,
+                serial_bytes,
+                disk_changes,
+                io_ops,
+                cpu_ns,
+            },
+        );
 
-        if idle >= idle_timeout {
-            anyhow::bail!(
+        match status.verdict {
+            BootVerdict::Stuck => anyhow::bail!(
                 "VM appears stuck. No boot progress for {}s (no serial output, no disk writes, no \
-                 CPU activity, and SSH not up). Tune with VIRTCI_VM_START_IDLE_TIMEOUT.\n{}",
-                idle.as_secs(),
+                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase max timeout.\n{}",
+                status.idle.as_secs(),
                 serial_tail(serial_path.as_deref()),
-            );
-        }
-        if elapsed >= max_timeout {
-            anyhow::bail!(
+            ),
+            BootVerdict::MaxTimeout => anyhow::bail!(
                 "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
-                 timeout. Tune with VIRTCI_VM_START_MAX_TIMEOUT.\n{}",
+                 timeout. Change VIRTCI_VM_START_IDLE_TIMEOUT to increase max timeout.\n{}",
                 serial_tail(serial_path.as_deref()),
-            );
+            ),
+            BootVerdict::Booting => {}
         }
 
         if last_status.elapsed() >= Duration::from_secs(BOOT_STATUS_INTERVAL) {
-            last_status = now;
-            let detail = if last_size > status_size {
-                format!("serial +{} bytes, still booting", last_size - status_size)
+            last_status = Instant::now();
+            let effective_idle = status.effective_idle.as_secs();
+            let detail = if serial_bytes > status_bytes {
+                format!(
+                    "serial +{} bytes, still booting",
+                    serial_bytes - status_bytes
+                )
             } else if banner_seen {
                 format!(
-                    "sshd up, waiting for login ({}s idle, gives up at {idle_timeout_secs}s)",
-                    idle.as_secs()
+                    "sshd up, waiting for login ({}s idle, gives up at {effective_idle}s)",
+                    status.idle.as_secs()
                 )
             } else if serial_path.is_some() {
                 format!(
-                    "quiet for {}s (no serial/disk/CPU progress; gives up at {idle_timeout_secs}s \
+                    "quiet for {}s (no serial/disk/CPU progress; gives up at {effective_idle}s \
                      idle)",
-                    idle.as_secs()
+                    status.idle.as_secs()
                 )
             } else {
                 "still waiting for SSH".to_string()
             };
-            status_size = last_size;
+            status_bytes = serial_bytes;
             println!(
                 "{}",
                 format!(
@@ -1237,6 +1386,90 @@ mod tests {
     fn boot_timeouts_idle_clamped_to_max() {
         // An idle window larger than the ceiling could never fire, so it's clamped down.
         assert_eq!(resolve_boot_timeouts(Some("900"), Some("300")), (300, 300));
+    }
+
+    use super::{BootSignals, BootVerdict, BootWatch};
+    use std::time::Duration;
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    fn serial_only(serial_bytes: u64) -> BootSignals {
+        BootSignals {
+            ssh_progress: false,
+            serial_bytes,
+            disk_changes: 0,
+            io_ops: None,
+            cpu_ns: None,
+        }
+    }
+
+    fn first_stuck_at(
+        base_idle: u64,
+        max: u64,
+        end: u64,
+        mut serial_at: impl FnMut(u64) -> u64,
+    ) -> Option<u64> {
+        let mut w = BootWatch::new(secs(base_idle), secs(max), secs(15), Some(0), Some(0));
+        let mut e = 0;
+        while e <= end {
+            let st = w.observe(secs(e), &serial_only(serial_at(e)));
+            if matches!(st.verdict, BootVerdict::Stuck) {
+                return Some(e);
+            }
+            e += 2;
+        }
+        None
+    }
+
+    #[test]
+    fn effective_idle_scales_with_elapsed_and_caps_at_max() {
+        let w = BootWatch::new(secs(120), secs(1800), secs(15), None, None);
+        assert_eq!(w.effective_idle(secs(0)).as_secs(), 120);
+        assert_eq!(w.effective_idle(secs(400)).as_secs(), 220);
+        assert_eq!(w.effective_idle(secs(1_000_000)).as_secs(), 1800);
+    }
+
+    #[test]
+    fn steady_serial_never_trips() {
+        assert_eq!(first_stuck_at(120, 1800, 1000, |e| e), None);
+    }
+
+    #[test]
+    fn genuinely_flat_serial_eventually_trips() {
+        let stuck = first_stuck_at(120, 1800, 2000, |e| e.min(100)).expect("must eventually trip");
+        assert!((260..=340).contains(&stuck), "expected ~294s, got {stuck}s");
+    }
+
+    #[test]
+    fn bursty_serial_with_gaps_over_base_idle_survives_when_scaled() {
+        let burst = |e: u64| if e < 400 { e } else { 400 + (e / 200) * 4096 };
+        assert_eq!(first_stuck_at(120, 1800, 800, burst), None);
+    }
+
+    #[test]
+    fn cpu_at_or_above_one_percent_counts_as_progress() {
+        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), Some(0), None);
+        let mut s = serial_only(0);
+        s.cpu_ns = Some(150_000_000);
+        assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 0);
+    }
+
+    #[test]
+    fn cpu_below_one_percent_is_not_progress() {
+        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), Some(0), None);
+        let mut s = serial_only(0);
+        s.cpu_ns = Some(100_000_000);
+        assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 15);
+    }
+
+    #[test]
+    fn qmp_io_ops_advance_resets_idle() {
+        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), None, Some(1000));
+        let mut s = serial_only(0);
+        s.io_ops = Some(1050);
+        assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 0);
     }
 }
 
