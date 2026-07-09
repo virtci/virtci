@@ -688,7 +688,7 @@ fn resolve_step(job_name: &str, step: &yaml::Step) -> anyhow::Result<run::Step> 
 
     let timeout = {
         if let Some(s) = step.timeout.as_deref() {
-            yaml::try_parse_timeout_seconds(s)
+            yaml::try_parse_timeout_seconds(s)?
         } else {
             None
         }

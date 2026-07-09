@@ -176,10 +176,10 @@ pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yaml_ng::Error> 
     serde_yaml_ng::from_str(contents)
 }
 
-pub fn try_parse_timeout_seconds(s: &str) -> Option<u64> {
+pub fn try_parse_timeout_seconds(s: &str) -> anyhow::Result<Option<u64>> {
     let s = s.trim();
     if s.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let (num, unit) = if s.ends_with('S') || s.ends_with('s') {
@@ -193,7 +193,7 @@ pub fn try_parse_timeout_seconds(s: &str) -> Option<u64> {
         (s, 1u64)
     };
 
-    num.parse::<u64>().ok().map(|n| n * unit)
+    Ok(Some(num.parse::<u64>()? * unit))
 }
 
 #[cfg(test)]
@@ -262,12 +262,17 @@ job:
         let wf = parse_workflow(yaml).expect("should parse");
         let step = &wf["job"].steps[0];
         assert_eq!(step.timeout.as_deref(), Some("600"));
-        assert_eq!(try_parse_timeout_seconds("600").unwrap(), 600);
+        assert_eq!(try_parse_timeout_seconds("600").unwrap().unwrap(), 600);
     }
 
     #[test]
     fn empty_timeout_does_not_silently_become_max() {
-        assert_eq!(try_parse_timeout_seconds(""), None);
-        assert_eq!(try_parse_timeout_seconds("   "), None);
+        assert_eq!(try_parse_timeout_seconds("").unwrap(), None);
+        assert_eq!(try_parse_timeout_seconds("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn reject_malformed() {
+        assert!(try_parse_timeout_seconds("10x").is_err());
     }
 }
