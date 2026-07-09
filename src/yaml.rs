@@ -1,7 +1,6 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use crate::run::MAX_TIMEOUT;
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
 use std::collections::HashMap;
@@ -177,10 +176,6 @@ pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yaml_ng::Error> 
     serde_yaml_ng::from_str(contents)
 }
 
-pub fn parse_timeout_seconds(s: &str) -> u64 {
-    try_parse_timeout_seconds(s).unwrap_or(MAX_TIMEOUT)
-}
-
 pub fn try_parse_timeout_seconds(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
@@ -267,7 +262,7 @@ job:
         let wf = parse_workflow(yaml).expect("should parse");
         let step = &wf["job"].steps[0];
         assert_eq!(step.timeout.as_deref(), Some("600"));
-        assert_eq!(parse_timeout_seconds("600"), 600);
+        assert_eq!(try_parse_timeout_seconds("600").unwrap(), 600);
     }
 
     #[test]
