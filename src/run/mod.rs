@@ -259,7 +259,7 @@ impl Job {
         };
         self.backend
             .start_vm(initial_cfg)
-            .with_context(|| format!("Failed to start VM: {}", &self.name))?;
+            .with_context(|| format!("Failed to start VM: {}", self.name))?;
 
         let mut ssh_target = self.backend.ssh_target();
 

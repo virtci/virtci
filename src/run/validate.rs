@@ -250,7 +250,7 @@ fn validate_step(loc: &str, step_v: &Value, diags: &mut Vec<Diagnostic>) {
     // A timeout that won't parse would silently fall back to the default at
     // runtime, which is surprising; treat it as an error.
     if let Some(t) = &step.timeout
-        && yaml::try_parse_timeout_seconds(t).is_none()
+        && yaml::try_parse_timeout_seconds(t).is_err()
     {
         diags.push(Diagnostic::error(
             format!("{loc}.timeout"),

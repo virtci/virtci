@@ -49,6 +49,8 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Fixed a `virtci run` step reaching a timeout not actually stopping the execution of the step inside the VM sometimes.
+- Fixed YAML workflow `timeout` in a step not accepting integers.
+- Fixed empty strings in a YAML workflow `timeout` setting the timeout to 2 hours silently.
 
 ## Version 0.3.1 - 2026-06-11
 

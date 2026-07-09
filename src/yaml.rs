@@ -1,7 +1,6 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use crate::run::MAX_TIMEOUT;
 use serde::Deserialize;
 use serde::de::{self, Deserializer};
 use std::collections::HashMap;
@@ -103,6 +102,7 @@ pub struct Step {
     pub copy: Option<CopySpec>,
     pub restart: Option<RestartSpec>,
     pub workdir: Option<String>,
+    #[serde(default, deserialize_with = "de_opt_scalar_string")]
     pub timeout: Option<String>,
     #[serde(default, deserialize_with = "de_scalar_string_map")]
     pub env: HashMap<String, String>,
@@ -176,14 +176,10 @@ pub fn parse_workflow(contents: &str) -> Result<Workflow, serde_yaml_ng::Error> 
     serde_yaml_ng::from_str(contents)
 }
 
-pub fn parse_timeout_seconds(s: &str) -> u64 {
-    try_parse_timeout_seconds(s).unwrap_or(MAX_TIMEOUT)
-}
-
-pub fn try_parse_timeout_seconds(s: &str) -> Option<u64> {
+pub fn try_parse_timeout_seconds(s: &str) -> anyhow::Result<Option<u64>> {
     let s = s.trim();
     if s.is_empty() {
-        return Some(MAX_TIMEOUT);
+        return Ok(None);
     }
 
     let (num, unit) = if s.ends_with('S') || s.ends_with('s') {
@@ -197,7 +193,7 @@ pub fn try_parse_timeout_seconds(s: &str) -> Option<u64> {
         (s, 1u64)
     };
 
-    num.parse::<u64>().ok().map(|n| n * unit)
+    Ok(Some(num.parse::<u64>()? * unit))
 }
 
 #[cfg(test)]
@@ -252,5 +248,31 @@ job:
         BAD: [1, 2, 3]
 "#;
         assert!(parse_workflow(yaml).is_err());
+    }
+
+    #[test]
+    fn coerces_integer_timeout_to_seconds() {
+        let yaml = r#"
+job:
+  image: ubuntu
+  steps:
+    - run: echo hi
+      timeout: 600
+"#;
+        let wf = parse_workflow(yaml).expect("should parse");
+        let step = &wf["job"].steps[0];
+        assert_eq!(step.timeout.as_deref(), Some("600"));
+        assert_eq!(try_parse_timeout_seconds("600").unwrap().unwrap(), 600);
+    }
+
+    #[test]
+    fn empty_timeout_does_not_silently_become_max() {
+        assert_eq!(try_parse_timeout_seconds("").unwrap(), None);
+        assert_eq!(try_parse_timeout_seconds("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn reject_malformed() {
+        assert!(try_parse_timeout_seconds("10x").is_err());
     }
 }
