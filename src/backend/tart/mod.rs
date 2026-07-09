@@ -1,7 +1,10 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::{path::Path, process::Child};
+use std::{
+    path::{Path, PathBuf},
+    process::Child,
+};
 
 use anyhow::Context;
 use colored::Colorize;
@@ -12,6 +15,11 @@ use crate::{
     global_paths::VciGlobalPaths,
     vm_image::{GuestOs, ImageDescription},
 };
+
+/// If tart max VMs, retry every 30 seconds.
+const CAP_RETRY_INTERVAL_S: u64 = 30;
+/// Makes it about 2 hours.
+const CAP_MAX_RETRIES: u32 = 240;
 
 pub struct TartRunner {
     pub is_base_mode: bool,
@@ -33,6 +41,7 @@ pub struct TartBackend {
     pub offline: bool,
     pub graphics: bool,
     pub runner: Option<TartRunner>,
+    temp: PathBuf,
 }
 
 impl TartBackend {
@@ -51,6 +60,7 @@ impl TartBackend {
             offline: false,
             graphics: false,
             runner: None,
+            temp: paths.temp.clone(),
         };
 
         backend.setup_clone(paths)?;
@@ -75,6 +85,7 @@ impl TartBackend {
             offline: false,
             graphics: !nographics,
             runner: None,
+            temp: paths.temp.clone(),
         };
         backend.setup_base(paths)?;
         Ok(backend)
@@ -119,26 +130,8 @@ impl TartBackend {
         }
 
         // Brief headless boot to resolve DHCP IP (SHOULD be stable for 24h lease).
-        let mut boot_process = std::process::Command::new("tart")
-            .args(["run", &vm_name, "--no-graphics"])
-            .spawn()
-            .context("Failed to boot tart VM for IP discovery")?;
-
-        let ip = match resolve_tart_ip(&vm_name) {
-            Ok(ip) => ip,
-            Err(e) => {
-                let _ = std::process::Command::new("tart")
-                    .args(["stop", &vm_name])
-                    .output();
-                let _ = boot_process.wait();
-                return Err(e);
-            }
-        };
-
-        let _ = std::process::Command::new("tart")
-            .args(["stop", &vm_name])
-            .output();
-        let _ = boot_process.wait();
+        // Retries if Tart reports the macOS concurrent-VM cap is reached.
+        let ip = resolve_ip_via_temp_boot(&vm_name, temp_path)?;
 
         self.runner = Some(TartRunner {
             is_base_mode: true,
@@ -241,40 +234,17 @@ impl TartBackend {
             anyhow::bail!("tart set failed: {}", stderr.trim());
         }
 
-        let mut boot_cmd = std::process::Command::new("tart");
-        boot_cmd.args(["run", &clone_name, "--no-graphics"]);
-
-        let mut boot_process = match boot_cmd.spawn() {
-            Ok(boot_process) => boot_process,
-            Err(e) => {
-                let _ = std::process::Command::new("tart")
-                    .args(["delete", &clone_name])
-                    .output();
-                return Err(
-                    anyhow::Error::new(e).context("Failed to boot tart VM for IP discovery")
-                );
-            }
-        };
-
-        let ip = match resolve_tart_ip(&clone_name) {
+        // Brief headless boot to resolve DHCP IP. Retries if Tart reports the
+        // macOS concurrent-VM cap is reached (booting the same clone, no re-clone).
+        let ip = match resolve_ip_via_temp_boot(&clone_name, temp_path) {
             Ok(ip) => ip,
             Err(e) => {
-                let _ = std::process::Command::new("tart")
-                    .args(["stop", &clone_name])
-                    .output();
-                let _ = boot_process.wait();
                 let _ = std::process::Command::new("tart")
                     .args(["delete", &clone_name])
                     .output();
                 return Err(e);
             }
         };
-
-        // got ip so just stop the vm
-        let _ = std::process::Command::new("tart")
-            .args(["stop", &clone_name])
-            .output();
-        let _ = boot_process.wait();
 
         self.runner = Some(TartRunner {
             is_base_mode: false,
@@ -303,6 +273,82 @@ impl TartBackend {
 
         Ok(())
     }
+
+    /// Log file capturing `tart run`'s stdout/stderr. Necessary to check the cap message.
+    fn run_log_path(&self, clone_name: &str) -> PathBuf {
+        self.temp.join(format!("vci-tart-run-{clone_name}.log"))
+    }
+
+    /// Spawn the real `tart run` for `clone_name`, retrying if Tart refuses
+    /// because the host is at the macOS concurrent-VM cap.
+    fn spawn_tart_run_with_cap_retry(&self, clone_name: &str) -> anyhow::Result<Child> {
+        const SURVIVE_POLLS: u32 = 8;
+        const SURVIVE_INTERVAL_MS: u64 = 250;
+
+        let log_path = self.run_log_path(clone_name);
+        let mut cap_attempts: u32 = 0;
+
+        loop {
+            let log_file =
+                std::fs::File::create(&log_path).context("Failed to create tart run log")?;
+            let log_file2 = log_file
+                .try_clone()
+                .context("Failed to create tart run log")?;
+
+            let mut cmd = std::process::Command::new("tart");
+            if self.graphics {
+                cmd.args(["run", clone_name]);
+            } else {
+                cmd.args(["run", clone_name, "--no-graphics"]);
+            }
+            cmd.stdout(log_file).stderr(log_file2);
+
+            let mut child = cmd.spawn().context("Failed to start tart VM")?;
+
+            let mut early_exit = false;
+            for _ in 0..SURVIVE_POLLS {
+                std::thread::sleep(std::time::Duration::from_millis(SURVIVE_INTERVAL_MS));
+                if let Ok(Some(_status)) = child.try_wait() {
+                    early_exit = true;
+                    break;
+                }
+            }
+
+            if !early_exit {
+                let flag = if self.graphics { "" } else { " --no-graphics" };
+                println!("{}", format!("tart run {clone_name}{flag}").dimmed());
+                return Ok(child);
+            }
+
+            let _ = child.wait();
+            let boot_log = std::fs::read_to_string(&log_path).unwrap_or_default();
+
+            if is_vm_cap_error(&boot_log) {
+                cap_attempts += 1;
+                if cap_attempts > CAP_MAX_RETRIES {
+                    let _ = std::fs::remove_file(&log_path);
+                    anyhow::bail!(
+                        "macOS VM limit still reached after waiting ~{} minutes for a free slot",
+                        (u64::from(CAP_MAX_RETRIES) * CAP_RETRY_INTERVAL_S) / 60
+                    );
+                }
+                println!(
+                    "{}",
+                    format!(
+                        "macOS VM limit reached (Apple EULA allows 2 running VMs). Waiting \
+                         {CAP_RETRY_INTERVAL_S}s then retrying '{clone_name}' (attempt \
+                         {cap_attempts})..."
+                    )
+                    .yellow()
+                );
+                std::thread::sleep(std::time::Duration::from_secs(CAP_RETRY_INTERVAL_S));
+                continue;
+            }
+
+            let _ = std::fs::remove_file(&log_path);
+            anyhow::bail!("tart run failed: {}", boot_log.trim());
+        }
+    }
 }
 
 impl VmBackend for TartBackend {
@@ -330,13 +376,13 @@ impl VmBackend for TartBackend {
             self.memory_mb = m;
         }
 
-        let runner = self.runner.as_mut().unwrap();
+        let clone_name = self.runner.as_ref().unwrap().clone_name.clone();
 
         if resize {
             let output = std::process::Command::new("tart")
                 .args([
                     "set",
-                    &runner.clone_name,
+                    &clone_name,
                     "--cpu",
                     &self.cpus.to_string(),
                     "--memory",
@@ -351,24 +397,12 @@ impl VmBackend for TartBackend {
             }
         }
 
-        let mut cmd = std::process::Command::new("tart");
-
         // Tart's network isolation flags (--net-host, --net-softnet) all require
         // root via Softnet. Offline mode is enforced post-boot inside the VM
         // via offline_enforce_cmd() instead.
 
-        if self.graphics {
-            cmd.args(["run", &runner.clone_name]);
-            println!("{}", format!("tart run {}", &runner.clone_name).dimmed());
-        } else {
-            cmd.args(["run", &runner.clone_name, "--no-graphics"]);
-            println!(
-                "{}",
-                format!("tart run {} --no-graphics", &runner.clone_name).dimmed()
-            );
-        }
-
-        runner.tart_process = Some(cmd.spawn().context("Failed to start tart VM")?);
+        let child = self.spawn_tart_run_with_cap_retry(&clone_name)?;
+        self.runner.as_mut().unwrap().tart_process = Some(child);
 
         Ok(())
     }
@@ -381,16 +415,21 @@ impl VmBackend for TartBackend {
     }
 
     fn stop_vm(&mut self) {
-        let runner = self.runner.as_mut().unwrap();
+        let clone_name = self.runner.as_ref().unwrap().clone_name.clone();
+        let log_path = self.run_log_path(&clone_name);
 
         let _ = std::process::Command::new("tart")
-            .args(["stop", &runner.clone_name])
+            .args(["stop", &clone_name])
             .output();
 
-        if let Some(ref mut process) = runner.tart_process {
-            let _ = process.wait();
+        if let Some(runner) = self.runner.as_mut() {
+            if let Some(ref mut process) = runner.tart_process {
+                let _ = process.wait();
+            }
+            runner.tart_process = None;
         }
-        runner.tart_process = None;
+
+        let _ = std::fs::remove_file(&log_path);
 
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -455,6 +494,8 @@ impl Drop for TartBackend {
                     .output();
             }
 
+            let _ = std::fs::remove_file(self.run_log_path(&runner.clone_name));
+
             let slot_lock_path = runner.slot_lock.get_path().clone();
             let image_lock_path = runner.image_lock.get_path().clone();
             drop(runner);
@@ -464,33 +505,104 @@ impl Drop for TartBackend {
     }
 }
 
-fn resolve_tart_ip(clone_name: &str) -> anyhow::Result<String> {
-    const MAX_RETRIES: u32 = 30;
-    const POLL_INTERVAL_S: u64 = 3;
+/// Apple EULA sets a cap of 2 mac VMs per host, and Tart enforces this.
+/// The output will contain the substring `"The number of VMs exceeds the system limit"` if that
+/// limit is reached, but retrying is cheap and the other VM usage will eventually end
+/// realistically.
+fn is_vm_cap_error(tart_output: &str) -> bool {
+    tart_output.contains("The number of VMs exceeds the system limit")
+}
 
-    for _ in 0..MAX_RETRIES {
-        let output = std::process::Command::new("tart")
-            .args(["ip", clone_name])
-            .output();
+/// Temporarily boots `vm_name` headless to resolve its DHCP IP, then stops it.
+fn resolve_ip_via_temp_boot(vm_name: &str, temp_path: &Path) -> anyhow::Result<String> {
+    const IP_MAX_RETRIES: u32 = 30;
+    const IP_POLL_INTERVAL_S: u64 = 3;
 
-        if let Ok(output) = output
-            && output.status.success()
-        {
-            let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !ip.is_empty() {
-                println!("{}", format!("  VM IP: {ip}").dimmed());
-                return Ok(ip);
+    let log_path = temp_path.join(format!("vci-tart-boot-{vm_name}.log"));
+    let mut cap_attempts: u32 = 0;
+
+    let result = loop {
+        let log_file =
+            std::fs::File::create(&log_path).context("Failed to create tart boot log")?;
+        let log_file2 = log_file
+            .try_clone()
+            .context("Failed to create tart boot log")?;
+
+        let mut boot = std::process::Command::new("tart")
+            .args(["run", vm_name, "--no-graphics"])
+            .stdout(log_file)
+            .stderr(log_file2)
+            .spawn()
+            .context("Failed to boot tart VM for IP discovery")?;
+
+        let mut resolved_ip: Option<String> = None;
+        let mut exited = false;
+        for _ in 0..IP_MAX_RETRIES {
+            if let Ok(Some(_status)) = boot.try_wait() {
+                exited = true;
+                break;
             }
+
+            if let Ok(output) = std::process::Command::new("tart")
+                .args(["ip", vm_name])
+                .output()
+                && output.status.success()
+            {
+                let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !ip.is_empty() {
+                    resolved_ip = Some(ip);
+                    break;
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_secs(IP_POLL_INTERVAL_S));
         }
 
-        std::thread::sleep(std::time::Duration::from_secs(POLL_INTERVAL_S));
-    }
+        let _ = std::process::Command::new("tart")
+            .args(["stop", vm_name])
+            .output();
+        let _ = boot.wait();
 
-    anyhow::bail!(
-        "Failed to resolve IP for '{}' after {}s",
-        clone_name,
-        u64::from(MAX_RETRIES) * POLL_INTERVAL_S
-    )
+        if let Some(ip) = resolved_ip {
+            println!("{}", format!("  VM IP: {ip}").dimmed());
+            break Ok(ip);
+        }
+
+        let boot_log = std::fs::read_to_string(&log_path).unwrap_or_default();
+
+        if is_vm_cap_error(&boot_log) {
+            cap_attempts += 1;
+            if cap_attempts > CAP_MAX_RETRIES {
+                break Err(anyhow::anyhow!(
+                    "macOS VM limit still reached after waiting ~{} minutes for a free slot",
+                    (u64::from(CAP_MAX_RETRIES) * CAP_RETRY_INTERVAL_S) / 60
+                ));
+            }
+            println!(
+                "{}",
+                format!(
+                    "macOS VM limit reached (Apple allows 2 running VMs). Waiting \
+                     {CAP_RETRY_INTERVAL_S}s then retrying '{vm_name}' (attempt {cap_attempts})..."
+                )
+                .yellow()
+            );
+            std::thread::sleep(std::time::Duration::from_secs(CAP_RETRY_INTERVAL_S));
+            continue;
+        }
+
+        if exited {
+            break Err(anyhow::anyhow!("tart run failed: {}", boot_log.trim()));
+        }
+
+        break Err(anyhow::anyhow!(
+            "Failed to resolve IP for '{}' after {}s",
+            vm_name,
+            u64::from(IP_MAX_RETRIES) * IP_POLL_INTERVAL_S
+        ));
+    };
+
+    let _ = std::fs::remove_file(&log_path);
+    result
 }
 
 fn get_slot_flock(temp_path: &Path) -> anyhow::Result<(FileLock, u32)> {
