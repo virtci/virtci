@@ -17,7 +17,14 @@ pub enum EnvLoad {
 /// respect that.
 pub fn load_extra_env_vars(load: &EnvLoad) -> anyhow::Result<HashMap<String, String>> {
     let iter = match load {
-        EnvLoad::DotEnvCwd => dotenvy::from_filename_iter(".env")?,
+        EnvLoad::DotEnvCwd => match dotenvy::from_filename_iter(".env") {
+            Ok(iterator) => iterator,
+            Err(dotenvy::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("No .env so proceeding without it");
+                return Ok(HashMap::<String, String>::default());
+            }
+            Err(e) => return Err(anyhow::Error::new(e)),
+        },
         EnvLoad::File { path } => dotenvy::from_path_iter(path)?,
     };
 
