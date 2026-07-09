@@ -39,6 +39,10 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
   - If the disk where the VirtCI run cache lives has greater than or equal to 1,800 GB, ensure the user still has 1/16th of their disk available.
     - Disk = 2TB (about 1862GB usable), retain about 116GB.
     - Disk = 4TB (about 3725GB usable), retain about 223GB.
+- `virtci run` by default will now get environment variables from your `.env` file if it exists in the current working directory.
+  - Environment variables local to the shell / process are prioritized over any in the `.env`.
+- Added `--env-file` to `virtci run` to specify a file other than the current working directory `.env`.
+- Added `--no-env-file` to `virtci run` which will prevent loading of any `.env` or `--env-file` files.
 
 ### Changed
 

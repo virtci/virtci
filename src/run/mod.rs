@@ -4,6 +4,7 @@
 pub mod cache;
 mod command;
 pub mod copy;
+pub mod env;
 pub mod run_id;
 pub mod validate;
 
@@ -194,6 +195,7 @@ pub struct Job {
     pub name: String,
     pub backend: Box<dyn VmBackend>,
     pub host_env: Vec<String>,
+    pub extra_env: Option<HashMap<String, String>>,
     pub steps: Vec<Step>,
     /// Per-step SSH connect retry budget, derived from the observed boot time and refreshed on every
     /// (re)boot. Stamped onto each [`SshTarget`] the job hands to a step via [`Job::ssh`]. `None`
@@ -491,7 +493,13 @@ impl Job {
                 env.insert("TZ".to_string(), "UTC".to_string());
                 for var_name in &self.host_env {
                     if let Ok(value) = std::env::var(var_name) {
+                        // Real process/shell/CI environment always wins as it should.
                         env.insert(var_name.clone(), value);
+                    } else if let Some(value) =
+                        self.extra_env.as_ref().and_then(|m| m.get(var_name))
+                    {
+                        // Fall back to a `.env` or `--env-file` value when the process env has none.
+                        env.insert(var_name.clone(), value.clone());
                     }
                 }
                 for (key, value) in &step.env {

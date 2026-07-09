@@ -16,6 +16,7 @@ pub mod yaml;
 
 use anyhow::Context;
 use global_paths::VciGlobalPaths;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -423,6 +424,31 @@ fn run_workflow_command(
 ) {
     use colored::Colorize;
 
+    let extra_env: Option<HashMap<String, String>> = {
+        if args.no_env_file {
+            if args.env_file.is_some() {
+                eprintln!(
+                    "[VirtCI Warning]: Used `--env-file` and `--no-env-file`. Respecting \
+            `--no-env-file`. If this is a mistake, please omit `--no-env-file`."
+                );
+            }
+            None
+        } else {
+            let load: run::env::EnvLoad = if let Some(env_file) = &args.env_file {
+                run::env::EnvLoad::File {
+                    path: env_file.clone(),
+                }
+            } else {
+                run::env::EnvLoad::DotEnvCwd
+            };
+            let res = run::env::load_extra_env_vars(&load);
+            if let Err(e) = res.as_ref() {
+                eprintln!("Failed to get environment variables {e}. Continuing without them.");
+            }
+            res.ok()
+        }
+    };
+
     let contents = std::fs::read_to_string(&args.workflow).unwrap_or_else(|e| {
         eprintln!(
             "{}",
@@ -466,10 +492,11 @@ fn run_workflow_command(
         std::process::exit(1);
     });
 
-    let jobs = extract_yaml_workflows(args, &contents, paths, orphans).unwrap_or_else(|e| {
-        eprintln!("{}", format!("{e:?}").red());
-        std::process::exit(1);
-    });
+    let jobs = extract_yaml_workflows(args, &contents, paths, orphans, extra_env.as_ref())
+        .unwrap_or_else(|e| {
+            eprintln!("{}", format!("{e:?}").red());
+            std::process::exit(1);
+        });
     run_jobs(jobs, paths);
 }
 
@@ -510,6 +537,7 @@ fn extract_yaml_workflows(
     contents: &str,
     paths: &VciGlobalPaths,
     orphans: &orphan::OrphanTracker,
+    extra_env: Option<&HashMap<String, String>>,
 ) -> anyhow::Result<Vec<run::Job>> {
     use colored::Colorize;
 
@@ -651,6 +679,7 @@ fn extract_yaml_workflows(
             name,
             backend,
             host_env: yaml_job.host_env,
+            extra_env: extra_env.cloned(),
             steps,
             ssh_retry_budget: None,
             timeout_mech: None,
