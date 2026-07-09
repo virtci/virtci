@@ -83,8 +83,8 @@ const BOOT_STATUS_INTERVAL: u64 = 30;
 /// Deliberately coarse: a WSL2 sample shells out to the distro, and the idle timeout it feeds is
 /// measured in minutes, so there's no need to sample every poll.
 const CPU_SAMPLE_INTERVAL: u64 = 15;
-/// VM must do 1% CPU time progress to determine that it is making at least some progress.
-const CPU_PROGRESS_DIVISOR: u64 = 100;
+/// VM must do 4% CPU time progress to determine that it is making at least some progress.
+const CPU_PROGRESS_DIVISOR: u64 = 25;
 
 /// If the VM seems idle, wait `base_idle + (elapsed / IDLE_SCALE_DIVISOR)` amount of time until it's
 /// condiered hanged.
@@ -1026,13 +1026,13 @@ pub async fn wait_for_ssh_watching(
         match status.verdict {
             BootVerdict::Stuck => anyhow::bail!(
                 "VM appears stuck. No boot progress for {}s (no serial output, no disk writes, no \
-                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase max timeout.\n{}",
+                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}",
                 status.idle.as_secs(),
                 serial_tail(serial_path.as_deref()),
             ),
             BootVerdict::MaxTimeout => anyhow::bail!(
                 "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
-                 timeout. Change VIRTCI_VM_START_IDLE_TIMEOUT to increase max timeout.\n{}",
+                 timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}",
                 serial_tail(serial_path.as_deref()),
             ),
             BootVerdict::Booting => {}
@@ -1449,18 +1449,20 @@ mod tests {
     }
 
     #[test]
-    fn cpu_at_or_above_one_percent_counts_as_progress() {
+    fn cpu_at_or_above_threshold_counts_as_progress() {
+        // 4% of a 15s window is 600ms of CPU which is good
         let mut w = BootWatch::new(secs(120), secs(1800), secs(15), Some(0), None);
         let mut s = serial_only(0);
-        s.cpu_ns = Some(150_000_000);
+        s.cpu_ns = Some(600_000_000);
         assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 0);
     }
 
     #[test]
-    fn cpu_below_one_percent_is_not_progress() {
+    fn cpu_below_threshold_is_not_progress() {
+        // ~3.3% of the 15s window which is under 4%
         let mut w = BootWatch::new(secs(120), secs(1800), secs(15), Some(0), None);
         let mut s = serial_only(0);
-        s.cpu_ns = Some(100_000_000);
+        s.cpu_ns = Some(500_000_000);
         assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 15);
     }
 

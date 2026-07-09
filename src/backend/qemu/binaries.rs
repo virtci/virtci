@@ -792,12 +792,13 @@ pub fn format_launch_command(exec_target: &HostExecTarget, cmd: &QemuBuiltComman
 pub enum QemuLaunchOutcome {
     Running,
     PortTaken,
+    QmpPortTaken,
 }
 
-/// Observe the launch for about 1.5 seconds to see if the port was taken.
 pub fn qemu_launch_outcome(
     qemu: &Arc<Mutex<TargetChildProcess>>,
     stderr_log: &Path,
+    qmp_port: Option<u16>,
 ) -> anyhow::Result<QemuLaunchOutcome> {
     const POLL: std::time::Duration = std::time::Duration::from_millis(100);
     const ATTEMPTS: u32 = 15;
@@ -810,8 +811,14 @@ pub fn qemu_launch_outcome(
         };
         if exited {
             let stderr = std::fs::read_to_string(stderr_log).unwrap_or_default();
-            if stderr.to_lowercase().contains("host forwarding rule") {
+            let lower = stderr.to_lowercase();
+            if lower.contains("host forwarding rule") {
                 return Ok(QemuLaunchOutcome::PortTaken);
+            }
+            if let Some(port) = qmp_port
+                && lower.contains(&format!("tcp:127.0.0.1:{port}"))
+            {
+                return Ok(QemuLaunchOutcome::QmpPortTaken);
             }
             anyhow::bail!("QEMU exited immediately after launch:\n{}", stderr.trim());
         }
