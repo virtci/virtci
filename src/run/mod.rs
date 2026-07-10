@@ -415,14 +415,22 @@ impl Job {
         }
 
         let clean_shutdown = self.stop_vm_for_capture().await;
-        if clean_shutdown
-            && let Err(e) = self
+        if clean_shutdown {
+            if let Err(e) = self
                 .backend
                 .cache_run_files(&self.cache_fingerprint, self.cache_ttl_secs)
-        {
+            {
+                eprintln!(
+                    "{}",
+                    format!("Warning: failed to write workflow cache: {e:#}").yellow()
+                );
+            }
+        } else if self.backend.produces_cache() {
             eprintln!(
                 "{}",
-                format!("Warning: failed to write workflow cache: {e:#}").yellow()
+                "Warning: skipping workflow cache write because the VM was not cleanly shut down \
+                 (disk may be inconsistent)."
+                    .yellow()
             );
         }
 
