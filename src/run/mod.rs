@@ -404,11 +404,11 @@ impl Job {
 
             match result {
                 Ok(()) => (),
-                Err(ref e) => {
+                Err(e) => {
                     if continue_on_error {
-                        println!("{}", format!("  Failed (continuing): {e}").yellow());
+                        println!("{}", format!("  Failed (continuing): {e:#}").yellow());
                     } else {
-                        anyhow::bail!("Step '{step_name}' failed: {e}");
+                        return Err(e).with_context(|| format!("Step '{step_name}' failed"));
                     }
                 }
             }
@@ -842,6 +842,18 @@ struct BootWatch {
     last_cpu: Option<u64>,
     /// Elapsed time of the last successful CPU sample. Re-try on failed read.
     last_cpu_at: Duration,
+
+    // Diagnostic only (does not affect the verdict). Per-signal snapshot so the status line and
+    // the failure message can show which liveness signals are alive and how stale each is.
+    /// CPU share of a core measured at the most recent CPU sample.
+    last_cpu_pct: Option<f64>,
+    /// Whether QMP block-IO stats have ever been readable.
+    qmp_seen: bool,
+    /// Elapsed time each signal last advanced (counted as progress). `None` if never.
+    serial_adv: Option<Duration>,
+    disk_adv: Option<Duration>,
+    io_adv: Option<Duration>,
+    cpu_adv: Option<Duration>,
 }
 
 impl BootWatch {
@@ -862,6 +874,12 @@ impl BootWatch {
             last_io_ops: initial_io,
             last_cpu: initial_cpu,
             last_cpu_at: Duration::ZERO,
+            last_cpu_pct: None,
+            qmp_seen: initial_io.is_some(),
+            serial_adv: None,
+            disk_adv: None,
+            io_adv: None,
+            cpu_adv: None,
         }
     }
 
@@ -876,19 +894,50 @@ impl BootWatch {
         scaled.min(self.max_timeout)
     }
 
+    fn signals_summary(&self, elapsed: Duration) -> String {
+        let since = |adv: Option<Duration>| match adv {
+            Some(at) => format!("{}s ago", elapsed.saturating_sub(at).as_secs()),
+            None => "never".to_string(),
+        };
+        let cpu = match self.last_cpu_pct {
+            Some(pct) => format!("cpu={pct:.1}% ({})", since(self.cpu_adv)),
+            None => "cpu=n/a".to_string(),
+        };
+        let qmp = if self.qmp_seen {
+            format!(
+                "qmp_io_ops={} ({})",
+                self.last_io_ops.unwrap_or(0),
+                since(self.io_adv)
+            )
+        } else {
+            "qmp=unavailable".to_string()
+        };
+        format!(
+            "signals: serial={}B ({}) | disk_changes={} ({}) | {cpu} | {qmp}",
+            self.last_serial,
+            since(self.serial_adv),
+            self.last_disk_changes,
+            since(self.disk_adv),
+        )
+    }
+
     fn observe(&mut self, elapsed: Duration, sig: &BootSignals) -> BootStatus {
         let mut progress = sig.ssh_progress;
 
         if sig.serial_bytes > self.last_serial {
             self.last_serial = sig.serial_bytes;
+            self.serial_adv = Some(elapsed);
             progress = true;
         }
         if sig.disk_changes > self.last_disk_changes {
             self.last_disk_changes = sig.disk_changes;
+            self.disk_adv = Some(elapsed);
             progress = true;
         }
         if let Some(io) = sig.io_ops {
+            self.qmp_seen = true;
             if self.last_io_ops.is_some_and(|prev| io > prev) {
+                self.io_adv = Some(elapsed);
                 progress = true;
             }
             self.last_io_ops = Some(io.max(self.last_io_ops.unwrap_or(0)));
@@ -898,8 +947,14 @@ impl BootWatch {
                 let cpu_delta = cpu.saturating_sub(prev);
                 let wall_ns = u64::try_from(elapsed.saturating_sub(self.last_cpu_at).as_nanos())
                     .unwrap_or(u64::MAX);
-                if wall_ns > 0 && cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
-                    progress = true;
+                if wall_ns > 0 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let pct = (cpu_delta as f64 / wall_ns as f64) * 100.0;
+                    self.last_cpu_pct = Some(pct);
+                    if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
+                        self.cpu_adv = Some(elapsed);
+                        progress = true;
+                    }
                 }
             }
             self.last_cpu = Some(cpu);
@@ -1023,16 +1078,20 @@ pub async fn wait_for_ssh_watching(
             },
         );
 
+        let signals = watch.signals_summary(elapsed);
+
         match status.verdict {
             BootVerdict::Stuck => anyhow::bail!(
                 "VM appears stuck. No boot progress for {}s (no serial output, no disk writes, no \
-                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}",
+                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}\n{}",
                 status.idle.as_secs(),
+                signals,
                 serial_tail(serial_path.as_deref()),
             ),
             BootVerdict::MaxTimeout => anyhow::bail!(
                 "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
-                 timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}",
+                 timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}\n{}",
+                signals,
                 serial_tail(serial_path.as_deref()),
             ),
             BootVerdict::Booting => {}
@@ -1064,7 +1123,7 @@ pub async fn wait_for_ssh_watching(
             println!(
                 "{}",
                 format!(
-                    "[VirtCI] Waiting for VM: {}s elapsed, {detail}...",
+                    "[VirtCI] Waiting for VM: {}s elapsed, {detail} [{signals}]...",
                     elapsed.as_secs()
                 )
                 .dimmed()
