@@ -441,16 +441,25 @@ impl Job {
             return false;
         }
 
+        println!("{}", "Powering off the VM to cache a good disk...".dimmed());
+        self.graceful_stop_vm().await
+    }
+
+    /// Cleanly shut down the VM. sync the file system and stuff, rather than just SIGKILL.
+    async fn graceful_stop_vm(&mut self) -> bool {
+        use colored::Colorize;
+
         let shutdown_cmd = match self.backend.os() {
             GuestOs::Windows => "Stop-Computer -Force",
             _ => "sudo shutdown -h now",
         };
-        println!("{}", "Powering off the VM to cache a good disk...".dimmed());
 
         {
             let ssh = self.ssh();
             let empty_env = std::collections::HashMap::new();
             let fut = command::run_command(&ssh, shutdown_cmd, None, &empty_env, self.backend.os());
+            // The command may never return (the VM powers off mid-reply), so just fire it and then
+            // watch for the process to exit.
             let _ = tokio::time::timeout(Duration::from_secs(15), fut).await;
         }
 
@@ -466,8 +475,7 @@ impl Job {
                 eprintln!(
                     "{}",
                     format!(
-                        "VirtCI Warning: VM did not power off within {timeout}s so forcing stop and \
-                         skipping cache write (disk may be corrupted)."
+                        "VirtCI Warning: VM did not power off within {timeout}s; forcing stop."
                     )
                     .yellow()
                 );
@@ -576,74 +584,41 @@ impl Job {
                 }
             }
             StepKind::Restart(restart) => {
-                println!(
-                    "{}",
-                    "  Syncing filesystem before restart..."
-                        .to_string()
-                        .dimmed()
-                );
-
-                // filesystem sync
-                {
-                    let sync_cmd = match self.backend.os() {
-                        GuestOs::Windows => {
-                            "Write-VolumeCache -DriveLetter C ; Start-Sleep -Seconds 2"
-                        }
-                        _ => "sync", // Unix/Linux/macOS
-                    };
-                    let empty_env = std::collections::HashMap::new();
-                    let ssh = self.ssh();
-                    let sync_future =
-                        command::run_command(&ssh, sync_cmd, None, &empty_env, self.backend.os());
-
-                    let sync_result =
-                        tokio::time::timeout(tokio::time::Duration::from_secs(30), sync_future)
-                            .await;
-
-                    match sync_result {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => println!(
-                            "{}",
-                            format!("  Warning: sync command failed: {e}").yellow()
-                        ),
-                        Err(_) => {
-                            println!("{}", "  Warning: sync command timed out after 30s".yellow());
-                        }
-                    }
+                use std::fmt::Write;
+                let mut details = String::new();
+                if let Some(o) = restart.offline {
+                    let _ = write!(details, "offline={o}");
                 }
+                if let Some(c) = restart.cpus {
+                    if !details.is_empty() {
+                        details.push_str(", ");
+                    }
+                    let _ = write!(details, "cpus={c}");
+                }
+                if let Some(m) = restart.memory_mb {
+                    if !details.is_empty() {
+                        details.push_str(", ");
+                    }
+                    let _ = write!(details, "memory_mb={m}");
+                }
+                if details.is_empty() {
+                    details.push_str("no changes");
+                }
+                println!("{}", format!("  Restarting VM ({details})...").dimmed());
 
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                let cfg = VmStartConfig {
+                    offline: restart.offline,
+                    cpus: restart.cpus,
+                    memory_mb: restart.memory_mb,
+                };
 
                 {
-                    use std::fmt::Write;
-                    let mut details = String::new();
-                    if let Some(o) = restart.offline {
-                        let _ = write!(details, "offline={o}");
-                    }
-                    if let Some(c) = restart.cpus {
-                        if !details.is_empty() {
-                            details.push_str(", ");
-                        }
-                        let _ = write!(details, "cpus={c}");
-                    }
-                    if let Some(m) = restart.memory_mb {
-                        if !details.is_empty() {
-                            details.push_str(", ");
-                        }
-                        let _ = write!(details, "memory_mb={m}");
-                    }
-                    if details.is_empty() {
-                        details.push_str("no changes");
-                    }
-                    println!("{}", format!("  Restarting VM ({details})...").dimmed());
-
-                    let cfg = VmStartConfig {
-                        offline: restart.offline,
-                        cpus: restart.cpus,
-                        memory_mb: restart.memory_mb,
-                    };
-
-                    self.backend.stop_vm();
+                    // Gotta file sync and stuff before shutting down the VM.
+                    println!(
+                        "{}",
+                        "Shutting the VM down cleanly before restart...".dimmed()
+                    );
+                    self.graceful_stop_vm().await;
                     self.backend.start_vm(cfg).context("Failed to restart VM")?;
 
                     let (idle_timeout, max_timeout) = boot_timeouts();
