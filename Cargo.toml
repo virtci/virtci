@@ -33,6 +33,7 @@ mime_guess = "2"
 tiny_http = "0.12"
 anyhow = "1.0.103"
 blake3 = "1.8.5"
+dotenvy = "0.15.7"
 
 [build-dependencies]
 cc = "1.2.27"

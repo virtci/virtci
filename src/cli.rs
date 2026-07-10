@@ -69,6 +69,12 @@ pub struct RunArgs {
     /// to the VirtCI VM cache on the CI machine.
     #[argh(option)]
     pub cache_namespace: Option<String>,
+    /// explicitly set an environment variable file to use.
+    #[argh(option)]
+    pub env_file: Option<PathBuf>,
+    /// do not read the `.env` file even if it is there.
+    #[argh(switch)]
+    pub no_env_file: bool,
 }
 
 /// Interactive setup for a new VM image description
