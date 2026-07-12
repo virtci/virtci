@@ -1303,6 +1303,38 @@ fn serial_diag_block(path: Option<&std::path::Path>) -> Option<String> {
     Some(text[start..end].trim_end().to_string())
 }
 
+fn serial_failure_lines(path: Option<&std::path::Path>) -> Option<String> {
+    const MARKERS: &[&str] = &[
+        "Dependency failed for",
+        "Failed to start",
+        "Failed to mount",
+        "Timed out waiting for",
+        "FAILED]",
+        "start request repeated too quickly",
+        "UNEXPECTED INCONSISTENCY",
+        "Kernel panic",
+    ];
+    const MAX: usize = 40;
+
+    let path = path?;
+    let bytes = std::fs::read(path).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if !l.is_empty() && MARKERS.iter().any(|m| l.contains(m)) && !lines.contains(&l) {
+            lines.push(l);
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+
+    let from = lines.len().saturating_sub(MAX);
+    Some(lines[from..].join("\n"))
+}
+
 fn boot_failure_context(
     serial_path: Option<&std::path::Path>,
     disk_path: Option<&std::path::Path>,
@@ -1311,6 +1343,12 @@ fn boot_failure_context(
     if let Some(diag) = diagnose_serial(serial_path) {
         out.push_str("\n[VirtCI] ");
         out.push_str(&diag);
+    }
+    if let Some(fails) = serial_failure_lines(serial_path) {
+        out.push_str(
+            "\n[VirtCI] unit failures found in the serial log (these pull in emergency mode):\n",
+        );
+        out.push_str(&fails);
     }
     if let Some(block) = serial_diag_block(serial_path) {
         out.push_str(
