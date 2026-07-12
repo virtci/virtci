@@ -30,6 +30,7 @@ network:
       match:
         name: "en*"
       dhcp4: true
+      optional: true
 EOF
 
 genisoimage \
