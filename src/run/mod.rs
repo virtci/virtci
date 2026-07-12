@@ -13,6 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use std::fmt::Write;
+
 use anyhow::Context;
 use russh::client;
 use russh::keys::PrivateKeyWithHashAlg;
@@ -1223,6 +1225,8 @@ fn diagnose_serial(path: Option<&std::path::Path>) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
 
     const SCAN_BYTES: u64 = 64 * 1024;
+    const DOC: &str = "See CHANGELOG.md for known issues";
+
     let path = path?;
     let mut file = std::fs::File::open(path).ok()?;
     let len = std::fs::metadata(path).ok()?.len();
@@ -1235,7 +1239,6 @@ fn diagnose_serial(path: Option<&std::path::Path>) -> Option<String> {
     file.take(SCAN_BYTES).read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
 
-    const DOC: &str = "See CHANGELOG.md for known issues";
     if text.contains("Kernel panic") {
         return Some(format!(
             "DIAGNOSIS: VM KERNEL PANIC in the serial log so the kernel halted, meaning SSH will never \
@@ -1281,10 +1284,11 @@ fn boot_failure_context(
         out.push_str(&diag);
     }
     if let Some(disk) = disk_path {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n[VirtCI] to rule out disk corruption, run: `qemu-img check \"{}\"` (you may want to use virtci shell)",
             disk.display()
-        ));
+        );
     }
     out.push('\n');
     out.push_str(&serial_tail(serial_path));
