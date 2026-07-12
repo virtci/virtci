@@ -1010,7 +1010,10 @@ pub async fn wait_for_ssh_watching(
 
     loop {
         if let Some(err) = backend.vm_exit_error() {
-            anyhow::bail!("VM process exited while waiting for SSH: {err}");
+            anyhow::bail!(
+                "VM process exited while waiting for SSH: {err}{}",
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+            );
         }
 
         let mut ssh_progress = false;
@@ -1066,16 +1069,16 @@ pub async fn wait_for_ssh_watching(
         match status.verdict {
             BootVerdict::Stuck => anyhow::bail!(
                 "VM appears stuck. No boot progress for {}s (no serial output, no disk writes, no \
-                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}\n{}",
+                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}{}",
                 status.idle.as_secs(),
                 signals,
-                serial_tail(serial_path.as_deref()),
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
             ),
             BootVerdict::MaxTimeout => anyhow::bail!(
                 "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
-                 timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}\n{}",
+                 timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}{}",
                 signals,
-                serial_tail(serial_path.as_deref()),
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
             ),
             BootVerdict::Booting => {}
         }
@@ -1133,14 +1136,17 @@ pub async fn wait_for_ssh_watching(
     let mut healthy_since: Option<Instant> = None;
     loop {
         if let Some(err) = backend.vm_exit_error() {
-            anyhow::bail!("VM process exited while waiting for SSH: {err}");
+            anyhow::bail!(
+                "VM process exited while waiting for SSH: {err}{}",
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+            );
         }
         if start.elapsed() >= max_timeout {
             anyhow::bail!(
                 "VM did not stay SSH-reachable within the {max_timeout_secs}s maximum boot \
                  timeout (SSH kept dropping during the post-boot settle window). Tune with \
-                 VIRTCI_VM_START_MAX_TIMEOUT.\n{}",
-                serial_tail(serial_path.as_deref()),
+                 VIRTCI_VM_START_MAX_TIMEOUT.{}",
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
             );
         }
 
@@ -1209,6 +1215,80 @@ fn serial_tail(path: Option<&std::path::Path>) -> String {
         buf.len(),
         tail.trim_end()
     )
+}
+
+/// Attempt to diagnose the serial output issues with some known snippets that appear under certain
+/// failure cases.
+fn diagnose_serial(path: Option<&std::path::Path>) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const SCAN_BYTES: u64 = 64 * 1024;
+    let path = path?;
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = std::fs::metadata(path).ok()?.len();
+    if len == 0 {
+        return None;
+    }
+    let from = len.saturating_sub(SCAN_BYTES);
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut buf = Vec::new();
+    file.take(SCAN_BYTES).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+
+    const DOC: &str = "See CHANGELOG.md for known issues";
+    if text.contains("Kernel panic") {
+        return Some(format!(
+            "DIAGNOSIS: VM KERNEL PANIC in the serial log so the kernel halted, meaning SSH will never \
+             come up. {DOC}"
+        ));
+    }
+    if text.contains("UNEXPECTED INCONSISTENCY")
+        || text.contains("RUN fsck MANUALLY")
+        || text.contains("fsck failed")
+    {
+        return Some(format!(
+            "DIAGNOSIS: filesystem check (fsck) reported problems on boot so the VM disk may be \
+             corrupt. Check it with `qemu-img check`. {DOC}"
+        ));
+    }
+    if text.contains("emergency.target")
+        || text.contains("emergency mode")
+        || text.contains("system maintenance")
+    {
+        return Some(format!(
+            "DIAGNOSIS: VM booted into systemd emergency mode. A boot unit failed, so sshd never \
+             starts and the boot cannot complete (the watcher correctly sees no progress). Under slow \
+             TCG the usual cause is a network-online / cloud-init timeout (look for a NIC shown as \
+             'down'/False in the log) or a failed mount. A corrupt disk can also trigger it. {DOC}"
+        ));
+    }
+    if text.contains("rescue.target") || text.contains("rescue mode") {
+        return Some(format!(
+            "DIAGNOSIS: VM booted into systemd rescue mode. Boot did not reach multi-user, so \
+             sshd is not running. {DOC}"
+        ));
+    }
+    None
+}
+
+fn boot_failure_context(
+    serial_path: Option<&std::path::Path>,
+    disk_path: Option<&std::path::Path>,
+) -> String {
+    let mut out = String::new();
+    if let Some(diag) = diagnose_serial(serial_path) {
+        out.push_str("\n[VirtCI] ");
+        out.push_str(&diag);
+    }
+    if let Some(disk) = disk_path {
+        out.push_str(&format!(
+            "\n[VirtCI] to rule out disk corruption, run: `qemu-img check \"{}\"` (you may want to use virtci shell)",
+            disk.display()
+        ));
+    }
+    out.push('\n');
+    out.push_str(&serial_tail(serial_path));
+    out
 }
 
 pub struct ClientHandler;
