@@ -1260,9 +1260,10 @@ fn diagnose_serial(path: Option<&std::path::Path>) -> Option<String> {
     {
         return Some(format!(
             "DIAGNOSIS: VM booted into systemd emergency mode. A boot unit failed, so sshd never \
-             starts and the boot cannot complete (the watcher correctly sees no progress). Under slow \
-             TCG the usual cause is a network-online / cloud-init timeout (look for a NIC shown as \
-             'down'/False in the log) or a failed mount. A corrupt disk can also trigger it. {DOC}"
+             starts and the boot cannot complete (the watcher correctly sees no progress). See the \
+             guest boot-failure diagnostics below (failed units + journal) for which unit tripped it; \
+             a failed/slow mount, device timeout, or a corrupt disk can all cause it. This has so far \
+             only been seen on the Windows-host restart path. {DOC}"
         ));
     }
     if text.contains("rescue.target") || text.contains("rescue mode") {
@@ -1274,6 +1275,26 @@ fn diagnose_serial(path: Option<&std::path::Path>) -> Option<String> {
     None
 }
 
+fn serial_diag_block(path: Option<&std::path::Path>) -> Option<String> {
+    const START: &str = "=== VIRTCI BOOT DIAGNOSTICS";
+    const END: &str = "=== END VIRTCI BOOT DIAGNOSTICS";
+
+    let path = path?;
+    let bytes = std::fs::read(path).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let start = text.rfind(START)?;
+    let end = match text[start..].find(END) {
+        Some(rel) => {
+            let marker = start + rel;
+            text[marker..]
+                .find('\n')
+                .map_or(text.len(), |nl| marker + nl)
+        }
+        None => text.len(),
+    };
+    Some(text[start..end].trim_end().to_string())
+}
+
 fn boot_failure_context(
     serial_path: Option<&std::path::Path>,
     disk_path: Option<&std::path::Path>,
@@ -1282,6 +1303,12 @@ fn boot_failure_context(
     if let Some(diag) = diagnose_serial(serial_path) {
         out.push_str("\n[VirtCI] ");
         out.push_str(&diag);
+    }
+    if let Some(block) = serial_diag_block(serial_path) {
+        out.push_str(
+            "\n[VirtCI] guest boot-failure diagnostics (dumped to serial by the guest):\n",
+        );
+        out.push_str(&block);
     }
     if let Some(disk) = disk_path {
         let _ = write!(

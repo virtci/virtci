@@ -53,6 +53,15 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 - Fixed empty strings in a YAML workflow `timeout` setting the timeout to 2 hours silently.
 - Fixed Windows `virtci run` boot progress detection being too strict and checking values that may not always get updated, leading to flakiness when booting some VMs, notably TCG emulated ones (those were the only occurrences observed).
 
+### Known Issues
+
+#### Maybe Not Issue
+
+- Windows hosts may (or may not) experience disk corruption with overlays. We are unable to deterministically reproduce this, and are unsure if this impacts any observed flakiness using Windows hosts.
+  - [QEMU Issue #813](https://gitlab.com/qemu-project/qemu/-/work_items/813). On windows, preallocation=full qcow2 not creatable, qcow2 not resizable.
+  - [QEMU Issue #814](https://gitlab.com/qemu-project/qemu/-/work_items/814). On Windows, qcow2 is corrupted on expansion.
+  - In VirtCI's own CI, we were encountering a lot of flakiness with our Windows runners, resulting in the VM booting into emergency mode, with NIC failure. This has stopped with [e443809](https://github.com/virtci/virtci/commit/e443809141d71c6f0f3a216bc4435eeed0b9cd11). It is possible this was just a mistake in our cloud init seed.iso.
+
 ## Version 0.3.1 - 2026-06-11
 
 ### Added

@@ -15,6 +15,29 @@ users:
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
 ssh_pwauth: true
+write_files:
+  - path: /usr/local/sbin/virtci-boot-diag
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # Cheap diagnostics first (in case journalctl is slow under TCG and gets timed out).
+      exec > /dev/console 2>&1
+      echo
+      echo "=== VIRTCI BOOT DIAGNOSTICS (${1:-?}) ==="
+      echo "-- date (utc) --"; date -u
+      echo "-- failed units --"; systemctl --failed --no-pager
+      echo "-- pending jobs --"; systemctl list-jobs --no-pager
+      echo "-- journal (errors) --"; journalctl -xb -p err --no-pager | tail -n 120
+      echo "-- journal (tail) --"; journalctl -xb --no-pager | tail -n 200
+      echo "=== END VIRTCI BOOT DIAGNOSTICS (${1:-?}) ==="
+  - path: /etc/systemd/system/emergency.service.d/10-virtci-dump.conf
+    content: |
+      [Service]
+      ExecStartPre=-/usr/local/sbin/virtci-boot-diag emergency
+  - path: /etc/systemd/system/rescue.service.d/10-virtci-dump.conf
+    content: |
+      [Service]
+      ExecStartPre=-/usr/local/sbin/virtci-boot-diag rescue
 EOF
 
 cat > "$SEED_DIR/meta-data" <<EOF
