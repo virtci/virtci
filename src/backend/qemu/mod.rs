@@ -14,6 +14,7 @@ use crate::{file_lock::FileLock, global_paths::VciGlobalPaths, vm_image::HostExe
 pub mod backend;
 pub mod binaries;
 pub mod kvm;
+pub mod qmp;
 
 /// On a Windows host, deciding whether a QEMU image should run natively or inside WSL2 (optionally
 /// with KVM) depends on a few factors:

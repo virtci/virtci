@@ -98,6 +98,9 @@ pub struct QemuBackend {
     pub qemu_process: Option<Arc<Mutex<TargetChildProcess>>>,
     /// Must be stored here, as it must restart when QEMU process restarts.
     pub tpm_process: Option<Arc<Mutex<TargetChildProcess>>>,
+    /// QEMU QMP monitor thingy. Only used for native exec targets, not WSL2 but that has the more
+    /// reliable file-metadata stuff so generally fine. QMP endpoints bind to 127.0.0.1 only.
+    pub qmp: Option<PortFlock>,
 }
 
 impl QemuBackend {
@@ -212,7 +215,34 @@ impl QemuBackend {
             orphans,
             qemu_process: None,
             tpm_process: None,
+            qmp: None,
         })
+    }
+
+    /// Binds to 127.0.0.1, so the WSL2 host exec target from the windows host won't really work.
+    fn qmp_supported(&self) -> bool {
+        !matches!(self.exec_target, HostExecTarget::WSL2(_))
+    }
+
+    /// Loopback address of the QMP monitor, once the port has been acquired.
+    fn qmp_addr(&self) -> Option<std::net::SocketAddr> {
+        let port = self.qmp.as_ref()?.port;
+        Some(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+    }
+
+    fn reserve_qmp_port(&mut self, from: u16) {
+        self.qmp = None;
+        if !self.qmp_supported() {
+            return;
+        }
+        match PortFlock::get_available(&self.host_temp_dir, from) {
+            Ok(flock) => self.qmp = Some(flock),
+            Err(e) => {
+                eprintln!(
+                    "QMP port reservation failed, proceeding without QMP boot monitoring: {e}"
+                );
+            }
+        }
     }
 
     pub fn is_base_mode(&self) -> bool {
@@ -328,6 +358,8 @@ impl VmBackend for QemuBackend {
         let _ = self.start_config.memory_mb.get_or_insert(DEFAULT_MEMORY_MB);
 
         self.host_port = Some(PortFlock::get_available(&self.host_temp_dir, 0)?);
+        let after_ssh = self.host_port.as_ref().expect("host port reserved").port + 1;
+        self.reserve_qmp_port(after_ssh);
         self.write_run_metadata()?;
 
         if self.is_tpm() {
@@ -365,15 +397,23 @@ impl VmBackend for QemuBackend {
             .context("Failed to spawn QEMU")?;
             self.orphans.add_child_process(&qemu);
 
-            match super::binaries::qemu_launch_outcome(&qemu, &stderr_log)? {
+            let qmp_port = self.qmp.as_ref().map(|q| q.port);
+            match super::binaries::qemu_launch_outcome(&qemu, &stderr_log, qmp_port)? {
                 super::binaries::QemuLaunchOutcome::Running => break qemu,
                 super::binaries::QemuLaunchOutcome::PortTaken => {
-                    // QEMU already exited, so drop it, release the reserved port, and try again.
                     drop(qemu);
                     let taken = self.host_port.as_ref().expect("port reserved").port;
                     self.host_port =
                         Some(PortFlock::get_available(&self.host_temp_dir, taken + 1)?);
+
+                    let after_ssh = self.host_port.as_ref().expect("port reserved").port + 1;
+                    self.reserve_qmp_port(after_ssh);
                     self.write_run_metadata()?;
+                }
+                super::binaries::QemuLaunchOutcome::QmpPortTaken => {
+                    drop(qemu);
+                    let failed = qmp_port.expect("QmpPortTaken implies a reserved QMP port");
+                    self.reserve_qmp_port(failed + 1);
                 }
             }
         };
@@ -404,6 +444,7 @@ impl VmBackend for QemuBackend {
         }
 
         self.host_port = None;
+        self.qmp = None;
     }
 
     fn ssh_target(&self) -> crate::vm_image::SshTarget {
@@ -511,6 +552,10 @@ impl VmBackend for QemuBackend {
 
     fn disk_image_path(&self) -> Option<&Path> {
         Some(self.disk.target().path.as_path())
+    }
+
+    fn vm_disk_io_ops(&self) -> Option<u64> {
+        super::qmp::query_disk_io_ops(self.qmp_addr()?)
     }
 
     fn is_cached_run(&self) -> bool {

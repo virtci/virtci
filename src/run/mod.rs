@@ -14,6 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use std::fmt::Write;
+
 use anyhow::Context;
 use russh::client;
 use russh::keys::PrivateKeyWithHashAlg;
@@ -84,11 +86,12 @@ const BOOT_STATUS_INTERVAL: u64 = 30;
 /// Deliberately coarse: a WSL2 sample shells out to the distro, and the idle timeout it feeds is
 /// measured in minutes, so there's no need to sample every poll.
 const CPU_SAMPLE_INTERVAL: u64 = 15;
-/// Minimum share of one CPU core (`1 / CPU_PROGRESS_DIVISOR`) the VM must burn over a sample
-/// interval for it to count as boot progress. Set so an actively-emulating guest (which pegs a
-/// core under TCG) clears it easily, while the idle housekeeping of a halted/wedged guest's
-/// process does not masquerade as progress. `20` => 5%.
-const CPU_PROGRESS_DIVISOR: u64 = 20;
+/// VM must do 4% CPU time progress to determine that it is making at least some progress.
+const CPU_PROGRESS_DIVISOR: u64 = 25;
+
+/// If the VM seems idle, wait `base_idle + (elapsed / IDLE_SCALE_DIVISOR)` amount of time until it's
+/// condiered hanged.
+const IDLE_SCALE_DIVISOR: u64 = 4;
 
 /// Once SSH first becomes functional, we don't trust it immediately: a VM that has *just* reached a
 /// usable SSH state is often still finishing first-boot work (cloud-init creating the user and
@@ -405,25 +408,33 @@ impl Job {
 
             match result {
                 Ok(()) => (),
-                Err(ref e) => {
+                Err(e) => {
                     if continue_on_error {
-                        println!("{}", format!("  Failed (continuing): {e}").yellow());
+                        println!("{}", format!("  Failed (continuing): {e:#}").yellow());
                     } else {
-                        anyhow::bail!("Step '{step_name}' failed: {e}");
+                        return Err(e).with_context(|| format!("Step '{step_name}' failed"));
                     }
                 }
             }
         }
 
         let clean_shutdown = self.stop_vm_for_capture().await;
-        if clean_shutdown
-            && let Err(e) = self
+        if clean_shutdown {
+            if let Err(e) = self
                 .backend
                 .cache_run_files(&self.cache_fingerprint, self.cache_ttl_secs)
-        {
+            {
+                eprintln!(
+                    "{}",
+                    format!("Warning: failed to write workflow cache: {e:#}").yellow()
+                );
+            }
+        } else if self.backend.produces_cache() {
             eprintln!(
                 "{}",
-                format!("Warning: failed to write workflow cache: {e:#}").yellow()
+                "Warning: skipping workflow cache write because the VM was not cleanly shut down \
+                 (disk may be inconsistent)."
+                    .yellow()
             );
         }
 
@@ -442,16 +453,25 @@ impl Job {
             return false;
         }
 
+        println!("{}", "Powering off the VM to cache a good disk...".dimmed());
+        self.graceful_stop_vm().await
+    }
+
+    /// Cleanly shut down the VM. sync the file system and stuff, rather than just SIGKILL.
+    async fn graceful_stop_vm(&mut self) -> bool {
+        use colored::Colorize;
+
         let shutdown_cmd = match self.backend.os() {
             GuestOs::Windows => "Stop-Computer -Force",
             _ => "sudo shutdown -h now",
         };
-        println!("{}", "Powering off the VM to cache a good disk...".dimmed());
 
         {
             let ssh = self.ssh();
             let empty_env = std::collections::HashMap::new();
             let fut = command::run_command(&ssh, shutdown_cmd, None, &empty_env, self.backend.os());
+            // The command may never return (the VM powers off mid-reply), so just fire it and then
+            // watch for the process to exit.
             let _ = tokio::time::timeout(Duration::from_secs(15), fut).await;
         }
 
@@ -467,8 +487,7 @@ impl Job {
                 eprintln!(
                     "{}",
                     format!(
-                        "VirtCI Warning: VM did not power off within {timeout}s so forcing stop and \
-                         skipping cache write (disk may be corrupted)."
+                        "VirtCI Warning: VM did not power off within {timeout}s; forcing stop."
                     )
                     .yellow()
                 );
@@ -583,74 +602,41 @@ impl Job {
                 }
             }
             StepKind::Restart(restart) => {
-                println!(
-                    "{}",
-                    "  Syncing filesystem before restart..."
-                        .to_string()
-                        .dimmed()
-                );
-
-                // filesystem sync
-                {
-                    let sync_cmd = match self.backend.os() {
-                        GuestOs::Windows => {
-                            "Write-VolumeCache -DriveLetter C ; Start-Sleep -Seconds 2"
-                        }
-                        _ => "sync", // Unix/Linux/macOS
-                    };
-                    let empty_env = std::collections::HashMap::new();
-                    let ssh = self.ssh();
-                    let sync_future =
-                        command::run_command(&ssh, sync_cmd, None, &empty_env, self.backend.os());
-
-                    let sync_result =
-                        tokio::time::timeout(tokio::time::Duration::from_secs(30), sync_future)
-                            .await;
-
-                    match sync_result {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => println!(
-                            "{}",
-                            format!("  Warning: sync command failed: {e}").yellow()
-                        ),
-                        Err(_) => {
-                            println!("{}", "  Warning: sync command timed out after 30s".yellow());
-                        }
-                    }
+                use std::fmt::Write;
+                let mut details = String::new();
+                if let Some(o) = restart.offline {
+                    let _ = write!(details, "offline={o}");
                 }
+                if let Some(c) = restart.cpus {
+                    if !details.is_empty() {
+                        details.push_str(", ");
+                    }
+                    let _ = write!(details, "cpus={c}");
+                }
+                if let Some(m) = restart.memory_mb {
+                    if !details.is_empty() {
+                        details.push_str(", ");
+                    }
+                    let _ = write!(details, "memory_mb={m}");
+                }
+                if details.is_empty() {
+                    details.push_str("no changes");
+                }
+                println!("{}", format!("  Restarting VM ({details})...").dimmed());
 
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                let cfg = VmStartConfig {
+                    offline: restart.offline,
+                    cpus: restart.cpus,
+                    memory_mb: restart.memory_mb,
+                };
 
                 {
-                    use std::fmt::Write;
-                    let mut details = String::new();
-                    if let Some(o) = restart.offline {
-                        let _ = write!(details, "offline={o}");
-                    }
-                    if let Some(c) = restart.cpus {
-                        if !details.is_empty() {
-                            details.push_str(", ");
-                        }
-                        let _ = write!(details, "cpus={c}");
-                    }
-                    if let Some(m) = restart.memory_mb {
-                        if !details.is_empty() {
-                            details.push_str(", ");
-                        }
-                        let _ = write!(details, "memory_mb={m}");
-                    }
-                    if details.is_empty() {
-                        details.push_str("no changes");
-                    }
-                    println!("{}", format!("  Restarting VM ({details})...").dimmed());
-
-                    let cfg = VmStartConfig {
-                        offline: restart.offline,
-                        cpus: restart.cpus,
-                        memory_mb: restart.memory_mb,
-                    };
-
-                    self.backend.stop_vm();
+                    // Gotta file sync and stuff before shutting down the VM.
+                    println!(
+                        "{}",
+                        "Shutting the VM down cleanly before restart...".dimmed()
+                    );
+                    self.graceful_stop_vm().await;
                     self.backend.start_vm(cfg).context("Failed to restart VM")?;
 
                     let (idle_timeout, max_timeout) = boot_timeouts();
@@ -780,6 +766,215 @@ async fn exec_trivial(handle: &client::Handle<ClientHandler>, os: GuestOs) -> bo
     }
 }
 
+/// Actually count the bytes in the log rather than `stat`ing the file cause Windows seemingly
+/// does the writes in bursts? Not sure why.
+struct SerialCounter {
+    path: Option<std::path::PathBuf>,
+    file: Option<std::fs::File>,
+    total: u64,
+}
+
+impl SerialCounter {
+    fn new(path: Option<std::path::PathBuf>) -> Self {
+        Self {
+            path,
+            file: None,
+            total: 0,
+        }
+    }
+
+    fn poll(&mut self) -> u64 {
+        if self.file.is_none()
+            && let Some(p) = &self.path
+        {
+            self.file = std::fs::File::open(p).ok();
+        }
+        if let Some(f) = &mut self.file
+            && let Ok(n) = std::io::copy(f, &mut std::io::sink())
+        {
+            self.total = self.total.saturating_add(n);
+        }
+        self.total
+    }
+}
+
+struct BootSignals {
+    /// SSH reached at least the banner/listening stage this tick.
+    ssh_progress: bool,
+    /// Total bytes drained from the serial log so far.
+    serial_bytes: u64,
+    /// Number of times the qcow2 disk fingerprint has advanced so far.
+    disk_changes: u64,
+    /// QMP block-layer IO operations count. `None` if not sampled/available this tick.
+    io_ops: Option<u64>,
+    /// Cumulative QEMU process CPU nanoseconds, `None` if not sampled this tick.
+    cpu_ns: Option<u64>,
+}
+
+enum BootVerdict {
+    Booting,
+    Stuck,
+    MaxTimeout,
+}
+
+struct BootStatus {
+    idle: Duration,
+    effective_idle: Duration,
+    verdict: BootVerdict,
+}
+
+struct BootWatch {
+    base_idle: Duration,
+    max_timeout: Duration,
+    cpu_sample_interval: Duration,
+    /// Elapsed time at which progress was last observed.
+    last_progress: Duration,
+    last_serial: u64,
+    last_disk_changes: u64,
+    last_io_ops: Option<u64>,
+    last_cpu: Option<u64>,
+    /// Elapsed time of the last successful CPU sample. Re-try on failed read.
+    last_cpu_at: Duration,
+
+    // Diagnostic only (does not affect the verdict). Per-signal snapshot so the status line and
+    // the failure message can show which liveness signals are alive and how stale each is.
+    /// CPU share of a core measured at the most recent CPU sample.
+    last_cpu_pct: Option<f64>,
+    /// Whether QMP block-IO stats have ever been readable.
+    qmp_seen: bool,
+    /// Elapsed time each signal last advanced (counted as progress). `None` if never.
+    serial_adv: Option<Duration>,
+    disk_adv: Option<Duration>,
+    io_adv: Option<Duration>,
+    cpu_adv: Option<Duration>,
+}
+
+impl BootWatch {
+    fn new(
+        base_idle: Duration,
+        max_timeout: Duration,
+        cpu_sample_interval: Duration,
+        initial_cpu: Option<u64>,
+        initial_io: Option<u64>,
+    ) -> Self {
+        Self {
+            base_idle,
+            max_timeout,
+            cpu_sample_interval,
+            last_progress: Duration::ZERO,
+            last_serial: 0,
+            last_disk_changes: 0,
+            last_io_ops: initial_io,
+            last_cpu: initial_cpu,
+            last_cpu_at: Duration::ZERO,
+            last_cpu_pct: None,
+            qmp_seen: initial_io.is_some(),
+            serial_adv: None,
+            disk_adv: None,
+            io_adv: None,
+            cpu_adv: None,
+        }
+    }
+
+    /// Whether enough time has passed since the last successful CPU sample to take another.
+    fn slow_sample_due(&self, elapsed: Duration) -> bool {
+        elapsed.saturating_sub(self.last_cpu_at) >= self.cpu_sample_interval
+    }
+
+    /// How long the idle window can be. Scales with progress elapsed boot time.
+    fn effective_idle(&self, elapsed: Duration) -> Duration {
+        let scaled = self.base_idle + (Duration::from_secs(elapsed.as_secs() / IDLE_SCALE_DIVISOR));
+        scaled.min(self.max_timeout)
+    }
+
+    fn signals_summary(&self, elapsed: Duration) -> String {
+        let since = |adv: Option<Duration>| match adv {
+            Some(at) => format!("{}s ago", elapsed.saturating_sub(at).as_secs()),
+            None => "never".to_string(),
+        };
+        let cpu = match self.last_cpu_pct {
+            Some(pct) => format!("cpu={pct:.1}% ({})", since(self.cpu_adv)),
+            None => "cpu=n/a".to_string(),
+        };
+        let qmp = if self.qmp_seen {
+            format!(
+                "qmp_io_ops={} ({})",
+                self.last_io_ops.unwrap_or(0),
+                since(self.io_adv)
+            )
+        } else {
+            "qmp=unavailable".to_string()
+        };
+        format!(
+            "signals: serial={}B ({}) | disk_changes={} ({}) | {cpu} | {qmp}",
+            self.last_serial,
+            since(self.serial_adv),
+            self.last_disk_changes,
+            since(self.disk_adv),
+        )
+    }
+
+    fn observe(&mut self, elapsed: Duration, sig: &BootSignals) -> BootStatus {
+        let mut progress = sig.ssh_progress;
+
+        if sig.serial_bytes > self.last_serial {
+            self.last_serial = sig.serial_bytes;
+            self.serial_adv = Some(elapsed);
+            progress = true;
+        }
+        if sig.disk_changes > self.last_disk_changes {
+            self.last_disk_changes = sig.disk_changes;
+            self.disk_adv = Some(elapsed);
+            progress = true;
+        }
+        if let Some(io) = sig.io_ops {
+            self.qmp_seen = true;
+            if self.last_io_ops.is_some_and(|prev| io > prev) {
+                self.io_adv = Some(elapsed);
+                progress = true;
+            }
+            self.last_io_ops = Some(io.max(self.last_io_ops.unwrap_or(0)));
+        }
+        if let Some(cpu) = sig.cpu_ns {
+            if let Some(prev) = self.last_cpu {
+                let cpu_delta = cpu.saturating_sub(prev);
+                let wall_ns = u64::try_from(elapsed.saturating_sub(self.last_cpu_at).as_nanos())
+                    .unwrap_or(u64::MAX);
+                if wall_ns > 0 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let pct = (cpu_delta as f64 / wall_ns as f64) * 100.0;
+                    self.last_cpu_pct = Some(pct);
+                    if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
+                        self.cpu_adv = Some(elapsed);
+                        progress = true;
+                    }
+                }
+            }
+            self.last_cpu = Some(cpu);
+            self.last_cpu_at = elapsed;
+        }
+
+        if progress {
+            self.last_progress = elapsed;
+        }
+
+        let idle = elapsed.saturating_sub(self.last_progress);
+        let effective_idle = self.effective_idle(elapsed);
+        let verdict = if idle >= effective_idle {
+            BootVerdict::Stuck
+        } else if elapsed >= self.max_timeout {
+            BootVerdict::MaxTimeout
+        } else {
+            BootVerdict::Booting
+        };
+        BootStatus {
+            idle,
+            effective_idle,
+            verdict,
+        }
+    }
+}
+
 /// Returns the seconds until SSH was ready.
 /// Wait for SSH to become reachable. Uses idle timeout of `idle_timeout_secs`. If the serial log
 /// of the VM is growing, then boot progress is considered "in progress", and the idle timeout
@@ -793,15 +988,8 @@ pub async fn wait_for_ssh_watching(
     use colored::Colorize;
 
     let serial_path = backend.serial_log_path().map(std::path::Path::to_path_buf);
-    let serial_size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).ok();
+    let mut serial = SerialCounter::new(serial_path.clone());
 
-    let mut last_size = serial_path.as_deref().and_then(serial_size).unwrap_or(0);
-    let mut status_size = last_size;
-
-    // Two extra liveness signals beyond serial growth, both of which stay active during the
-    // serial-silent, CPU-bound late-boot phase that cross-arch TCG makes long enough to trip the
-    // idle timeout: the VM process burning CPU, and the guest writing to its disk. A "fingerprint"
-    // of `(len, mtime)` catches in-place writes that don't grow the file.
     let disk_path = backend.disk_image_path().map(std::path::Path::to_path_buf);
     let disk_fingerprint = |p: &std::path::Path| {
         std::fs::metadata(p)
@@ -809,6 +997,7 @@ pub async fn wait_for_ssh_watching(
             .map(|m| (m.len(), m.modified().ok()))
     };
     let mut last_disk = disk_path.as_deref().and_then(disk_fingerprint);
+    let mut disk_changes: u64 = 0;
 
     let idle_timeout = Duration::from_secs(idle_timeout_secs);
     let max_timeout = Duration::from_secs(max_timeout_secs);
@@ -817,22 +1006,31 @@ pub async fn wait_for_ssh_watching(
 
     let os = backend.os();
     let start = Instant::now();
-    let mut last_progress = start;
     let mut last_status = start;
     let mut banner_seen = false;
-    let mut last_cpu = backend.vm_cpu_time_ns();
-    let mut last_cpu_at = start;
+    let mut status_bytes = serial.poll();
+
+    let mut watch = BootWatch::new(
+        idle_timeout,
+        max_timeout,
+        cpu_sample_interval,
+        backend.vm_cpu_time_ns(),
+        backend.vm_disk_io_ops(),
+    );
 
     loop {
         if let Some(err) = backend.vm_exit_error() {
-            anyhow::bail!("VM process exited while waiting for SSH: {err}");
+            anyhow::bail!(
+                "VM process exited while waiting for SSH: {err}{}",
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+            );
         }
 
+        let mut ssh_progress = false;
         match probe_ssh(ssh, os).await {
             SshProgress::Ready => break,
             SshProgress::Listening => {
-                // It's listening which means boot progress should be happening.
-                // Can't login yet though.
+                // Listening means boot progress is happening; can't log in yet though.
                 if !banner_seen {
                     banner_seen = true;
                     println!(
@@ -842,88 +1040,86 @@ pub async fn wait_for_ssh_watching(
                             .dimmed()
                     );
                 }
-                last_progress = Instant::now();
+                ssh_progress = true;
             }
             SshProgress::NotReady => {}
         }
 
-        if let Some(size) = serial_path.as_deref().and_then(serial_size)
-            && size > last_size
-        {
-            last_size = size;
-            last_progress = Instant::now();
-        }
+        let serial_bytes = serial.poll();
 
         // Disk-write liveness: a grown file or a bumped mtime both mean the guest just wrote.
         if let Some(fp) = disk_path.as_deref().and_then(disk_fingerprint)
             && last_disk.as_ref().is_none_or(|prev| fp > *prev)
         {
             last_disk = Some(fp);
-            last_progress = Instant::now();
+            disk_changes += 1;
         }
 
-        let now = Instant::now();
+        let elapsed = start.elapsed();
 
-        // CPU-time liveness, on a slower cadence (a WSL2 sample shells out to the distro). Counts
-        // only if the VM burned a meaningful share of a core since the last sample, so an idle
-        // process doesn't keep a wedged guest alive. Only advance the anchor on a successful
-        // sample, so a transient read failure just retries rather than skewing the next interval.
-        if now.duration_since(last_cpu_at) >= cpu_sample_interval
-            && let Some(cpu) = backend.vm_cpu_time_ns()
-        {
-            if let Some(prev) = last_cpu {
-                let cpu_delta = cpu.saturating_sub(prev);
-                let wall_ns = u64::try_from(now.duration_since(last_cpu_at).as_nanos())?;
-                if cpu_delta.saturating_mul(CPU_PROGRESS_DIVISOR) >= wall_ns {
-                    last_progress = now;
-                }
-            }
-            last_cpu = Some(cpu);
-            last_cpu_at = now;
-        }
+        let (cpu_ns, io_ops) = if watch.slow_sample_due(elapsed) {
+            (backend.vm_cpu_time_ns(), backend.vm_disk_io_ops())
+        } else {
+            (None, None)
+        };
 
-        let idle = now.duration_since(last_progress);
-        let elapsed = now.duration_since(start);
+        let status = watch.observe(
+            elapsed,
+            &BootSignals {
+                ssh_progress,
+                serial_bytes,
+                disk_changes,
+                io_ops,
+                cpu_ns,
+            },
+        );
 
-        if idle >= idle_timeout {
-            anyhow::bail!(
+        let signals = watch.signals_summary(elapsed);
+
+        match status.verdict {
+            BootVerdict::Stuck => anyhow::bail!(
                 "VM appears stuck. No boot progress for {}s (no serial output, no disk writes, no \
-                 CPU activity, and SSH not up). Tune with VIRTCI_VM_START_IDLE_TIMEOUT.\n{}",
-                idle.as_secs(),
-                serial_tail(serial_path.as_deref()),
-            );
-        }
-        if elapsed >= max_timeout {
-            anyhow::bail!(
+                 CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}{}",
+                status.idle.as_secs(),
+                signals,
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+            ),
+            BootVerdict::MaxTimeout => anyhow::bail!(
                 "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
-                 timeout. Tune with VIRTCI_VM_START_MAX_TIMEOUT.\n{}",
-                serial_tail(serial_path.as_deref()),
-            );
+                 timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}{}",
+                signals,
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+            ),
+            BootVerdict::Booting => {}
         }
 
         if last_status.elapsed() >= Duration::from_secs(BOOT_STATUS_INTERVAL) {
-            last_status = now;
-            let detail = if last_size > status_size {
-                format!("serial +{} bytes, still booting", last_size - status_size)
+            last_status = Instant::now();
+            let effective_idle = status.effective_idle.as_secs();
+            let detail = if serial_bytes > status_bytes {
+                format!(
+                    "serial +{} bytes, still booting",
+                    serial_bytes - status_bytes
+                )
             } else if banner_seen {
                 format!(
-                    "sshd up, waiting for login ({}s idle, gives up at {idle_timeout_secs}s)",
-                    idle.as_secs()
+                    "sshd up, waiting for login ({}s idle, gives up at {effective_idle}s)",
+                    status.idle.as_secs()
                 )
             } else if serial_path.is_some() {
                 format!(
-                    "quiet for {}s (no serial/disk/CPU progress; gives up at {idle_timeout_secs}s \
+                    "quiet for {}s (no serial/disk/CPU progress; gives up at {effective_idle}s \
                      idle)",
-                    idle.as_secs()
+                    status.idle.as_secs()
                 )
             } else {
                 "still waiting for SSH".to_string()
             };
-            status_size = last_size;
+            status_bytes = serial_bytes;
             println!(
                 "{}",
                 format!(
-                    "[VirtCI] Waiting for VM: {}s elapsed, {detail}...",
+                    "[VirtCI] Waiting for VM: {}s elapsed, {detail} [{signals}]...",
                     elapsed.as_secs()
                 )
                 .dimmed()
@@ -950,14 +1146,17 @@ pub async fn wait_for_ssh_watching(
     let mut healthy_since: Option<Instant> = None;
     loop {
         if let Some(err) = backend.vm_exit_error() {
-            anyhow::bail!("VM process exited while waiting for SSH: {err}");
+            anyhow::bail!(
+                "VM process exited while waiting for SSH: {err}{}",
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+            );
         }
         if start.elapsed() >= max_timeout {
             anyhow::bail!(
                 "VM did not stay SSH-reachable within the {max_timeout_secs}s maximum boot \
                  timeout (SSH kept dropping during the post-boot settle window). Tune with \
-                 VIRTCI_VM_START_MAX_TIMEOUT.\n{}",
-                serial_tail(serial_path.as_deref()),
+                 VIRTCI_VM_START_MAX_TIMEOUT.{}",
+                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
             );
         }
 
@@ -1026,6 +1225,147 @@ fn serial_tail(path: Option<&std::path::Path>) -> String {
         buf.len(),
         tail.trim_end()
     )
+}
+
+/// Attempt to diagnose the serial output issues with some known snippets that appear under certain
+/// failure cases.
+fn diagnose_serial(path: Option<&std::path::Path>) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const SCAN_BYTES: u64 = 64 * 1024;
+    const DOC: &str = "See CHANGELOG.md for known issues";
+
+    let path = path?;
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = std::fs::metadata(path).ok()?.len();
+    if len == 0 {
+        return None;
+    }
+    let from = len.saturating_sub(SCAN_BYTES);
+    file.seek(SeekFrom::Start(from)).ok()?;
+    let mut buf = Vec::new();
+    file.take(SCAN_BYTES).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+
+    if text.contains("Kernel panic") {
+        return Some(format!(
+            "DIAGNOSIS: VM KERNEL PANIC in the serial log so the kernel halted, meaning SSH will never \
+             come up. {DOC}"
+        ));
+    }
+    if text.contains("UNEXPECTED INCONSISTENCY")
+        || text.contains("RUN fsck MANUALLY")
+        || text.contains("fsck failed")
+    {
+        return Some(format!(
+            "DIAGNOSIS: filesystem check (fsck) reported problems on boot so the VM disk may be \
+             corrupt. Check it with `qemu-img check`. {DOC}"
+        ));
+    }
+    if text.contains("emergency.target")
+        || text.contains("emergency mode")
+        || text.contains("system maintenance")
+    {
+        return Some(format!(
+            "DIAGNOSIS: VM booted into systemd emergency mode. A boot unit failed, so sshd never \
+             starts and the boot cannot complete (the watcher correctly sees no progress). See the \
+             guest boot-failure diagnostics below (failed units + journal) for which unit tripped it; \
+             a failed/slow mount, device timeout, or a corrupt disk can all cause it. This has so far \
+             only been seen on the Windows-host restart path. {DOC}"
+        ));
+    }
+    if text.contains("rescue.target") || text.contains("rescue mode") {
+        return Some(format!(
+            "DIAGNOSIS: VM booted into systemd rescue mode. Boot did not reach multi-user, so \
+             sshd is not running. {DOC}"
+        ));
+    }
+    None
+}
+
+fn serial_diag_block(path: Option<&std::path::Path>) -> Option<String> {
+    const START: &str = "=== VIRTCI BOOT DIAGNOSTICS";
+    const END: &str = "=== END VIRTCI BOOT DIAGNOSTICS";
+
+    let path = path?;
+    let bytes = std::fs::read(path).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let start = text.rfind(START)?;
+    let end = match text[start..].find(END) {
+        Some(rel) => {
+            let marker = start + rel;
+            text[marker..]
+                .find('\n')
+                .map_or(text.len(), |nl| marker + nl)
+        }
+        None => text.len(),
+    };
+    Some(text[start..end].trim_end().to_string())
+}
+
+fn serial_failure_lines(path: Option<&std::path::Path>) -> Option<String> {
+    const MARKERS: &[&str] = &[
+        "Dependency failed for",
+        "Failed to start",
+        "Failed to mount",
+        "Timed out waiting for",
+        "FAILED]",
+        "start request repeated too quickly",
+        "UNEXPECTED INCONSISTENCY",
+        "Kernel panic",
+    ];
+    const MAX: usize = 40;
+
+    let path = path?;
+    let bytes = std::fs::read(path).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if !l.is_empty() && MARKERS.iter().any(|m| l.contains(m)) && !lines.contains(&l) {
+            lines.push(l);
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+
+    let from = lines.len().saturating_sub(MAX);
+    Some(lines[from..].join("\n"))
+}
+
+fn boot_failure_context(
+    serial_path: Option<&std::path::Path>,
+    disk_path: Option<&std::path::Path>,
+) -> String {
+    let mut out = String::new();
+    if let Some(diag) = diagnose_serial(serial_path) {
+        out.push_str("\n[VirtCI] ");
+        out.push_str(&diag);
+    }
+    if let Some(fails) = serial_failure_lines(serial_path) {
+        out.push_str(
+            "\n[VirtCI] unit failures found in the serial log (these pull in emergency mode):\n",
+        );
+        out.push_str(&fails);
+    }
+    if let Some(block) = serial_diag_block(serial_path) {
+        out.push_str(
+            "\n[VirtCI] guest boot-failure diagnostics (dumped to serial by the guest):\n",
+        );
+        out.push_str(&block);
+    }
+    if let Some(disk) = disk_path {
+        let _ = write!(
+            out,
+            "\n[VirtCI] to rule out disk corruption, run: `qemu-img check \"{}\"` (you may want to use virtci shell)",
+            disk.display()
+        );
+    }
+    out.push('\n');
+    out.push_str(&serial_tail(serial_path));
+    out
 }
 
 pub struct ClientHandler;
@@ -1245,6 +1585,92 @@ mod tests {
     fn boot_timeouts_idle_clamped_to_max() {
         // An idle window larger than the ceiling could never fire, so it's clamped down.
         assert_eq!(resolve_boot_timeouts(Some("900"), Some("300")), (300, 300));
+    }
+
+    use super::{BootSignals, BootVerdict, BootWatch};
+    use std::time::Duration;
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    fn serial_only(serial_bytes: u64) -> BootSignals {
+        BootSignals {
+            ssh_progress: false,
+            serial_bytes,
+            disk_changes: 0,
+            io_ops: None,
+            cpu_ns: None,
+        }
+    }
+
+    fn first_stuck_at(
+        base_idle: u64,
+        max: u64,
+        end: u64,
+        mut serial_at: impl FnMut(u64) -> u64,
+    ) -> Option<u64> {
+        let mut w = BootWatch::new(secs(base_idle), secs(max), secs(15), Some(0), Some(0));
+        let mut e = 0;
+        while e <= end {
+            let st = w.observe(secs(e), &serial_only(serial_at(e)));
+            if matches!(st.verdict, BootVerdict::Stuck) {
+                return Some(e);
+            }
+            e += 2;
+        }
+        None
+    }
+
+    #[test]
+    fn effective_idle_scales_with_elapsed_and_caps_at_max() {
+        let w = BootWatch::new(secs(120), secs(1800), secs(15), None, None);
+        assert_eq!(w.effective_idle(secs(0)).as_secs(), 120);
+        assert_eq!(w.effective_idle(secs(400)).as_secs(), 220);
+        assert_eq!(w.effective_idle(secs(1_000_000)).as_secs(), 1800);
+    }
+
+    #[test]
+    fn steady_serial_never_trips() {
+        assert_eq!(first_stuck_at(120, 1800, 1000, |e| e), None);
+    }
+
+    #[test]
+    fn genuinely_flat_serial_eventually_trips() {
+        let stuck = first_stuck_at(120, 1800, 2000, |e| e.min(100)).expect("must eventually trip");
+        assert!((260..=340).contains(&stuck), "expected ~294s, got {stuck}s");
+    }
+
+    #[test]
+    fn bursty_serial_with_gaps_over_base_idle_survives_when_scaled() {
+        let burst = |e: u64| if e < 400 { e } else { 400 + (e / 200) * 4096 };
+        assert_eq!(first_stuck_at(120, 1800, 800, burst), None);
+    }
+
+    #[test]
+    fn cpu_at_or_above_threshold_counts_as_progress() {
+        // 4% of a 15s window is 600ms of CPU which is good
+        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), Some(0), None);
+        let mut s = serial_only(0);
+        s.cpu_ns = Some(600_000_000);
+        assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 0);
+    }
+
+    #[test]
+    fn cpu_below_threshold_is_not_progress() {
+        // ~3.3% of the 15s window which is under 4%
+        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), Some(0), None);
+        let mut s = serial_only(0);
+        s.cpu_ns = Some(500_000_000);
+        assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 15);
+    }
+
+    #[test]
+    fn qmp_io_ops_advance_resets_idle() {
+        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), None, Some(1000));
+        let mut s = serial_only(0);
+        s.io_ops = Some(1050);
+        assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 0);
     }
 }
 
