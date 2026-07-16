@@ -64,6 +64,20 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
         test ! -e ~/copy_in/excluded
         {crlf_check}
 
+    - name: Copy To VM With Ignore File
+      copy:
+        from: {test_dir}/copy_in
+        to: vm:~/copy_ignore
+        ignore_file: .virtciignore
+
+    - name: Verify Ignore File Applied
+      run: |
+        set -e
+        test -f ~/copy_ignore/hello.txt
+        test -f ~/copy_ignore/sub/nested.txt
+        test ! -e ~/copy_ignore/ignored_dir
+        test ! -e ~/copy_ignore/skip.log
+
     - name: Workdir
       workdir: ~/copy_in
       run: |
@@ -166,7 +180,8 @@ fn dir_contains_file_with_extension(dir: &Path, ext: &str) -> bool {
 /// Exercises the full workflow syntax from docs/workflow_yaml_syntax.md against
 /// an upstream Ubuntu cloud image: job-level `cpus`/`memory`/`host_env`,
 /// `run` (single and multiline), `copy` in both directions with `exclude`,
-/// `crlf`, `no_mkdir`, `allow_empty`, and globs, `restart` with `offline`/
+/// `ignore_file` (a nested `.virtciignore`), `crlf`, `no_mkdir`, `allow_empty`,
+/// and globs, `restart` with `offline`/
 /// `cpus`/`memory`, plus step-level `workdir`, `timeout`, `env`, and
 /// `continue_on_error`, and multiple jobs in one workflow file.
 fn run_thorough_system_test(test_name: &str, image_name: &str, image_json: &str, image_file: &str) {
@@ -183,6 +198,13 @@ fn run_thorough_system_test(test_name: &str, image_name: &str, image_json: &str,
     std::fs::write(copy_in.join("sub/nested.txt"), "nested\n").expect("Failed to write fixture");
     std::fs::write(copy_in.join("excluded/skip.txt"), "should not be copied\n")
         .expect("Failed to write fixture");
+
+    std::fs::write(copy_in.join(".virtciignore"), "ignored_dir/\n*.log\n")
+        .expect("Failed to write fixture");
+    std::fs::create_dir_all(copy_in.join("ignored_dir")).expect("Failed to create copy_in fixture");
+    std::fs::write(copy_in.join("ignored_dir/nope.txt"), "ignored\n")
+        .expect("Failed to write fixture");
+    std::fs::write(copy_in.join("skip.log"), "ignored\n").expect("Failed to write fixture");
 
     // Destination for the copy-back-to-host steps, fresh every run.
     let copy_out = env.test_dir.join("copy_out");

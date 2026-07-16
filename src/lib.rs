@@ -686,6 +686,7 @@ fn extract_yaml_workflows(
             git_info: git_info.clone(),
             cache_fingerprint,
             cache_ttl_secs,
+            no_ignore: args.no_ignore,
         });
     }
 

@@ -35,6 +35,7 @@ pub async fn copy_files_tar(
     no_mkdir: bool,
     allow_empty: bool,
     line_endings: LineEndingConversion,
+    ignore_plan: &crate::run::ignore_files::IgnorePlan,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
     let poll_interval = Duration::from_secs(5);
@@ -76,10 +77,20 @@ pub async fn copy_files_tar(
                     ignore,
                     allow_empty,
                     line_endings,
+                    ignore_plan,
                 )
                 .await
             } else {
-                copy_host_to_vm_tar(ssh, local_path, &remote_path, ignore, line_endings).await
+                copy_host_to_vm_tar(
+                    ssh,
+                    local_path,
+                    &remote_path,
+                    ignore,
+                    allow_empty,
+                    line_endings,
+                    ignore_plan,
+                )
+                .await
             }
         }
         CopyDirection::VmToHost => {
@@ -118,6 +129,7 @@ pub async fn run_copy_spec(
     spec: &crate::yaml::CopySpec,
     guest_os: GuestOs,
     timeout: Option<Duration>,
+    no_ignore: bool,
 ) -> Result<(), String> {
     use colored::Colorize;
 
@@ -172,6 +184,14 @@ pub async fn run_copy_spec(
         LineEndingConversion::None
     };
 
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let ignore_plan = crate::run::ignore_files::resolve_ignore_plan(
+        spec.ignore_file.as_ref(),
+        no_ignore,
+        is_host_to_vm,
+        &cwd,
+    );
+
     copy_files_tar(
         ssh,
         &spec.from,
@@ -182,6 +202,7 @@ pub async fn run_copy_spec(
         spec.no_mkdir,
         spec.allow_empty,
         line_endings,
+        &ignore_plan,
     )
     .await?;
 
@@ -245,17 +266,41 @@ async fn ensure_remote_dir(ssh: &SshTarget, remote_path: &str, os: GuestOs) -> R
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn copy_host_to_vm_tar(
     ssh: &SshTarget,
     local_path: &str,
     remote_path: &str,
     ignore: &[String],
+    allow_empty: bool,
     line_endings: LineEndingConversion,
+    ignore_plan: &crate::run::ignore_files::IgnorePlan,
 ) -> Result<(), String> {
     use std::process::{Command, Stdio};
 
     let local_metadata = std::fs::metadata(local_path)
         .map_err(|e| format!("Failed to read local path {local_path}: {e}"))?;
+
+    if local_metadata.is_dir() && ignore_plan.is_enabled() {
+        let rel_paths = {
+            match crate::run::ignore_files::walk_filtered(
+                std::path::Path::new(local_path),
+                ignore_plan,
+            ) {
+                Ok(good) => good,
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        if rel_paths.is_empty() {
+            return handle_empty_match(local_path, allow_empty);
+        }
+        eprintln!(
+            "[VirtCI IGNORE] {} file(s) after ignore filtering",
+            rel_paths.len()
+        );
+        let archive = build_host_tar_from_list(local_path, &rel_paths, ignore, line_endings)?;
+        return send_archive_to_remote(ssh, &archive, remote_path).await;
+    }
 
     // Uncompressed: every transfer is over loopback, so gzip only burns CPU.
     let mut tar_args = vec!["cf".to_string(), "-".to_string()];
@@ -312,47 +357,14 @@ async fn copy_host_to_vm_tar(
     send_archive_to_remote(ssh, &archive, remote_path).await
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn copy_host_to_vm_glob(
-    ssh: &SshTarget,
+fn build_host_tar_from_list(
     root: &str,
-    pattern: &str,
-    remote_path: &str,
+    rel_paths: &[String],
     ignore: &[String],
-    allow_empty: bool,
     line_endings: LineEndingConversion,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
-
-    let full_pattern = format!("{root}/{pattern}");
-
-    eprintln!("[GLOB] Expanding host pattern '{full_pattern}'");
-
-    let entries: Vec<std::path::PathBuf> = glob::glob(&full_pattern)
-        .map_err(|e| format!("Invalid glob pattern '{full_pattern}': {e}"))?
-        .filter_map(Result::ok)
-        .filter(|p| p.is_file())
-        .collect();
-
-    if entries.is_empty() {
-        return handle_empty_match(&full_pattern, allow_empty);
-    }
-
-    let root_path = std::path::Path::new(root);
-    let rel_paths: Vec<String> = entries
-        .iter()
-        .filter_map(|p| {
-            p.strip_prefix(root_path)
-                .ok()
-                .and_then(|r| r.to_str())
-                .map(|s| s.replace('\\', "/"))
-        })
-        .filter(|s| !s.is_empty() && !s.contains(['\n', '\r']))
-        .map(|s| format!("./{s}"))
-        .collect();
-
-    eprintln!("[GLOB] Matched {} file(s)", rel_paths.len());
 
     let file_list = rel_paths.join("\n");
 
@@ -398,7 +410,67 @@ async fn copy_host_to_vm_glob(
 
     eprintln!("[TAR] Archive created: {} bytes", tar_output.stdout.len());
 
-    let archive = apply_line_ending_conversion(tar_output.stdout, line_endings)?;
+    apply_line_ending_conversion(tar_output.stdout, line_endings)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn copy_host_to_vm_glob(
+    ssh: &SshTarget,
+    root: &str,
+    pattern: &str,
+    remote_path: &str,
+    ignore: &[String],
+    allow_empty: bool,
+    line_endings: LineEndingConversion,
+    ignore_plan: &crate::run::ignore_files::IgnorePlan,
+) -> Result<(), String> {
+    let full_pattern = format!("{root}/{pattern}");
+
+    eprintln!("[GLOB] Expanding host pattern '{full_pattern}'");
+
+    let entries: Vec<std::path::PathBuf> = glob::glob(&full_pattern)
+        .map_err(|e| format!("Invalid glob pattern '{full_pattern}': {e}"))?
+        .filter_map(Result::ok)
+        .filter(|p| p.is_file())
+        .collect();
+
+    if entries.is_empty() {
+        return handle_empty_match(&full_pattern, allow_empty);
+    }
+
+    let root_path = std::path::Path::new(root);
+    let mut rel_paths: Vec<String> = entries
+        .iter()
+        .filter_map(|p| {
+            p.strip_prefix(root_path)
+                .ok()
+                .and_then(|r| r.to_str())
+                .map(|s| s.replace('\\', "/"))
+        })
+        .filter(|s| !s.is_empty() && !s.contains(['\n', '\r']))
+        .map(|s| format!("./{s}"))
+        .collect();
+
+    eprintln!("[VirtCI GLOB] Matched {} file(s)", rel_paths.len());
+
+    if ignore_plan.is_enabled() {
+        let allowed: std::collections::HashSet<String> = {
+            match crate::run::ignore_files::walk_filtered(root_path, ignore_plan) {
+                Ok(filtered) => filtered.into_iter().collect(),
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        rel_paths.retain(|p| allowed.contains(p));
+        if rel_paths.is_empty() {
+            return handle_empty_match(&full_pattern, allow_empty);
+        }
+        eprintln!(
+            "[IGNORE] {} file(s) after ignore filtering",
+            rel_paths.len()
+        );
+    }
+
+    let archive = build_host_tar_from_list(root, &rel_paths, ignore, line_endings)?;
 
     send_archive_to_remote(ssh, &archive, remote_path).await
 }

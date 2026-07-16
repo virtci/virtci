@@ -39,6 +39,7 @@ pub struct VersionCommand {}
 /// Run a workflow file
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "run")]
+#[allow(clippy::struct_excessive_bools)] // CLI flags, not a state machine
 pub struct RunArgs {
     /// path to workflow YAML file
     #[argh(positional)]
@@ -75,6 +76,9 @@ pub struct RunArgs {
     /// do not read the `.env` file even if it is there.
     #[argh(switch)]
     pub no_env_file: bool,
+    /// do not use any ignore files, even if specified in a `copy:` step.
+    #[argh(switch)]
+    pub no_ignore: bool,
 }
 
 /// Interactive setup for a new VM image description
@@ -243,6 +247,7 @@ pub struct ShellArgs {
 ///   virtci copy vci-win-11-arm64-00001 vm:/home/ci/logs ./logs --crlf
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "copy")]
+#[allow(clippy::struct_excessive_bools)] // CLI flags, not a state machine
 pub struct CopyArgs {
     /// name of the running VM (from `virtci active`)
     #[argh(positional)]
@@ -265,6 +270,14 @@ pub struct CopyArgs {
     /// allow a glob `source` that matches zero files instead of erroring
     #[argh(switch)]
     pub allow_empty: bool,
+    /// file to use for which files / directories to ignore when copying from host to vm, such a
+    /// `.gitignore`. Uses gitignore semantics. If omitted, uses the current working directory
+    /// `.virtciignore` file if present.
+    #[argh(option)]
+    pub ignore_file: Option<String>,
+    /// do not use any ignore files, even if `--ignore-file` is present.
+    #[argh(switch)]
+    pub no_ignore: bool,
 }
 
 /// (TODO) Start the web UI server
