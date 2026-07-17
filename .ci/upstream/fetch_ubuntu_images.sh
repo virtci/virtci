@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Fetch Ubuntu x86_64, aarch64, and riscv64 ubuntu QEMU images
-# Using Ubuntu 26.04 Server Images from 20260520
+# Using Ubuntu 26.04 Server Images from 20260716
 
 set -eu
 
-BaseUrl="https://cloud-images.ubuntu.com/resolute/20260520"
+BaseUrl="https://cloud-images.ubuntu.com/resolute/20260716"
 
 ScriptRoot="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 Images=(
-    "resolute-server-cloudimg-amd64.img|dced94c031cc1f23dee14419a3723a5b110df9938de0ac31913a2bfd07c755b4|x86_64"
-    "resolute-server-cloudimg-arm64.img|5e091e27d60116efbb0c743b8dd5cb2d15618e414ef04db0817ed43c8e2d7c7b|aarch64"
-    "resolute-server-cloudimg-riscv64.img|353d24f14c0b48c55b67877fb5cdd0684ad79d38ed2b72161ddce50f2dfb08a4|riscv64"
+    "resolute-server-cloudimg-amd64.img|1733ea0c2aec6705192d54f60a4cc8a526d734f18170f42a4026521b623fc8a2|x86_64"
+    "resolute-server-cloudimg-arm64.img|beb95f1c5ea8c64684af5eed992ac2fa9779416b482bdb068cef9978397900bc|aarch64"
+    "resolute-server-cloudimg-riscv64.img|519e6a3ee02ab492deac4fcf6bc9f781b015a383ef44cdaa95ef326bf114ff3b|riscv64"
 )
 
 file_sha256() {
