@@ -601,13 +601,20 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
     }
 
     let disk = backend.disk.target().native_path();
+    // Try using unbuffered I/O, rather than QEMU's default `cache=writeback` going through Windows
+    // page cache?
+    let disk_cache = if matches!(backend.exec_target, HostExecTarget::WindowsNative) {
+        ",cache=none,aio=threads"
+    } else {
+        ""
+    };
     if qemu_config.additional_devices.is_some() {
         // Config is supplying it's own `-device` list.
         // TODO investigate correctness of this with many drives/devices
         push_arg(
             &mut args,
             "-drive",
-            format!("id=SystemDisk,if=none,file={disk},format=qcow2"),
+            format!("id=SystemDisk,if=none,file={disk},format=qcow2{disk_cache}"),
         );
     } else {
         match arch {
@@ -615,7 +622,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                 push_arg(
                     &mut args,
                     "-drive",
-                    format!("id=SystemDisk,if=none,file={disk},format=qcow2"),
+                    format!("id=SystemDisk,if=none,file={disk},format=qcow2{disk_cache}"),
                 );
                 if qemu_config.nvme {
                     push_arg(
@@ -636,7 +643,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("id=SystemDisk,if=none,file={disk},format=qcow2"),
+                        format!("id=SystemDisk,if=none,file={disk},format=qcow2{disk_cache}"),
                     );
                     push_arg(
                         &mut args,
@@ -647,13 +654,13 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("file={disk},format=qcow2,if=ide"),
+                        format!("file={disk},format=qcow2,if=ide{disk_cache}"),
                     );
                 } else {
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("file={disk},format=qcow2,if=virtio"),
+                        format!("file={disk},format=qcow2,if=virtio{disk_cache}"),
                     );
                 }
             }
