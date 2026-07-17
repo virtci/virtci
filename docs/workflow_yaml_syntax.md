@@ -342,6 +342,57 @@ steps:
         - docs
 ```
 
+#### `steps.copy.ignore_file`
+
+Defaults to reading `./.virtciignore` if present (from the current working directory).
+
+Filter a copy's files through an ignore file, so you can have a `.virtciignore` in your project root instead of having every workflow specific [`excludes`](#stepscopyexclude). Ignore files use gitignore semantics, including `**`, leading-`/` anchoring, trailing-`/` directory rules, and `!` negation.
+
+**Ignore files only apply when copying from the host into the VM.**
+
+The VM-to-host direction is generally for getting output artifacts, like a built executable or something similar. Setting `ignore_file` on a `vm:`-to-host copy is a workflow error.
+
+The value is one of:
+
+- *Omitted*: use `./.virtciignore` if it exists from the current working directory, otherwise no filtering.
+- `false`: disable ignore filtering for this step.
+- `true`: same as omitting it (use `./.virtciignore` if present).
+- *Bare Filename (no `/` or `\`)* such as `.gitignore` or `.virtciignore`, which gets discovered through the directory tree itself, supporting nesting fully.
+- *File Path (contains `/` or `\`, or is absolute)*: Applies the rules of that ignore file `.ci/copy_ignore` or even to the full directory tree, ignoring any nested ignore files. You could do `./.virtciignore` to ignore any subdirectory's `.virtciignore` files.
+
+All relative paths (both the default and any other relative path) are from the current working directory, so whatever directory `virtci` was invoked from. It never searches up in the tree.
+
+When the ignore source is a `.gitignore`, `.git/` is dropped implicitly (matching git). Any other ignore file requires listing `.git` yourself if you want it excluded. Only the ignore files themselves are consulted, no global git config stuff is.
+
+`.dockerignore` uses it's own ignore format, so exercise caution with that.
+
+`exclude` still applies and is additive. A file is skipped if either the ignore file or `exclude` drops it. If filtering removes every file, the step fails unless [`allow_empty`](#stepscopyallow_empty) is set.
+
+```yaml
+steps:
+  # Uses ./.virtciignore automatically.
+  - name: Copy Source Into VM
+    copy:
+      from: ./
+      to: vm:~/proj
+
+  # Honor the repository's own .gitignore (nested), implicitly dropping .git.
+  - name: Copy Respecting Gitignore
+    copy:
+      from: ./
+      to: vm:~/proj
+      ignore_file: .gitignore
+
+  # A dedicated flat ignore file kept out of the way.
+  - name: Copy With Explicit Ignore File
+    copy:
+      from: ./
+      to: vm:~/proj
+      ignore_file: .ci/copy_ignore
+```
+
+The whole run can be forced to ignore every copy step's `ignore_file` with `virtci run --no-ignore` (a notice is printed for any step that had one configured). The `virtci copy` command exposes the same behavior via `--ignore-file <path>` and `--no-ignore`.
+
 #### `steps.copy.crlf`
 
 Defaults to `false`.

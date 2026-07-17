@@ -5,6 +5,7 @@ pub mod cache;
 mod command;
 pub mod copy;
 pub mod env;
+pub mod ignore_files;
 pub mod run_id;
 pub mod validate;
 
@@ -213,6 +214,7 @@ pub struct Job {
     pub cache_fingerprint: cache::metadata::Fingerprint,
     /// TTL (seconds) for a produced cache, from `cache.max_age`.
     pub cache_ttl_secs: Option<u64>,
+    pub no_ignore: bool,
 }
 
 impl Job {
@@ -591,7 +593,8 @@ impl Job {
                 let guest_os = self.backend.os();
 
                 let copy_timeout = explicit_timeout.map(Duration::from_secs);
-                let copy_future = copy::run_copy_spec(&ssh, copy_spec, guest_os, copy_timeout);
+                let copy_future =
+                    copy::run_copy_spec(&ssh, copy_spec, guest_os, copy_timeout, self.no_ignore);
 
                 match copy_timeout {
                     Some(dur) => tokio::time::timeout(dur, copy_future)

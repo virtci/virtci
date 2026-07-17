@@ -126,6 +126,15 @@ pub struct CopySpec {
     pub no_mkdir: bool,
     #[serde(default)]
     pub allow_empty: bool,
+    #[serde(default)]
+    pub ignore_file: Option<IgnoreFileField>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum IgnoreFileField {
+    Bool(bool),
+    Str(String),
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

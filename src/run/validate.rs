@@ -231,6 +231,30 @@ fn validate_step(loc: &str, step_v: &Value, diags: &mut Vec<Diagnostic>) {
             if let Err(e) = yaml::validate_copy_direction(&spec.from, &spec.to) {
                 diags.push(Diagnostic::error(format!("{loc}.copy"), e));
             }
+
+            // Ignore files only work from host->VM. VM->host ignore in a copy step is malformed.
+            let is_vm_to_host = spec.from.starts_with("vm:");
+            let requests_ignore = matches!(
+                spec.ignore_file,
+                Some(yaml::IgnoreFileField::Str(_) | yaml::IgnoreFileField::Bool(true))
+            );
+            if is_vm_to_host && requests_ignore {
+                diags.push(Diagnostic::error(
+                    format!("{loc}.copy.ignore_file"),
+                    "ignore_file only applies when copying from the host into the VM; \
+                     remove it from this vm:-> host copy"
+                        .to_string(),
+                ));
+            }
+
+            if let Some(yaml::IgnoreFileField::Str(s)) = &spec.ignore_file
+                && s.trim().is_empty()
+            {
+                diags.push(Diagnostic::error(
+                    format!("{loc}.copy.ignore_file"),
+                    "ignore_file must not be empty".to_string(),
+                ));
+            }
         }
         Ok(StepKind::Restart(r)) => {
             if r.cpus == Some(0) {

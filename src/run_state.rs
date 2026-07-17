@@ -144,6 +144,19 @@ pub fn run_copy(args: &cli::CopyArgs, temp_path: &PathBuf) -> anyhow::Result<()>
     crate::yaml::validate_copy_direction(&args.source, &args.dest)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    let is_host_to_vm = args.dest.starts_with("vm:");
+    if !is_host_to_vm && args.ignore_file.is_some() {
+        anyhow::bail!(
+            "--ignore-file only applies when copying from the host into the VM, but this copy \
+             reads from the VM. Remove --ignore-file."
+        );
+    }
+    if let Some(s) = &args.ignore_file
+        && s.trim().is_empty()
+    {
+        anyhow::bail!("--ignore-file must not be empty");
+    }
+
     let spec = crate::yaml::CopySpec {
         from: args.source.clone(),
         to: args.dest.clone(),
@@ -151,6 +164,10 @@ pub fn run_copy(args: &cli::CopyArgs, temp_path: &PathBuf) -> anyhow::Result<()>
         crlf: args.crlf,
         no_mkdir: args.no_mkdir,
         allow_empty: args.allow_empty,
+        ignore_file: args
+            .ignore_file
+            .clone()
+            .map(crate::yaml::IgnoreFileField::Str),
     };
 
     let Some(meta) = find_active_run(vm_name, temp_path) else {
@@ -177,6 +194,12 @@ pub fn run_copy(args: &cli::CopyArgs, temp_path: &PathBuf) -> anyhow::Result<()>
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to start async runtime: {e}"))?;
 
-    rt.block_on(crate::run::copy::run_copy_spec(ssh, &spec, guest_os, None))
-        .map_err(|e| anyhow::anyhow!(e))
+    rt.block_on(crate::run::copy::run_copy_spec(
+        ssh,
+        &spec,
+        guest_os,
+        None,
+        args.no_ignore,
+    ))
+    .map_err(|e| anyhow::anyhow!(e))
 }
