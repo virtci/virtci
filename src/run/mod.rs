@@ -1025,7 +1025,11 @@ pub async fn wait_for_ssh_watching(
         if let Some(err) = backend.vm_exit_error() {
             anyhow::bail!(
                 "VM process exited while waiting for SSH: {err}{}",
-                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+                boot_failure_context(
+                    serial_path.as_deref(),
+                    disk_path.as_deref(),
+                    backend.disk_integrity_report(),
+                ),
             );
         }
 
@@ -1085,13 +1089,21 @@ pub async fn wait_for_ssh_watching(
                  CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}{}",
                 status.idle.as_secs(),
                 signals,
-                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+                boot_failure_context(
+                    serial_path.as_deref(),
+                    disk_path.as_deref(),
+                    backend.disk_integrity_report(),
+                ),
             ),
             BootVerdict::MaxTimeout => anyhow::bail!(
                 "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
                  timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}{}",
                 signals,
-                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+                boot_failure_context(
+                    serial_path.as_deref(),
+                    disk_path.as_deref(),
+                    backend.disk_integrity_report(),
+                ),
             ),
             BootVerdict::Booting => {}
         }
@@ -1151,7 +1163,11 @@ pub async fn wait_for_ssh_watching(
         if let Some(err) = backend.vm_exit_error() {
             anyhow::bail!(
                 "VM process exited while waiting for SSH: {err}{}",
-                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+                boot_failure_context(
+                    serial_path.as_deref(),
+                    disk_path.as_deref(),
+                    backend.disk_integrity_report(),
+                ),
             );
         }
         if start.elapsed() >= max_timeout {
@@ -1159,7 +1175,11 @@ pub async fn wait_for_ssh_watching(
                 "VM did not stay SSH-reachable within the {max_timeout_secs}s maximum boot \
                  timeout (SSH kept dropping during the post-boot settle window). Tune with \
                  VIRTCI_VM_START_MAX_TIMEOUT.{}",
-                boot_failure_context(serial_path.as_deref(), disk_path.as_deref()),
+                boot_failure_context(
+                    serial_path.as_deref(),
+                    disk_path.as_deref(),
+                    backend.disk_integrity_report(),
+                ),
             );
         }
 
@@ -1341,6 +1361,7 @@ fn serial_failure_lines(path: Option<&std::path::Path>) -> Option<String> {
 fn boot_failure_context(
     serial_path: Option<&std::path::Path>,
     disk_path: Option<&std::path::Path>,
+    disk_check: Option<String>,
 ) -> String {
     let mut out = String::new();
     if let Some(diag) = diagnose_serial(serial_path) {
@@ -1359,12 +1380,20 @@ fn boot_failure_context(
         );
         out.push_str(&block);
     }
-    if let Some(disk) = disk_path {
-        let _ = write!(
-            out,
-            "\n[VirtCI] to rule out disk corruption, run: `qemu-img check \"{}\"` (you may want to use virtci shell)",
-            disk.display()
-        );
+    match disk_check {
+        Some(report) => {
+            out.push_str("\n[VirtCI] qemu-img check of the disk:\n");
+            out.push_str(&report);
+        }
+        None => {
+            if let Some(disk) = disk_path {
+                let _ = write!(
+                    out,
+                    "\n[VirtCI] to rule out disk corruption, run: `qemu-img check \"{}\"` if you can (you may want to use virtci shell)",
+                    disk.display()
+                );
+            }
+        }
     }
     out.push('\n');
     out.push_str(&serial_tail(serial_path));

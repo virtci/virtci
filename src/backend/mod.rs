@@ -74,6 +74,11 @@ pub trait VmBackend {
         None
     }
 
+    /// Give it an honest effort to get a report of disk integrity to detect boot failure.
+    fn disk_integrity_report(&self) -> Option<String> {
+        None
+    }
+
     /// Whether this run is running from a workflow cache.
     fn is_cached_run(&self) -> bool;
 

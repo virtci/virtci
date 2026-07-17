@@ -340,6 +340,28 @@ impl QemuBackend {
 
         anyhow::bail!("swtpm control socket {socket} did not appear within 5s")
     }
+
+    /// Get the disk backing chain from an overlay.
+    fn qemu_img_backing_chain(&self, qemu_img: &str, disk: &str) -> Vec<String> {
+        let output = super::binaries::target_command(&self.exec_target, qemu_img)
+            .args(["info", "--backing-chain", "--output=json", disk])
+            .output();
+        if let Ok(output) = output
+            && output.status.success()
+            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            && let Some(entries) = value.as_array()
+        {
+            let files: Vec<String> = entries
+                .iter()
+                .filter_map(|e| e.get("filename").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect();
+            if !files.is_empty() {
+                return files;
+            }
+        }
+        vec![disk.to_string()]
+    }
 }
 
 impl VmBackend for QemuBackend {
@@ -556,6 +578,52 @@ impl VmBackend for QemuBackend {
 
     fn vm_disk_io_ops(&self) -> Option<u64> {
         super::qmp::query_disk_io_ops(self.qmp_addr()?)
+    }
+
+    fn disk_integrity_report(&self) -> Option<String> {
+        let disk = self.disk.target().native_path();
+        let (qemu_img, _) = super::binaries::qemu_image_binary(&self.exec_target).ok()?;
+
+        let chain = self.qemu_img_backing_chain(&qemu_img, &disk);
+
+        // `-U` can be used while the image is locked so it can be read while the stuck, still-running VM holds the
+        // disk.
+        let check_one = |target: &str| -> Option<String> {
+            let output = super::binaries::target_command(&self.exec_target, &qemu_img)
+                .args(["check", "-U", target])
+                .output()
+                .ok()?;
+            let mut s = String::new();
+            s.push_str(String::from_utf8_lossy(&output.stdout).trim());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            if !stderr.is_empty() {
+                if !s.is_empty() {
+                    s.push('\n');
+                }
+                s.push_str(stderr);
+            }
+            let s = s.trim();
+            (!s.is_empty()).then(|| s.to_string())
+        };
+
+        let mut report = String::new();
+        for (i, target) in chain.iter().enumerate() {
+            let Some(one) = check_one(target) else {
+                continue;
+            };
+            if !report.is_empty() {
+                report.push_str("\n\n");
+            }
+            let layer = if i == 0 { " (run overlay)" } else { "" };
+            report.push_str("# ");
+            report.push_str(target);
+            report.push_str(layer);
+            report.push('\n');
+            report.push_str(&one);
+        }
+        let report = report.trim();
+        (!report.is_empty()).then(|| report.to_string())
     }
 
     fn is_cached_run(&self) -> bool {
