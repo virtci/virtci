@@ -601,10 +601,11 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
     }
 
     let disk = backend.disk.target().native_path();
-    // Try using unbuffered I/O, rather than QEMU's default `cache=writeback` going through Windows
-    // page cache?
+    // An attempt to fix windows flakiness.
+    // `cache=writeback` may be failing sometimes due to Windows page cache lazily flushing.
+    // `cache=none` doesn't work since FILE_FLAG_NO_BUFFERING fails on freshly created thin overlay.
     let disk_cache = if matches!(backend.exec_target, HostExecTarget::WindowsNative) {
-        ",cache=none,aio=threads"
+        ",cache=writethrough,aio=threads"
     } else {
         ""
     };
