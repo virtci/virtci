@@ -112,6 +112,9 @@ pub fn walk_filtered(root: &Path, plan: &IgnorePlan) -> anyhow::Result<Vec<Strin
         .follow_links(false);
 
     if let Some(name) = nested_name {
+        if name.is_empty() {
+            anyhow::bail!("ignore_file name must not be empty");
+        }
         builder.add_custom_ignore_filename(name);
     }
     if let Some(file) = flat_file {
@@ -138,12 +141,8 @@ pub fn walk_filtered(root: &Path, plan: &IgnorePlan) -> anyhow::Result<Vec<Strin
         let Ok(rel) = entry.path().strip_prefix(root) else {
             continue;
         };
-        if skip_git
-            && rel
-                .components()
-                .next()
-                .is_some_and(|c| c.as_os_str() == ".git")
-        {
+        // handle `.git/` in any sub directories (generally submodules).
+        if skip_git && rel.components().any(|c| c.as_os_str() == ".git") {
             continue;
         }
 
@@ -378,5 +377,31 @@ mod tests {
             implicit_git: false,
         };
         assert!(walk_filtered(&root, &plan).is_err());
+    }
+
+    #[test]
+    fn gitignore_mode_drops_dotgit_at_any_depth() {
+        let root = temp_tree("walk_submodule");
+        write(&root, "src/main.rs", "");
+        write(&root, ".gitignore", "");
+        write(&root, "vendor/lib/.git/config", "");
+        write(&root, "vendor/lib/src.c", "");
+
+        let got = survivors(&root, &nested(".gitignore", true));
+        assert_eq!(
+            got,
+            vec![
+                "./.gitignore".to_string(),
+                "./src/main.rs".to_string(),
+                "./vendor/lib/src.c".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_nested_name_errors() {
+        let root = temp_tree("walk_empty_name");
+        write(&root, "keep.txt", "");
+        assert!(walk_filtered(&root, &nested("", false)).is_err());
     }
 }

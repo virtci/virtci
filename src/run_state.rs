@@ -151,6 +151,11 @@ pub fn run_copy(args: &cli::CopyArgs, temp_path: &PathBuf) -> anyhow::Result<()>
              reads from the VM. Remove --ignore-file."
         );
     }
+    if let Some(s) = &args.ignore_file
+        && s.trim().is_empty()
+    {
+        anyhow::bail!("--ignore-file must not be empty");
+    }
 
     let spec = crate::yaml::CopySpec {
         from: args.source.clone(),

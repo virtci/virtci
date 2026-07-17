@@ -246,6 +246,15 @@ fn validate_step(loc: &str, step_v: &Value, diags: &mut Vec<Diagnostic>) {
                         .to_string(),
                 ));
             }
+
+            if let Some(yaml::IgnoreFileField::Str(s)) = &spec.ignore_file
+                && s.trim().is_empty()
+            {
+                diags.push(Diagnostic::error(
+                    format!("{loc}.copy.ignore_file"),
+                    "ignore_file must not be empty".to_string(),
+                ));
+            }
         }
         Ok(StepKind::Restart(r)) => {
             if r.cpus == Some(0) {
