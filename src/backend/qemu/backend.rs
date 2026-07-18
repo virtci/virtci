@@ -29,6 +29,7 @@ use crate::{
 };
 
 use anyhow::Context;
+use colored::Colorize;
 
 const DEFAULT_CPUS: u32 = 2;
 const DEFAULT_MEMORY_MB: u64 = 8192;
@@ -362,6 +363,39 @@ impl QemuBackend {
         }
         vec![disk.to_string()]
     }
+
+    fn maybe_resize_disk(&self) -> anyhow::Result<()> {
+        let Some(target_gb) = self.start_config.disk_gb else {
+            return Ok(());
+        };
+        let Some(overlay) = self.disk.temp() else {
+            return Ok(());
+        };
+
+        let disk_exec = overlay.native_path();
+        let current_gb = super::base_disk_virtual_size(&disk_exec, &self.exec_target)
+            .context("Failed to read the run overlay's current disk size")?;
+
+        if target_gb > current_gb {
+            super::qemu_img_resize(&disk_exec, target_gb, &self.exec_target)
+                .context("Failed to grow the run overlay")?;
+            println!(
+                "{}",
+                format!("Grew VM disk to {target_gb}G (was {current_gb}G).").dimmed()
+            );
+        } else if target_gb < current_gb {
+            eprintln!(
+                "{}",
+                format!(
+                    "[VirtCI Warning]: requested disk size ({target_gb}G) is smaller than the \
+                     current disk size ({current_gb}G); cannot shrink during a run, skipping resize."
+                )
+                .yellow()
+            );
+        }
+
+        Ok(())
+    }
 }
 
 impl VmBackend for QemuBackend {
@@ -375,9 +409,14 @@ impl VmBackend for QemuBackend {
         if let Some(m) = cfg.memory_mb {
             self.start_config.memory_mb = Some(m);
         }
+        if let Some(d) = cfg.disk_gb {
+            self.start_config.disk_gb = Some(d);
+        }
 
         let _ = self.start_config.cpus.get_or_insert(DEFAULT_CPUS);
         let _ = self.start_config.memory_mb.get_or_insert(DEFAULT_MEMORY_MB);
+
+        self.maybe_resize_disk()?;
 
         self.host_port = Some(PortFlock::get_available(&self.host_temp_dir, 0)?);
         let after_ssh = self.host_port.as_ref().expect("host port reserved").port + 1;

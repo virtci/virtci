@@ -577,6 +577,16 @@ fn extract_yaml_workflows(
             "Job '{name}': memory must be positive and non-zero"
         );
 
+        let disk_gb = match yaml_job.disk.as_deref() {
+            Some(s) => {
+                let gb = cli::parse_disk_gb(s)
+                    .with_context(|| format!("Job '{name}': failed to parse disk '{s}'"))?;
+                anyhow::ensure!(gb > 0, "Job '{name}': disk must be positive and non-zero");
+                Some(gb)
+            }
+            None => None,
+        };
+
         let steps = yaml_job
             .steps
             .iter()
@@ -667,17 +677,26 @@ fn extract_yaml_workflows(
                 .with_context(|| format!("Failed to create QEMU backend for job '{name}'"))?;
                 b.start_config.cpus = Some(cpus);
                 b.start_config.memory_mb = Some(memory_mb);
+                b.start_config.disk_gb = disk_gb;
                 Box::new(b)
             }
             vm_image::BackendConfig::Tart(_) => Box::new(
-                backend::tart::TartBackend::new(name.clone(), image_desc, cpus, memory_mb, paths)
-                    .with_context(|| format!("Failed to create Tart backend for job '{name}'"))?,
+                backend::tart::TartBackend::new(
+                    name.clone(),
+                    image_desc,
+                    cpus,
+                    memory_mb,
+                    disk_gb,
+                    paths,
+                )
+                .with_context(|| format!("Failed to create Tart backend for job '{name}'"))?,
             ),
         };
 
         jobs.push(run::Job {
             name,
             backend,
+            disk_gb,
             host_env: yaml_job.host_env,
             extra_env: extra_env.cloned(),
             steps,
@@ -708,10 +727,17 @@ fn resolve_step(job_name: &str, step: &yaml::Step) -> anyhow::Result<run::Step> 
                 })?),
                 None => None,
             };
+            let disk_gb = match r.disk.as_deref() {
+                Some(s) => Some(cli::parse_disk_gb(s).with_context(|| {
+                    format!("Job '{job_name}': failed to parse restart disk '{s}'")
+                })?),
+                None => None,
+            };
             run::StepKind::Restart(yaml::ResolvedRestart {
                 offline: r.offline,
                 cpus: r.cpus,
                 memory_mb,
+                disk_gb,
             })
         }
     };

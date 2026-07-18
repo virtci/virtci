@@ -132,3 +132,13 @@ windows-system-tests-arm64:
       workdir: virtci
       continue_on_error: true
       run: cargo test --locked --test local_workflow_cache -- --ignored --test-threads=1 --no-capture
+
+    - name: Increase Disk Smoke Test
+      restart:
+        disk: 160 # Since uses sparse storage, this won't actually use 160GB.
+
+    - name: Verify Disk Resized
+      run: |
+        $sizeGB = [math]::Round((Get-Volume -DriveLetter C).Size / 1GB)
+        Write-Host "C: size: ${sizeGB}G"
+        if ($sizeGB -lt 140) { exit 1 }

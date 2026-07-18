@@ -190,6 +190,61 @@ pub fn create_backing_file(
     Ok(())
 }
 
+/// Attempt to get the virtual size of a QEMU disk. Doesn't need to boot.
+pub fn base_disk_virtual_size(
+    disk_exec: &str,
+    exec_target: &HostExecTarget,
+) -> anyhow::Result<u64> {
+    let qemu_img = binaries::qemu_image_binary(exec_target)
+        .context("Unable to get qemu-img binary to read the disk size")?
+        .0;
+
+    let output = binaries::target_command(exec_target, &qemu_img)
+        .args(["info", "--output=json", disk_exec])
+        .output()
+        .with_context(|| format!("Failed to run {qemu_img} info"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("qemu-img info failed for '{disk_exec}':\n{}", stderr.trim());
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse `qemu-img info` json")?;
+    let bytes = value
+        .get("virtual-size")
+        .and_then(serde_json::Value::as_u64)
+        .context("`qemu-img info` output missing numeric `virtual-size`")?;
+
+    Ok(bytes / (1024 * 1024 * 1024))
+}
+
+pub fn qemu_img_resize(
+    disk_exec: &str,
+    gb: u64,
+    exec_target: &HostExecTarget,
+) -> anyhow::Result<()> {
+    let qemu_img = binaries::qemu_image_binary(exec_target)
+        .context("Unable to get qemu-img binary to resize the disk")?
+        .0;
+
+    let size = format!("{gb}G");
+    let output = binaries::target_command(exec_target, &qemu_img)
+        .args(["resize", disk_exec, &size])
+        .output()
+        .with_context(|| format!("Failed to run {qemu_img} resize"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "qemu-img resize of '{disk_exec}' to {size} failed:\n{}",
+            stderr.trim()
+        );
+    }
+
+    Ok(())
+}
+
 /// Cleanup ALL unused temporary VirtCI files.
 /// Authority is on the `.lock` flocks which always live in the host system's temp dir.
 /// There are 3 kinds of them:

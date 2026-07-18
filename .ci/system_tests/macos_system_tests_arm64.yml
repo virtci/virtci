@@ -86,3 +86,14 @@ macos-system-tests-arm64:
     - name: Workflow Run Local Workflow Cache Tests
       workdir: virtci
       run: . "$HOME/.cargo/env" &&  cargo test --locked --test local_workflow_cache -- --ignored --test-threads=1 --no-capture
+
+    - name: Increase Disk Smoke Test
+      restart:
+        disk: 160 # Since uses sparse storage, this won't actually use 160GB.
+
+    - name: Verify Disk Resized
+      run: |
+        set -e
+        root_gb=$(df -g / | awk 'NR==2 {print $2}')
+        echo "root volume size: ${root_gb}G"
+        test "$root_gb" -ge 140

@@ -195,9 +195,50 @@ pub fn validate_run_name(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+const LINUX_GROW_DISK_CMD: &str = r#"set -e
+root_src=$(findmnt -n -o SOURCE /)
+part=$(basename "$root_src")
+disk=$(lsblk -n -o PKNAME "$root_src" | head -n1)
+partnum=$(cat "/sys/class/block/$part/partition" 2>/dev/null || true)
+if [ -n "$disk" ] && [ -n "$partnum" ]; then
+  sudo growpart "/dev/$disk" "$partnum" || true
+fi
+fstype=$(findmnt -n -o FSTYPE /)
+case "$fstype" in
+  ext2|ext3|ext4) sudo resize2fs "$root_src" ;;
+  xfs) sudo xfs_growfs / ;;
+  btrfs) sudo btrfs filesystem resize max / ;;
+  *) echo "virtci: unknown root fstype '$fstype', skipping filesystem grow" ;;
+esac"#;
+
+const MACOS_GROW_DISK_CMD: &str = r#"set -e
+phys=$(diskutil list -plist physical | plutil -extract WholeDisks.0 raw -)
+yes | sudo diskutil repairDisk "$phys" || true
+main=$(diskutil list "$phys" | awk '/Apple_APFS / {print $NF; exit}')
+if [ -n "$main" ]; then
+  sudo diskutil apfs resizeContainer "$main" 0
+else
+  echo "virtci: no Apple_APFS container found on $phys, skipping resize"
+fi"#;
+
+const WINDOWS_GROW_DISK_CMD: &str = r"$ErrorActionPreference = 'Stop'
+$sys = Get-Partition -DriveLetter C
+$disk = $sys.DiskNumber
+Update-Disk -Number $disk
+Try { reagentc /disable | Out-Null } Catch { }
+Get-Partition -DiskNumber $disk |
+  Where-Object { $_.Offset -gt $sys.Offset } |
+  ForEach-Object { Remove-Partition -DiskNumber $disk -PartitionNumber $_.PartitionNumber -Confirm:$false }
+$max = (Get-PartitionSupportedSize -DriveLetter C).SizeMax
+Resize-Partition -DriveLetter C -Size $max";
+
+const GUEST_DISK_GROW_TIMEOUT_SECS: u64 = 180;
+
 pub struct Job {
     pub name: String,
     pub backend: Box<dyn VmBackend>,
+    /// Current requested disk size.
+    pub disk_gb: Option<u64>,
     pub host_env: Vec<String>,
     pub extra_env: Option<HashMap<String, String>>,
     pub steps: Vec<Step>,
@@ -259,6 +300,7 @@ impl Job {
                     offline: r.offline,
                     cpus: r.cpus,
                     memory_mb: r.memory_mb,
+                    disk_gb: r.disk_gb,
                 },
                 true,
             ),
@@ -314,6 +356,10 @@ impl Job {
                     anyhow::bail!("offline enforcement timed out after 30s");
                 }
             }
+        }
+
+        if self.disk_gb.is_some() {
+            self.grow_guest_disk(&ssh_target).await;
         }
 
         // Normalize Windows clock to UTC. QEMU's RTC presents UTC, but Windows
@@ -622,15 +668,23 @@ impl Job {
                     }
                     let _ = write!(details, "memory_mb={m}");
                 }
+                if let Some(d) = restart.disk_gb {
+                    if !details.is_empty() {
+                        details.push_str(", ");
+                    }
+                    let _ = write!(details, "disk_gb={d}");
+                }
                 if details.is_empty() {
                     details.push_str("no changes");
                 }
                 println!("{}", format!("  Restarting VM ({details})...").dimmed());
 
+                let disk_changed = restart.disk_gb.is_some();
                 let cfg = VmStartConfig {
                     offline: restart.offline,
                     cpus: restart.cpus,
                     memory_mb: restart.memory_mb,
+                    disk_gb: restart.disk_gb,
                 };
 
                 {
@@ -685,11 +739,65 @@ impl Job {
                             }
                         }
                     }
+
+                    if disk_changed {
+                        self.grow_guest_disk(&ssh).await;
+                    }
                 }
             }
         }
 
         Ok(())
+    }
+
+    async fn grow_guest_disk(&self, ssh_target: &SshTarget) {
+        use colored::Colorize;
+        let os = self.backend.os();
+        let grow_cmd = match os {
+            GuestOs::Linux => LINUX_GROW_DISK_CMD,
+            GuestOs::MacOS => MACOS_GROW_DISK_CMD,
+            GuestOs::Windows => WINDOWS_GROW_DISK_CMD,
+            GuestOs::FreeBSD | GuestOs::Other => return,
+        };
+        let empty_env = std::collections::HashMap::new();
+        let grow_future = command::run_command(ssh_target, grow_cmd, None, &empty_env, os);
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(GUEST_DISK_GROW_TIMEOUT_SECS),
+            grow_future,
+        )
+        .await
+        {
+            Ok(Ok(res)) if res.exit_code == 0 => {
+                println!("{}", "Grew guest filesystem to fill the disk.".dimmed());
+            }
+            Ok(Ok(res)) => {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[VirtCI Warning]: guest disk grow exited with code {} so the extra \
+                         space may be unclaimed:\n{}",
+                        res.exit_code,
+                        res.stderr.trim()
+                    )
+                    .yellow()
+                );
+            }
+            Ok(Err(e)) => {
+                eprintln!(
+                    "{}",
+                    format!("[VirtCI Warning]: guest disk grow failed: {e}").yellow()
+                );
+            }
+            Err(_) => {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[VirtCI Warning]: guest disk grow timed out after {GUEST_DISK_GROW_TIMEOUT_SECS}s"
+                    )
+                    .yellow()
+                );
+            }
+        }
     }
 }
 
