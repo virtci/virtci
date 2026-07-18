@@ -750,7 +750,7 @@ impl Job {
         Ok(())
     }
 
-    async fn grow_guest_disk(&self, ssh_target: &SshTarget) {
+    async fn grow_guest_disk(&mut self, ssh_target: &SshTarget) {
         use colored::Colorize;
         let os = self.backend.os();
         let grow_cmd = match os {
@@ -797,6 +797,30 @@ impl Job {
                     .yellow()
                 );
             }
+        }
+
+        // Resizing the disk can cause some chicanery for the VM. Worth waiting for it to become
+        // FULLY responsive again before proceeding.
+        let (idle_timeout, max_timeout) = boot_timeouts();
+        match wait_for_ssh_watching(self.backend.as_mut(), ssh_target, idle_timeout, max_timeout)
+            .await
+        {
+            Ok(secs) => {
+                self.ssh_retry_budget = Some(connect_retry_budget(secs));
+                if secs > SSH_POLL_INTERVAL {
+                    println!(
+                        "{}",
+                        format!("VM settled {secs}s after the disk grow.").dimmed()
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "{}",
+                format!(
+                    "[VirtCI Warning]: VM did not become responsive after the disk grow: {e:#}"
+                )
+                .yellow()
+            ),
         }
     }
 }
