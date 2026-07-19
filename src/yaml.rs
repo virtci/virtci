@@ -55,6 +55,8 @@ pub struct Job {
     pub cpus: Option<u32>,
     #[serde(default, deserialize_with = "de_opt_scalar_string")]
     pub memory: Option<String>,
+    #[serde(default, deserialize_with = "de_opt_scalar_string")]
+    pub disk: Option<String>,
     #[serde(default)]
     pub host_env: Vec<String>,
     #[serde(default)]
@@ -145,6 +147,8 @@ pub struct RestartSpec {
     pub cpus: Option<u32>,
     #[serde(default, deserialize_with = "de_opt_scalar_string")]
     pub memory: Option<String>,
+    #[serde(default, deserialize_with = "de_opt_scalar_string")]
+    pub disk: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -152,6 +156,7 @@ pub struct ResolvedRestart {
     pub offline: Option<bool>,
     pub cpus: Option<u32>,
     pub memory_mb: Option<u64>,
+    pub disk_gb: Option<u64>,
 }
 
 impl Step {

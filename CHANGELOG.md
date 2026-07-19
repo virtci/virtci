@@ -43,6 +43,7 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
   - Environment variables local to the shell / process are prioritized over any in the `.env`.
 - Added `--env-file` to `virtci run` to specify a file other than the current working directory `.env`.
 - Added `--no-env-file` to `virtci run` which will prevent loading of any `.env` or `--env-file` files.
+- Added growing the VM's disk parition in a `virtci run` with a `disk` field in both the top-level job description, and the VM `restart` step.
 
 ### Changed
 

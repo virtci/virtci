@@ -358,6 +358,24 @@ pub fn parse_mem_mb(s: &str) -> Option<u64> {
     num.parse::<u64>().ok().map(|n| n * unit)
 }
 
+pub fn parse_disk_gb(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    let (num, unit) = if s.ends_with('T') || s.ends_with('t') {
+        (&s[..s.len() - 1], 1024u64)
+    } else if s.ends_with('G') || s.ends_with('g') {
+        (&s[..s.len() - 1], 1u64)
+    } else {
+        // assume GB
+        (s, 1u64)
+    };
+
+    num.parse::<u64>().ok().map(|n| n * unit)
+}
+
 pub fn default_cpus() -> u32 {
     #[allow(clippy::cast_possible_truncation)]
     let cpus = std::thread::available_parallelism().map_or(2, |p| p.get() as u32);

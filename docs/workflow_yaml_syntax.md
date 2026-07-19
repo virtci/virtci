@@ -76,6 +76,25 @@ ubuntu-x64:
   # Rest of workflow ...
 ```
 
+## `disk`
+
+Optional.
+
+Defaults to whatever the VM has as it's disk parition size.
+
+The amount of disk parition size in gigabytes the VM will have on initial startup. Can be post-fixed with a 'G' or 'g' for explicit gigabytes if you want. The numerical part of the string must be a positive non-zero integer.
+
+If the specified disk size is smaller than the VMs disk parition, the supplied value will be ignored and the workflow will continue.
+
+```yaml
+ubuntu-x64:
+  image: ubuntu-server-x64
+  cpus: 4
+  memory: 6
+  disk: 128
+  # Rest of workflow ...
+```
+
 ## `host_env`
 
 Array of environment variables to copy from the host into the VM.
@@ -571,6 +590,29 @@ steps:
 
   - name: Test
     run: ctest --test-dir build
+```
+
+#### `steps.restart.disk`
+
+Defaults to null.
+
+Can contain either `null` or a string containing a positive non-zero integer value, and an optional post-fix. If `null`, retains the current disk partition size of the VM prior to restarting, otherwise sets the VM to boot with the new disk parition size as gigabytes. If post-fixed with a 'G' or 'g', will be gigabytes as well just with explicitness.
+
+If `disk` is set to some value as the first workflow step, the VM will be initially booted with that amount of disk size. This is kind of silly but it works.
+
+If the specified disk size is smaller than the VMs disk parition, the supplied value will be ignored and the workflow will continue.
+
+```yaml
+steps:
+  - name: Install CMake
+    run: sudo apt update && sudo apt install cmake
+
+  - name: Restart With More Disk for Large Compile
+    restart:
+      disk: 96 # or disk: 96G
+
+  - name: Compile
+    run: cmake -B build && cmake --build build --parallel
 ```
 
 ### `steps.workdir`

@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod exec;
+pub mod gpt_recovery;
 pub mod qemu;
 pub mod tart;
 
@@ -21,6 +22,8 @@ pub struct VmStartConfig {
     pub cpus: Option<u32>,
     /// `None` leaves the backend's current memory unchanged.
     pub memory_mb: Option<u64>,
+    /// Requested disk size in whole gigabytes. `None` leaves the disk unchanged. Grow only.
+    pub disk_gb: Option<u64>,
 }
 
 pub trait VmBackend {

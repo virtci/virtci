@@ -96,6 +96,7 @@ fn boot_qemu(
             offline: Some(args.offline),
             cpus: Some(cpus),
             memory_mb: Some(memory_mb),
+            disk_gb: None,
         })
         .unwrap_or_else(|e| {
             eprintln!("{}", format!("Failed to start VM: {e:#}").red());
@@ -127,14 +128,15 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
         let (cpus, memory_mb) = resolve_cpus_and_memory(args);
 
         let mut backend = if args.clone {
-            let mut b = TartBackend::new(args.name.clone(), image_desc, cpus, memory_mb, paths)
-                .unwrap_or_else(|e| {
-                    eprintln!(
-                        "{}",
-                        format!("Failed to initialize Tart backend for boot: {e}").red()
-                    );
-                    std::process::exit(1);
-                });
+            let mut b =
+                TartBackend::new(args.name.clone(), image_desc, cpus, memory_mb, None, paths)
+                    .unwrap_or_else(|e| {
+                        eprintln!(
+                            "{}",
+                            format!("Failed to initialize Tart backend for boot: {e}").red()
+                        );
+                        std::process::exit(1);
+                    });
             b.graphics = !args.nographics;
             b
         } else {
@@ -169,6 +171,7 @@ fn boot_tart(image_desc: ImageDescription, args: &BootArgs, paths: &VciGlobalPat
                 offline: Some(args.offline),
                 cpus: None,
                 memory_mb: None,
+                disk_gb: None,
             })
             .unwrap_or_else(|e| {
                 eprintln!("{}", format!("Failed to start VM: {e:#}").red());

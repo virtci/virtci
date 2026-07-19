@@ -24,11 +24,19 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
   image: {image}
   cpus: 3
   memory: 8G
+  disk: 30
   host_env:
     - VIRTCI_TEST_HOST_ENV
   steps:
     - name: Say Hello
       run: echo hello
+
+    - name: Verify Disk Grew To Requested Size
+      run: |
+        set -e
+        root_gb=$(df -BG --output=size / | tail -1 | tr -dc '0-9')
+        echo "root filesystem size: ${{root_gb}}G"
+        test "$root_gb" -ge 27
 
     - name: Multiline Run
       run: |
@@ -148,6 +156,17 @@ fn thorough_workflow(image: String, test_dir: String, crlf_check: &str) -> Strin
         from: vm:~/build/**/*.absent
         to: {test_dir}/copy_out
         allow_empty: true
+
+    - name: Grow Disk Restart
+      restart:
+        disk: 40
+
+    - name: Verify Disk Grew To 40GB ish
+      run: |
+        set -e
+        root_gb=$(df -BG --output=size / | tail -1 | tr -dc '0-9')
+        echo "root filesystem size: ${{root_gb}}G"
+        test "$root_gb" -ge 36
 
 second_job:
   image: {image}

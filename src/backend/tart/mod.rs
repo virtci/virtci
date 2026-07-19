@@ -16,6 +16,97 @@ use crate::{
     vm_image::{GuestOs, ImageDescription},
 };
 
+/// Attempt to get disk size of a Tart VM. Tart only reports GB, which is good cause that's what
+/// VirtCI uses :).
+pub fn base_disk_virtual_size(vm_name: &str) -> anyhow::Result<u64> {
+    let output = std::process::Command::new("tart")
+        .args(["get", vm_name, "--format", "json"])
+        .output()
+        .context("Failed to run `tart get` to read the disk size")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("`tart get {vm_name}` failed:\n{}", stderr.trim());
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("parse `tart get` json")?;
+    value
+        .get("Disk")
+        .and_then(serde_json::Value::as_u64)
+        .context("`tart get` output missing numeric `Disk` field")
+}
+
+fn tart_vm_disk_img(vm_name: &str) -> PathBuf {
+    let home = std::env::var_os("TART_HOME").map_or_else(
+        || {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".tart")
+        },
+        PathBuf::from,
+    );
+    home.join("vms").join(vm_name).join("disk.img")
+}
+
+fn resize_tart_clone_disk(
+    clone_name: &str,
+    disk_gb: Option<u64>,
+    os: GuestOs,
+) -> anyhow::Result<()> {
+    let Some(target_gb) = disk_gb else {
+        return Ok(());
+    };
+    let current_gb = base_disk_virtual_size(clone_name)
+        .context("Failed to read the clone's current disk size")?;
+
+    if target_gb > current_gb {
+        let output = std::process::Command::new("tart")
+            .args(["set", clone_name, "--disk-size", &target_gb.to_string()])
+            .output()
+            .context("Failed to run tart set --disk-size")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("tart set --disk-size failed: {}", stderr.trim());
+        }
+        println!(
+            "{}",
+            format!("Grew VM disk to {target_gb}G (was {current_gb}G).").dimmed()
+        );
+
+        if os == GuestOs::MacOS {
+            let disk_img = tart_vm_disk_img(clone_name);
+            match crate::backend::gpt_recovery::delete_trailing_recovery(&disk_img) {
+                Ok(true) => println!(
+                    "{}",
+                    "Removed macOS recovery partition so the container can grow.".dimmed()
+                ),
+                Ok(false) => {}
+                Err(e) => eprintln!(
+                    "{}",
+                    format!(
+                        "[VirtCI Warning]: could not remove the macOS recovery partition \
+                         ({e:#}) so the VM may not reclaim all of the new space."
+                    )
+                    .yellow()
+                ),
+            }
+        }
+    } else if target_gb < current_gb {
+        eprintln!(
+            "{}",
+            format!(
+                "[VirtCI Warning]: requested disk size ({target_gb}G) is smaller than the current \
+                 disk size ({current_gb}G). Cannot shrink during a run so skipping resize."
+            )
+            .yellow()
+        );
+    }
+
+    Ok(())
+}
+
 /// If tart max VMs, retry every 30 seconds.
 const CAP_RETRY_INTERVAL_S: u64 = 30;
 /// Makes it about 2 hours.
@@ -38,6 +129,9 @@ pub struct TartBackend {
     pub cpus: u32,
     /// Megabytes
     pub memory_mb: u64,
+    /// Requested disk size in whole gigabytes, applied on clone. `None` leaves the
+    /// disk at the base image's size. Grow-only: a smaller request warns and is skipped.
+    pub disk_gb: Option<u64>,
     pub offline: bool,
     pub graphics: bool,
     pub runner: Option<TartRunner>,
@@ -50,6 +144,7 @@ impl TartBackend {
         base_image: ImageDescription,
         cpus: u32,
         memory_mb: u64,
+        disk_gb: Option<u64>,
         paths: &VciGlobalPaths,
     ) -> anyhow::Result<Self> {
         let mut backend = TartBackend {
@@ -57,6 +152,7 @@ impl TartBackend {
             base_image,
             cpus,
             memory_mb,
+            disk_gb,
             offline: false,
             graphics: false,
             runner: None,
@@ -82,6 +178,7 @@ impl TartBackend {
             base_image,
             cpus,
             memory_mb,
+            disk_gb: None,
             offline: false,
             graphics: !nographics,
             runner: None,
@@ -232,6 +329,13 @@ impl TartBackend {
                 .args(["delete", &clone_name])
                 .output();
             anyhow::bail!("tart set failed: {}", stderr.trim());
+        }
+
+        if let Err(e) = resize_tart_clone_disk(&clone_name, self.disk_gb, self.base_image.os) {
+            let _ = std::process::Command::new("tart")
+                .args(["delete", &clone_name])
+                .output();
+            return Err(e);
         }
 
         // Brief headless boot to resolve DHCP IP. Retries if Tart reports the
@@ -396,6 +500,8 @@ impl VmBackend for TartBackend {
                 anyhow::bail!("tart set failed: {}", stderr.trim());
             }
         }
+
+        resize_tart_clone_disk(&clone_name, cfg.disk_gb, self.base_image.os)?;
 
         // Tart's network isolation flags (--net-host, --net-softnet) all require
         // root via Softnet. Offline mode is enforced post-boot inside the VM
