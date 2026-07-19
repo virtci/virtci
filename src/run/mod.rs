@@ -216,7 +216,10 @@ phys=$(diskutil list -plist physical | plutil -extract WholeDisks.0 raw -)
 yes | sudo diskutil repairDisk "$phys" || true
 main=$(diskutil list "$phys" | awk '/Apple_APFS / {print $NF; exit}')
 if [ -n "$main" ]; then
-  sudo diskutil apfs resizeContainer "$main" 0
+  if ! out=$(sudo diskutil apfs resizeContainer "$main" 0 2>&1); then
+    printf '%s\n' "$out"
+    printf '%s' "$out" | grep -q 69743 || exit 1
+  fi
 else
   echo "virtci: no Apple_APFS container found on $phys, skipping resize"
 fi"#;
@@ -230,7 +233,8 @@ Get-Partition -DiskNumber $disk |
   Where-Object { $_.Offset -gt $sys.Offset } |
   ForEach-Object { Remove-Partition -DiskNumber $disk -PartitionNumber $_.PartitionNumber -Confirm:$false }
 $max = (Get-PartitionSupportedSize -DriveLetter C).SizeMax
-Resize-Partition -DriveLetter C -Size $max";
+$cur = (Get-Partition -DriveLetter C).Size
+if ($max -gt $cur) { Resize-Partition -DriveLetter C -Size $max }";
 
 const GUEST_DISK_GROW_TIMEOUT_SECS: u64 = 180;
 
@@ -751,6 +755,7 @@ impl Job {
     }
 
     async fn grow_guest_disk(&mut self, ssh_target: &SshTarget) {
+        const MAX_ATTEMPTS: u32 = 3;
         use colored::Colorize;
         let os = self.backend.os();
         let grow_cmd = match os {
@@ -759,68 +764,64 @@ impl Job {
             GuestOs::Windows => WINDOWS_GROW_DISK_CMD,
             GuestOs::FreeBSD | GuestOs::Other => return,
         };
-        let empty_env = std::collections::HashMap::new();
-        let grow_future = command::run_command(ssh_target, grow_cmd, None, &empty_env, os);
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs(GUEST_DISK_GROW_TIMEOUT_SECS),
-            grow_future,
-        )
-        .await
-        {
-            Ok(Ok(res)) if res.exit_code == 0 => {
-                println!("{}", "Grew guest filesystem to fill the disk.".dimmed());
-            }
-            Ok(Ok(res)) => {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "[VirtCI Warning]: guest disk grow exited with code {} so the extra \
-                         space may be unclaimed:\n{}",
-                        res.exit_code,
-                        res.stderr.trim()
-                    )
-                    .yellow()
-                );
-            }
-            Ok(Err(e)) => {
-                eprintln!(
-                    "{}",
-                    format!("[VirtCI Warning]: guest disk grow failed: {e}").yellow()
-                );
-            }
-            Err(_) => {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "[VirtCI Warning]: guest disk grow timed out after {GUEST_DISK_GROW_TIMEOUT_SECS}s"
-                    )
-                    .yellow()
-                );
-            }
-        }
 
-        // Resizing the disk can cause some chicanery for the VM. Worth waiting for it to become
-        // FULLY responsive again before proceeding.
-        let (idle_timeout, max_timeout) = boot_timeouts();
-        match wait_for_ssh_watching(self.backend.as_mut(), ssh_target, idle_timeout, max_timeout)
+        // the actual growth commands are retry safe.
+        for attempt in 1..=MAX_ATTEMPTS {
+            let empty_env = std::collections::HashMap::new();
+            let grow_future = command::run_command(ssh_target, grow_cmd, None, &empty_env, os);
+            let result = tokio::time::timeout(
+                tokio::time::Duration::from_secs(GUEST_DISK_GROW_TIMEOUT_SECS),
+                grow_future,
+            )
+            .await;
+
+            let (idle_timeout, max_timeout) = boot_timeouts();
+            match wait_for_ssh_watching(
+                self.backend.as_mut(),
+                ssh_target,
+                idle_timeout,
+                max_timeout,
+            )
             .await
-        {
-            Ok(secs) => {
-                self.ssh_retry_budget = Some(connect_retry_budget(secs));
-                if secs > SSH_POLL_INTERVAL {
-                    println!(
-                        "{}",
-                        format!("VM settled {secs}s after the disk grow.").dimmed()
-                    );
-                }
+            {
+                Ok(secs) => self.ssh_retry_budget = Some(connect_retry_budget(secs)),
+                Err(e) => eprintln!(
+                    "{}",
+                    format!("[VirtCI Warning]: VM unresponsive after disk grow: {e:#}").yellow()
+                ),
             }
-            Err(e) => eprintln!(
-                "{}",
-                format!(
-                    "[VirtCI Warning]: VM did not become responsive after the disk grow: {e:#}"
-                )
-                .yellow()
-            ),
+
+            let failure = match result {
+                Ok(Ok(res)) if res.exit_code == 0 => {
+                    println!("{}", "Grew guest filesystem to fill the disk.".dimmed());
+                    return;
+                }
+                Ok(Ok(res)) => {
+                    format!("exited with code {}:\n{}", res.exit_code, res.stderr.trim())
+                }
+                Ok(Err(e)) => format!("lost its SSH connection ({e})"),
+                Err(_) => format!("timed out after {GUEST_DISK_GROW_TIMEOUT_SECS}s"),
+            };
+
+            if attempt < MAX_ATTEMPTS {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "Guest disk grow attempt {attempt}/{MAX_ATTEMPTS} {failure} and VM settled, \
+                         retrying (idempotent)."
+                    )
+                    .dimmed()
+                );
+            } else {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[VirtCI Warning]: guest disk grow {failure} after {MAX_ATTEMPTS} attempts \
+                         so the extra space may be unclaimed."
+                    )
+                    .yellow()
+                );
+            }
         }
     }
 }
