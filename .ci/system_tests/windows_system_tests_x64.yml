@@ -15,6 +15,10 @@ windows-system-tests-x64:
           - .ci/upstream/*.img
           - .ci/temp
 
+    - name: Install QEMU and UEFI Firmware
+      # winget only has x64 binaries seemingly
+      run: winget install -e --id SoftwareFreedomConservancy.QEMU
+
     - name: Fetch Ubuntu Images
       run: |
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -59,10 +63,6 @@ windows-system-tests-x64:
       run: |
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
         npm ci
-
-    - name: Install QEMU and UEFI Firmware
-      # winget only has x64 binaries seemingly
-      run: winget install -e --id SoftwareFreedomConservancy.QEMU
 
     - name: Fetch Cargo Dependencies
       workdir: virtci

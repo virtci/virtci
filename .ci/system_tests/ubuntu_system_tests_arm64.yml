@@ -15,6 +15,9 @@ ubuntu-system-tests-arm64:
           - .ci/upstream/*.img
           - .ci/temp
 
+    - name: Install QEMU and UEFI Firmware
+      run: sudo apt update && sudo apt install -y qemu-system-x86 qemu-system-arm qemu-system-riscv qemu-utils ovmf qemu-efi-aarch64 qemu-efi-riscv64
+
     - name: Fetch Ubuntu Images
       run: ./virtci/.ci/upstream/fetch_ubuntu_images.sh
 
@@ -46,9 +49,6 @@ ubuntu-system-tests-arm64:
       workdir: virtci/web
       run: |
         npm ci
-
-    - name: Install QEMU and UEFI Firmware
-      run: sudo apt update && sudo apt install -y qemu-system-x86 qemu-system-arm qemu-system-riscv qemu-utils ovmf qemu-efi-aarch64 qemu-efi-riscv64
 
     - name: Fetch Cargo Dependencies
       workdir: virtci

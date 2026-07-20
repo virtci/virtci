@@ -15,6 +15,9 @@ macos-system-tests-arm64:
           - .ci/upstream/*.img
           - .ci/temp
 
+    - name: Install QEMU and UEFI Firmware
+      run: brew install qemu
+
     - name: Fetch Ubuntu Images
       run: ./virtci/.ci/upstream/fetch_ubuntu_images.sh
 
@@ -42,9 +45,6 @@ macos-system-tests-arm64:
         node --version
         npm --version
         npm --version | awk -F. '($1<11)||($1==11 && $2<10){ print "npm "$0" is too old for min-release-age (need >= 11.10.0)"; exit 1 }'
-
-    - name: Install QEMU and UEFI Firmware
-      run: brew install qemu
 
     - name: Install NPM Dependencies
       workdir: virtci/web

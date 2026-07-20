@@ -15,6 +15,35 @@ windows-system-tests-arm64:
           - .ci/upstream/*.img
           - .ci/temp
 
+    - name: Install QEMU and UEFI Firmware
+      # winget only has x64 binaries, which install fine under Prism emulation but crash in
+      # the Windows unwinder (no stderr!) the moment TCG executes guest code. Fetch the
+      # native Windows-on-ARM build instead. Year-archive URL so newer uploads don't 404 it.
+      run: |
+        $ErrorActionPreference = "Stop"
+        $ProgressPreference = "SilentlyContinue"
+        $installer = Join-Path $env:TEMP "qemu-arm-setup-20260422.exe"
+        & curl.exe -L --fail --retry 3 --retry-delay 2 -o $installer "https://qemu.weilnetz.de/aarch64/2026/qemu-arm-setup-20260422.exe"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download QEMU installer (curl exit $LASTEXITCODE)."
+        }
+        if ((Get-FileHash $installer -Algorithm SHA512).Hash -ne $env:QEMU_ARM_SHA512) {
+            throw "QEMU installer SHA512 hash did not match the downloaded file."
+        }
+        Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+        # ENSURE it's not x86_64. Must have 0xAA64 not 0x8664.
+        $exe = "C:\Program Files\qemu\qemu-system-aarch64.exe"
+        $fs = [IO.File]::OpenRead($exe)
+        $hdr = New-Object byte[] 4096
+        $null = $fs.Read($hdr, 0, $hdr.Length)
+        $fs.Dispose()
+        $machine = [BitConverter]::ToUInt16($hdr, [BitConverter]::ToInt32($hdr, 0x3C) + 4)
+        if ($machine -ne 0xAA64) {
+            throw ("QEMU at $exe is not a native ARM64 binary (PE machine 0x{0:X4}). TCG crashes under x64 emulation." -f $machine)
+        }
+      env:
+        QEMU_ARM_SHA512: 67ca24c6b07ecb74848f5c1078db7dc71e4e3ffe1669ef713c34184d322fb6bfbf72f1c9ca028a42212af9b157e46ef806f2e43083b2a9e51a351bd961885288
+
     - name: Fetch Ubuntu Images
       run: |
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -67,35 +96,6 @@ windows-system-tests-arm64:
       run: |
         Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
         npm ci
-
-    - name: Install QEMU and UEFI Firmware
-      # winget only has x64 binaries, which install fine under Prism emulation but crash in
-      # the Windows unwinder (no stderr!) the moment TCG executes guest code. Fetch the
-      # native Windows-on-ARM build instead. Year-archive URL so newer uploads don't 404 it.
-      run: |
-        $ErrorActionPreference = "Stop"
-        $ProgressPreference = "SilentlyContinue"
-        $installer = Join-Path $env:TEMP "qemu-arm-setup-20260422.exe"
-        & curl.exe -L --fail --retry 3 --retry-delay 2 -o $installer "https://qemu.weilnetz.de/aarch64/2026/qemu-arm-setup-20260422.exe"
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to download QEMU installer (curl exit $LASTEXITCODE)."
-        }
-        if ((Get-FileHash $installer -Algorithm SHA512).Hash -ne $env:QEMU_ARM_SHA512) {
-            throw "QEMU installer SHA512 hash did not match the downloaded file."
-        }
-        Start-Process -FilePath $installer -ArgumentList "/S" -Wait
-        # ENSURE it's not x86_64. Must have 0xAA64 not 0x8664.
-        $exe = "C:\Program Files\qemu\qemu-system-aarch64.exe"
-        $fs = [IO.File]::OpenRead($exe)
-        $hdr = New-Object byte[] 4096
-        $null = $fs.Read($hdr, 0, $hdr.Length)
-        $fs.Dispose()
-        $machine = [BitConverter]::ToUInt16($hdr, [BitConverter]::ToInt32($hdr, 0x3C) + 4)
-        if ($machine -ne 0xAA64) {
-            throw ("QEMU at $exe is not a native ARM64 binary (PE machine 0x{0:X4}). TCG crashes under x64 emulation." -f $machine)
-        }
-      env:
-        QEMU_ARM_SHA512: 67ca24c6b07ecb74848f5c1078db7dc71e4e3ffe1669ef713c34184d322fb6bfbf72f1c9ca028a42212af9b157e46ef806f2e43083b2a9e51a351bd961885288
 
     - name: Fetch Cargo Dependencies
       workdir: virtci
