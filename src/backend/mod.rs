@@ -26,6 +26,42 @@ pub struct VmStartConfig {
     pub disk_gb: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DiskIoStats {
+    pub rd_ops: u64,
+    pub rd_time_ns: u64,
+    pub wr_ops: u64,
+    pub wr_time_ns: u64,
+}
+
+impl DiskIoStats {
+    /// Reads and writes combined.
+    pub fn total_ops(&self) -> u64 {
+        self.rd_ops.saturating_add(self.wr_ops)
+    }
+
+    /// Average microseconds per operation between two samples.
+    fn latency_us(ops: u64, time_ns: u64) -> Option<u64> {
+        (ops > 0).then(|| time_ns / ops / 1_000)
+    }
+
+    /// Average read latency, in microseconds per op, since `prev`.
+    pub fn rd_latency_us_since(&self, prev: &Self) -> Option<u64> {
+        Self::latency_us(
+            self.rd_ops.saturating_sub(prev.rd_ops),
+            self.rd_time_ns.saturating_sub(prev.rd_time_ns),
+        )
+    }
+
+    /// Average write latency, in microseconds per op, since `prev`.
+    pub fn wr_latency_us_since(&self, prev: &Self) -> Option<u64> {
+        Self::latency_us(
+            self.wr_ops.saturating_sub(prev.wr_ops),
+            self.wr_time_ns.saturating_sub(prev.wr_time_ns),
+        )
+    }
+}
+
 pub trait VmBackend {
     fn start_vm(&mut self, cfg: VmStartConfig) -> anyhow::Result<()>;
 
@@ -71,9 +107,10 @@ pub trait VmBackend {
         None
     }
 
-    /// Count of IO operations (reads and writes across all drives) that the VM has done. Very
-    /// useful to actually track progress.
-    fn vm_disk_io_ops(&self) -> Option<u64> {
+    /// Block-layer IO counters (reads and writes across all drives) that the VM has done. Very
+    /// useful to actually track progress, and the latency it carries tells host IO stalls apart
+    /// from the guest simply being slow.
+    fn vm_disk_io_stats(&self) -> Option<DiskIoStats> {
         None
     }
 

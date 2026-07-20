@@ -24,7 +24,7 @@ use russh::keys::ssh_key;
 
 use crate::{
     VciGlobalPaths,
-    backend::{VmBackend, VmStartConfig},
+    backend::{DiskIoStats, VmBackend, VmStartConfig},
     util::git::{GitInfo, GitProvider},
     vm_image::{GuestOs, SshTarget},
     yaml,
@@ -941,8 +941,8 @@ struct BootSignals {
     serial_bytes: u64,
     /// Number of times the qcow2 disk fingerprint has advanced so far.
     disk_changes: u64,
-    /// QMP block-layer IO operations count. `None` if not sampled/available this tick.
-    io_ops: Option<u64>,
+    /// QMP block-layer IO counters. `None` if not sampled or available this tick.
+    io_stats: Option<DiskIoStats>,
     /// Cumulative QEMU process CPU nanoseconds, `None` if not sampled this tick.
     cpu_ns: Option<u64>,
 }
@@ -967,7 +967,7 @@ struct BootWatch {
     last_progress: Duration,
     last_serial: u64,
     last_disk_changes: u64,
-    last_io_ops: Option<u64>,
+    last_io: Option<DiskIoStats>,
     last_cpu: Option<u64>,
     /// Elapsed time of the last successful CPU sample. Re-try on failed read.
     last_cpu_at: Duration,
@@ -978,6 +978,10 @@ struct BootWatch {
     last_cpu_pct: Option<f64>,
     /// Whether QMP block-IO stats have ever been readable.
     qmp_seen: bool,
+    /// Average latency over the most recent sample interval, microseconds per operation.
+    last_rd_latency_us: Option<u64>,
+    /// Average latency over the most recent sample interval, microseconds per operation.
+    last_wr_latency_us: Option<u64>,
     /// Elapsed time each signal last advanced (counted as progress). `None` if never.
     serial_adv: Option<Duration>,
     disk_adv: Option<Duration>,
@@ -991,7 +995,7 @@ impl BootWatch {
         max_timeout: Duration,
         cpu_sample_interval: Duration,
         initial_cpu: Option<u64>,
-        initial_io: Option<u64>,
+        initial_io: Option<DiskIoStats>,
     ) -> Self {
         Self {
             base_idle,
@@ -1000,11 +1004,13 @@ impl BootWatch {
             last_progress: Duration::ZERO,
             last_serial: 0,
             last_disk_changes: 0,
-            last_io_ops: initial_io,
+            last_io: initial_io,
             last_cpu: initial_cpu,
             last_cpu_at: Duration::ZERO,
             last_cpu_pct: None,
             qmp_seen: initial_io.is_some(),
+            last_rd_latency_us: None,
+            last_wr_latency_us: None,
             serial_adv: None,
             disk_adv: None,
             io_adv: None,
@@ -1033,10 +1039,16 @@ impl BootWatch {
             None => "cpu=n/a".to_string(),
         };
         let qmp = if self.qmp_seen {
+            let lat = |what: &str, us: Option<u64>| match us {
+                Some(us) => format!(" {what}={us}us/op"),
+                None => String::new(),
+            };
             format!(
-                "qmp_io_ops={} ({})",
-                self.last_io_ops.unwrap_or(0),
-                since(self.io_adv)
+                "qmp_io_ops={} ({}){}{}",
+                self.last_io.unwrap_or_default().total_ops(),
+                since(self.io_adv),
+                lat("rd_lat", self.last_rd_latency_us),
+                lat("wr_lat", self.last_wr_latency_us),
             )
         } else {
             "qmp=unavailable".to_string()
@@ -1063,13 +1075,22 @@ impl BootWatch {
             self.disk_adv = Some(elapsed);
             progress = true;
         }
-        if let Some(io) = sig.io_ops {
+        if let Some(io) = sig.io_stats {
             self.qmp_seen = true;
-            if self.last_io_ops.is_some_and(|prev| io > prev) {
-                self.io_adv = Some(elapsed);
-                progress = true;
+            if let Some(prev) = self.last_io {
+                if io.total_ops() > prev.total_ops() {
+                    self.io_adv = Some(elapsed);
+                    progress = true;
+                }
+
+                if let Some(rd) = io.rd_latency_us_since(&prev) {
+                    self.last_rd_latency_us = Some(rd);
+                }
+                if let Some(wr) = io.wr_latency_us_since(&prev) {
+                    self.last_wr_latency_us = Some(wr);
+                }
             }
-            self.last_io_ops = Some(io.max(self.last_io_ops.unwrap_or(0)));
+            self.last_io = Some(io);
         }
         if let Some(cpu) = sig.cpu_ns {
             if let Some(prev) = self.last_cpu {
@@ -1151,7 +1172,7 @@ pub async fn wait_for_ssh_watching(
         max_timeout,
         cpu_sample_interval,
         backend.vm_cpu_time_ns(),
-        backend.vm_disk_io_ops(),
+        backend.vm_disk_io_stats(),
     );
 
     loop {
@@ -1197,8 +1218,8 @@ pub async fn wait_for_ssh_watching(
 
         let elapsed = start.elapsed();
 
-        let (cpu_ns, io_ops) = if watch.slow_sample_due(elapsed) {
-            (backend.vm_cpu_time_ns(), backend.vm_disk_io_ops())
+        let (cpu_ns, io_stats) = if watch.slow_sample_due(elapsed) {
+            (backend.vm_cpu_time_ns(), backend.vm_disk_io_stats())
         } else {
             (None, None)
         };
@@ -1209,7 +1230,7 @@ pub async fn wait_for_ssh_watching(
                 ssh_progress,
                 serial_bytes,
                 disk_changes,
-                io_ops,
+                io_stats,
                 cpu_ns,
             },
         );
@@ -1686,8 +1707,8 @@ pub async fn connect_resilient(ssh: &SshTarget) -> anyhow::Result<client::Handle
 mod tests {
     use super::{
         DEFAULT_CONNECT_RETRY_BUDGET_SECS, DEFAULT_VM_START_IDLE_TIMEOUT,
-        DEFAULT_VM_START_MAX_TIMEOUT, SETTLE_MAX_SECS, SETTLE_MIN_SECS, connect_retry_budget,
-        resolve_boot_timeouts, scaled_settle_secs,
+        DEFAULT_VM_START_MAX_TIMEOUT, DiskIoStats, SETTLE_MAX_SECS, SETTLE_MIN_SECS,
+        connect_retry_budget, resolve_boot_timeouts, scaled_settle_secs,
     };
 
     #[test]
@@ -1764,8 +1785,16 @@ mod tests {
             ssh_progress: false,
             serial_bytes,
             disk_changes: 0,
-            io_ops: None,
+            io_stats: None,
             cpu_ns: None,
+        }
+    }
+
+    fn io(rd_ops: u64, rd_time_ns: u64) -> DiskIoStats {
+        DiskIoStats {
+            rd_ops,
+            rd_time_ns,
+            ..DiskIoStats::default()
         }
     }
 
@@ -1775,7 +1804,13 @@ mod tests {
         end: u64,
         mut serial_at: impl FnMut(u64) -> u64,
     ) -> Option<u64> {
-        let mut w = BootWatch::new(secs(base_idle), secs(max), secs(15), Some(0), Some(0));
+        let mut w = BootWatch::new(
+            secs(base_idle),
+            secs(max),
+            secs(15),
+            Some(0),
+            Some(io(0, 0)),
+        );
         let mut e = 0;
         while e <= end {
             let st = w.observe(secs(e), &serial_only(serial_at(e)));
@@ -1832,10 +1867,43 @@ mod tests {
 
     #[test]
     fn qmp_io_ops_advance_resets_idle() {
-        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), None, Some(1000));
+        let mut w = BootWatch::new(secs(120), secs(1800), secs(15), None, Some(io(1000, 0)));
         let mut s = serial_only(0);
-        s.io_ops = Some(1050);
+        s.io_stats = Some(io(1050, 0));
         assert_eq!(w.observe(secs(15), &s).idle.as_secs(), 0);
+    }
+
+    #[test]
+    fn read_latency_is_reported_per_interval() {
+        let mut w = BootWatch::new(
+            secs(120),
+            secs(1800),
+            secs(15),
+            None,
+            Some(io(1000, 1_000_000_000)),
+        );
+        let mut s = serial_only(0);
+        s.io_stats = Some(io(1100, 3_000_000_000));
+        w.observe(secs(15), &s);
+        assert_eq!(w.last_rd_latency_us, Some(20_000));
+        assert!(w.signals_summary(secs(15)).contains("rd_lat=20000us/op"));
+    }
+
+    #[test]
+    fn quiet_interval_keeps_the_previous_latency() {
+        let mut w = BootWatch::new(
+            secs(120),
+            secs(1800),
+            secs(15),
+            None,
+            Some(io(1000, 1_000_000_000)),
+        );
+        let mut s = serial_only(0);
+        s.io_stats = Some(io(1100, 3_000_000_000));
+        w.observe(secs(15), &s);
+        s.io_stats = Some(io(1100, 3_000_000_000));
+        w.observe(secs(30), &s);
+        assert_eq!(w.last_rd_latency_us, Some(20_000));
     }
 }
 

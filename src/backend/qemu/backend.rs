@@ -615,8 +615,8 @@ impl VmBackend for QemuBackend {
         Some(self.disk.target().path.as_path())
     }
 
-    fn vm_disk_io_ops(&self) -> Option<u64> {
-        super::qmp::query_disk_io_ops(self.qmp_addr()?)
+    fn vm_disk_io_stats(&self) -> Option<crate::backend::DiskIoStats> {
+        super::qmp::query_disk_io_stats(self.qmp_addr()?)
     }
 
     fn disk_integrity_report(&self) -> Option<String> {

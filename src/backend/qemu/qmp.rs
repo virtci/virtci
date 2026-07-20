@@ -5,12 +5,14 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
+use crate::backend::DiskIoStats;
+
 /// QMP should never take this long.
 const QMP_IO_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Connects to QMP TCP endpoint and returns how many block-layer IO operations that have been
-/// performed in total, or None if it wasn't able to.
-pub fn query_disk_io_ops(addr: SocketAddr) -> Option<u64> {
+/// Connects to QMP TCP endpoint and returns the cumulative block-layer IO counters across every
+/// drive, or None if it wasn't able to.
+pub fn query_disk_io_stats(addr: SocketAddr) -> Option<DiskIoStats> {
     let stream = TcpStream::connect_timeout(&addr, QMP_IO_TIMEOUT).ok()?;
     stream.set_read_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
@@ -25,7 +27,7 @@ pub fn query_disk_io_ops(addr: SocketAddr) -> Option<u64> {
 
     send(&mut writer, r#"{"execute":"query-blockstats"}"#)?;
     let resp = read_return(&mut reader)?;
-    Some(sum_block_io_ops(&resp))
+    Some(sum_block_stats(&resp))
 }
 
 fn send(writer: &mut TcpStream, line: &str) -> Option<()> {
@@ -66,23 +68,30 @@ fn read_return(reader: &mut impl BufRead) -> Option<serde_json::Value> {
     None
 }
 
-fn sum_block_io_ops(blockstats: &serde_json::Value) -> u64 {
+fn sum_block_stats(blockstats: &serde_json::Value) -> DiskIoStats {
     let Some(devices) = blockstats.as_array() else {
-        return 0;
+        return DiskIoStats::default();
     };
-    devices
-        .iter()
-        .filter_map(|dev| dev.get("stats"))
-        .map(|stats| {
-            let rd = stats
-                .get("rd_operations")
-                .and_then(serde_json::Value::as_u64);
-            let wr = stats
-                .get("wr_operations")
-                .and_then(serde_json::Value::as_u64);
-            rd.unwrap_or(0).saturating_add(wr.unwrap_or(0))
-        })
-        .sum()
+    let field = |stats: &serde_json::Value, key: &str| {
+        stats
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    devices.iter().filter_map(|dev| dev.get("stats")).fold(
+        DiskIoStats::default(),
+        |mut acc, stats| {
+            acc.rd_ops = acc.rd_ops.saturating_add(field(stats, "rd_operations"));
+            acc.rd_time_ns = acc
+                .rd_time_ns
+                .saturating_add(field(stats, "rd_total_time_ns"));
+            acc.wr_ops = acc.wr_ops.saturating_add(field(stats, "wr_operations"));
+            acc.wr_time_ns = acc
+                .wr_time_ns
+                .saturating_add(field(stats, "wr_total_time_ns"));
+            acc
+        },
+    )
 }
 
 #[cfg(test)]
@@ -90,10 +99,19 @@ mod tests {
     #[test]
     fn sums_rd_and_wr_across_devices() {
         let stats = serde_json::json!([
-            {"device": "SystemDisk", "stats": {"rd_operations": 100, "wr_operations": 50}},
-            {"device": "seed",       "stats": {"rd_operations": 7,   "wr_operations": 0}},
+            {"device": "SystemDisk", "stats": {
+                "rd_operations": 100, "rd_total_time_ns": 1_000_000_000,
+                "wr_operations": 50,  "wr_total_time_ns": 500_000_000}},
+            {"device": "seed", "stats": {
+                "rd_operations": 7,   "rd_total_time_ns": 7_000_000,
+                "wr_operations": 0,   "wr_total_time_ns": 0}},
         ]);
-        assert_eq!(super::sum_block_io_ops(&stats), 157);
+        let summed = super::sum_block_stats(&stats);
+        assert_eq!(summed.rd_ops, 107);
+        assert_eq!(summed.rd_time_ns, 1_007_000_000);
+        assert_eq!(summed.wr_ops, 50);
+        assert_eq!(summed.wr_time_ns, 500_000_000);
+        assert_eq!(summed.total_ops(), 157);
     }
 
     #[test]
@@ -103,12 +121,36 @@ mod tests {
             {"device": "no-stats-key"},
             {"device": "x", "stats": {"wr_operations": 3}},
         ]);
-        assert_eq!(super::sum_block_io_ops(&stats), 3);
+        let summed = super::sum_block_stats(&stats);
+        assert_eq!(summed.total_ops(), 3);
+        assert_eq!(summed.wr_time_ns, 0);
     }
 
     #[test]
     fn non_array_is_zero() {
-        assert_eq!(super::sum_block_io_ops(&serde_json::json!({})), 0);
+        assert_eq!(
+            super::sum_block_stats(&serde_json::json!({})),
+            crate::backend::DiskIoStats::default()
+        );
+    }
+
+    #[test]
+    fn latency_is_measured_over_the_interval() {
+        let prev = crate::backend::DiskIoStats {
+            rd_ops: 100,
+            rd_time_ns: 100_000_000,
+            wr_ops: 10,
+            wr_time_ns: 10_000_000,
+        };
+
+        let now = crate::backend::DiskIoStats {
+            rd_ops: 200,
+            rd_time_ns: 150_000_000,
+            wr_ops: 10,
+            wr_time_ns: 10_000_000,
+        };
+        assert_eq!(now.rd_latency_us_since(&prev), Some(500));
+        assert_eq!(now.wr_latency_us_since(&prev), None);
     }
 
     #[test]
