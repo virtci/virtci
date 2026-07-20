@@ -172,11 +172,6 @@ pub fn create_backing_file(
 
     let mut cmd = binaries::target_command(exec_target, &qemu_img);
     cmd.args(["create", "-f", "qcow2", "-b", source_exec, "-F", "qcow2"]);
-    // Try 2MB cluster size. Should reduce allocation / extensions to minimize flakiness?
-    // Really just kind of trying stuff.
-    if matches!(exec_target, HostExecTarget::WindowsNative) {
-        cmd.args(["-o", "cluster_size=2M"]);
-    }
     cmd.arg(dest_exec);
     let output = cmd
         .output()
