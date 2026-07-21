@@ -10,7 +10,10 @@ use crate::{
     backend::{
         VmBackend, VmStartConfig,
         exec::{self, TargetChildProcess},
-        qemu::{PortFlock, create_backing_file},
+        qemu::{
+            PortFlock, create_backing_file, materialize_raw, qemu_img_compare_raw_qcow2,
+            writeback_raw_to_qcow2,
+        },
     },
     file_lock::FileLock,
     global_paths::{TargetPath, VciGlobalPaths},
@@ -87,6 +90,11 @@ pub struct QemuBackend {
     pub image_lock: FileLock,
     pub host_port: Option<PortFlock>,
     pub disk: BackingFile,
+    /// Format of `disk` as booted. `Raw` only for a `WindowsNative` clone (see [`DiskFormat`]).
+    pub run_disk_format: DiskFormat,
+    /// For a raw run-disk, the qcow2 source it was materialized from, reused as the `-B` backing
+    /// when writing back into the qcow2 cache. `None` for the qcow2 overlay path.
+    run_disk_base_exec: Option<String>,
     /// pflash unit=0 code firmware path, in the exec namespace. May differ from the image's
     /// `uefi.code` when Secure Boot is substituted.
     pub uefi_code: Option<String>,
@@ -209,6 +217,8 @@ impl QemuBackend {
             image_lock: setup.image_lock,
             host_port: None,
             disk: setup.disk,
+            run_disk_format: setup.disk_format,
+            run_disk_base_exec: setup.disk_base_exec,
             uefi_code: setup.uefi_code,
             uefi_vars: setup.uefi_vars,
             additional_drives: setup.additional_drives,
@@ -620,10 +630,15 @@ impl VmBackend for QemuBackend {
     }
 
     fn disk_integrity_report(&self) -> Option<String> {
-        let disk = self.disk.target().native_path();
         let (qemu_img, _) = super::binaries::qemu_image_binary(&self.exec_target).ok()?;
 
-        let chain = self.qemu_img_backing_chain(&qemu_img, &disk);
+        let chain = if self.run_disk_format == DiskFormat::Raw {
+            let base = self.run_disk_base_exec.as_deref()?;
+            self.qemu_img_backing_chain(&qemu_img, base)
+        } else {
+            let disk = self.disk.target().native_path();
+            self.qemu_img_backing_chain(&qemu_img, &disk)
+        };
 
         // `-U` can be used while the image is locked so it can be read while the stuck, still-running VM holds the
         // disk.
@@ -696,8 +711,58 @@ impl VmBackend for QemuBackend {
             "Cannot cache a run whose disk is the base image in place. Caching only applies to `virtci run`",
         )?;
 
+        // The cache is always qcow2. On a native-Windows raw run, convert the raw run-disk back
+        // into a thin base-backed qcow2 and GATE it. If it fails don't bother storing the cache.
+        let disk_artifact_source = if self.run_disk_format == DiskFormat::Raw {
+            let base_exec = self
+                .run_disk_base_exec
+                .as_deref()
+                .context("raw run-disk is missing its base source for write-back")?;
+            let raw_exec = disk.native_path();
+            let writeback = disk.sibling(&format!(
+                "vci-{}-{:05}-writeback.qcow2",
+                self.name, self.run_id.id
+            ));
+            let writeback_exec = writeback.native_path();
+
+            if let Err(e) =
+                writeback_raw_to_qcow2(&raw_exec, base_exec, &writeback_exec, &self.exec_target)
+            {
+                eprintln!(
+                    "Warning: raw->qcow2 write-back failed for job '{}', skipping cache write: {e:#}",
+                    self.name
+                );
+                let _ = std::fs::remove_file(&writeback.path);
+                return Ok(());
+            }
+
+            match qemu_img_compare_raw_qcow2(&raw_exec, &writeback_exec, &self.exec_target) {
+                Ok(true) => writeback,
+                Ok(false) => {
+                    eprintln!(
+                        "Warning: write-back qcow2 for job '{}' does not match the raw run-disk so \
+                         skipping cache write to avoid caching a corrupt slot.",
+                        self.name
+                    );
+                    let _ = std::fs::remove_file(&writeback.path);
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: write-back compare gate errored for job '{}', skipping cache \
+                         write: {e:#}",
+                        self.name
+                    );
+                    let _ = std::fs::remove_file(&writeback.path);
+                    return Ok(());
+                }
+            }
+        } else {
+            disk.clone()
+        };
+
         let mut planned = vec![PlannedQemuArtifact {
-            source: disk.clone(),
+            source: disk_artifact_source,
             kind: QemuArtifactKind::Disk,
             filename: "disk.qcow2".to_string(),
         }];
@@ -852,6 +917,33 @@ impl BackingFile {
     }
 }
 
+/// Windows :(
+/// The on-disk format of the live run-disk QEMU boots from.
+/// Everywhere except a native-Windows clone this is `Qcow2`. On `WindowsNative`
+/// clones it is `Raw`, to get around the qcow2 runtime cluster-allocation potential corruption.
+/// (QEMU #813/#814).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DiskFormat {
+    Qcow2,
+    Raw,
+}
+
+impl DiskFormat {
+    /// The `format=` token for a QEMU `-drive`.
+    pub fn as_qemu(self) -> &'static str {
+        match self {
+            DiskFormat::Qcow2 => "qcow2",
+            DiskFormat::Raw => "raw",
+        }
+    }
+}
+
+struct DiskSetup {
+    file: BackingFile,
+    format: DiskFormat,
+    base_exec: Option<String>,
+}
+
 /// One extra `-drive`, such as the macOS OpenCore bootloader. `spec` is the full `-drive` arg
 /// with its `file=` already pointing at `file`'s in-namespace path.
 pub struct AdditionalDrive {
@@ -868,6 +960,8 @@ pub struct TpmInfo {
 struct RunSetup {
     image_lock: FileLock,
     disk: BackingFile,
+    disk_format: DiskFormat,
+    disk_base_exec: Option<String>,
     uefi_code: Option<String>,
     uefi_vars: Option<BackingFile>,
     additional_drives: Vec<AdditionalDrive>,
@@ -961,7 +1055,11 @@ fn setup_run(
     }
     let artifact_dir = if producing { &staging_dir } else { &temp_dir };
 
-    let disk = setup_disk(
+    let DiskSetup {
+        file: disk,
+        format: disk_format,
+        base_exec: disk_base_exec,
+    } = setup_disk(
         name,
         id,
         qemu_config,
@@ -1023,6 +1121,8 @@ fn setup_run(
     Ok(RunSetup {
         image_lock,
         disk,
+        disk_format,
+        disk_base_exec,
         uefi_code,
         uefi_vars,
         additional_drives,
@@ -1043,23 +1143,43 @@ fn setup_disk(
     artifact_dir: &TargetPath,
     clone: bool,
     cache: &CachePlan,
-) -> anyhow::Result<BackingFile> {
+) -> anyhow::Result<DiskSetup> {
     if !clone {
-        return Ok(BackingFile::Base(config_path_target_with_unc(
-            &qemu_config.image,
-            exec_target,
-            paths,
-        )));
+        return Ok(DiskSetup {
+            file: BackingFile::Base(config_path_target_with_unc(
+                &qemu_config.image,
+                exec_target,
+                paths,
+            )),
+            format: DiskFormat::Qcow2,
+            base_exec: None,
+        });
     }
 
     let source_exec = match cache {
         CachePlan::Consume { slot, .. } => slot.join("disk.qcow2").native_path(),
         _ => expand_exec_path_no_unc(&qemu_config.image, exec_target, paths),
     };
+
+    if matches!(exec_target, HostExecTarget::WindowsNative) {
+        let run = artifact_dir.join(&format!("vci-{name}-{id:05}.raw"));
+        materialize_raw(&source_exec, &run.native_path(), exec_target)
+            .context("Failed to make the raw run-disk from the cached/base qcow2")?;
+        return Ok(DiskSetup {
+            file: BackingFile::Temp(run),
+            format: DiskFormat::Raw,
+            base_exec: Some(source_exec),
+        });
+    }
+
     let overlay = artifact_dir.join(&format!("vci-{name}-{id:05}.qcow2"));
     create_backing_file(&source_exec, &overlay.native_path(), exec_target)
         .context("Failed to create the thin qcow2 overlay backing the clone")?;
-    Ok(BackingFile::Temp(overlay))
+    Ok(DiskSetup {
+        file: BackingFile::Temp(overlay),
+        format: DiskFormat::Qcow2,
+        base_exec: None,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

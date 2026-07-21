@@ -601,6 +601,8 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
     }
 
     let disk = backend.disk.target().native_path();
+    // `qcow2` everywhere except a native-Windows clone, which boots a `raw`.
+    let disk_fmt = backend.run_disk_format.as_qemu();
     // An attempt to fix windows flakiness.
     // `cache=writeback` may be failing sometimes due to Windows page cache lazily flushing.
     // `cache=none` doesn't work since FILE_FLAG_NO_BUFFERING fails on freshly created thin overlay.
@@ -615,7 +617,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
         push_arg(
             &mut args,
             "-drive",
-            format!("id=SystemDisk,if=none,file={disk},format=qcow2{disk_cache}"),
+            format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}{disk_cache}"),
         );
     } else {
         match arch {
@@ -623,7 +625,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                 push_arg(
                     &mut args,
                     "-drive",
-                    format!("id=SystemDisk,if=none,file={disk},format=qcow2{disk_cache}"),
+                    format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}{disk_cache}"),
                 );
                 if qemu_config.nvme {
                     push_arg(
@@ -644,7 +646,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("id=SystemDisk,if=none,file={disk},format=qcow2{disk_cache}"),
+                        format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}{disk_cache}"),
                     );
                     push_arg(
                         &mut args,
@@ -655,13 +657,13 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("file={disk},format=qcow2,if=ide{disk_cache}"),
+                        format!("file={disk},format={disk_fmt},if=ide{disk_cache}"),
                     );
                 } else {
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("file={disk},format=qcow2,if=virtio{disk_cache}"),
+                        format!("file={disk},format={disk_fmt},if=virtio{disk_cache}"),
                     );
                 }
             }

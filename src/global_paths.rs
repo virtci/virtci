@@ -316,6 +316,20 @@ impl TargetPath {
         }
     }
 
+    /// A sibling path (same parent directory, different file name).
+    #[must_use]
+    pub fn sibling(&self, file_name: &str) -> TargetPath {
+        let path = match self.path.parent() {
+            Some(parent) => parent.join(file_name),
+            None => PathBuf::from(file_name),
+        };
+        TargetPath {
+            path,
+            #[cfg(target_os = "windows")]
+            wsl_distro: self.wsl_distro.clone(),
+        }
+    }
+
     /// Atomically renames the file at `self` to `new_path`.
     /// Generally this is only used to promote a `.cache-staging` file into a `.cache` file.
     /// This only works well under the same file system, making is a true rename, not a

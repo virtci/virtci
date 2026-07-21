@@ -185,6 +185,101 @@ pub fn create_backing_file(
     Ok(())
 }
 
+fn require_windows_native(exec_target: &HostExecTarget, what: &str) -> anyhow::Result<()> {
+    if !matches!(exec_target, HostExecTarget::WindowsNative) {
+        anyhow::bail!("{what} is only valid on a native-Windows exec target");
+    }
+    Ok(())
+}
+
+pub fn materialize_raw(
+    source_exec: &str,
+    dest_exec: &str,
+    exec_target: &HostExecTarget,
+) -> anyhow::Result<()> {
+    require_windows_native(exec_target, "raw run-disk materialization")?;
+
+    let qemu_img = binaries::qemu_image_binary(exec_target)
+        .context("Unable to get qemu-img binary to materialize the raw run-disk")?
+        .0;
+
+    let output = binaries::target_command(exec_target, &qemu_img)
+        .args(["convert", "-O", "raw", source_exec, dest_exec])
+        .output()
+        .with_context(|| format!("Failed to run {qemu_img} convert"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "qemu-img convert -O raw failed for '{source_exec}':\n{}",
+            stderr.trim()
+        );
+    }
+
+    Ok(())
+}
+
+pub fn writeback_raw_to_qcow2(
+    raw_exec: &str,
+    base_exec: &str,
+    dest_exec: &str,
+    exec_target: &HostExecTarget,
+) -> anyhow::Result<()> {
+    require_windows_native(exec_target, "raw->qcow2 cache write-back")?;
+
+    let qemu_img = binaries::qemu_image_binary(exec_target)
+        .context("Unable to get qemu-img binary for the raw->qcow2 write-back")?
+        .0;
+
+    let output = binaries::target_command(exec_target, &qemu_img)
+        .args([
+            "convert", "-f", "raw", "-O", "qcow2", "-B", base_exec, "-F", "qcow2", raw_exec,
+            dest_exec,
+        ])
+        .output()
+        .with_context(|| format!("Failed to run {qemu_img} convert (write-back)"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "qemu-img raw->qcow2 write-back failed for '{raw_exec}':\n{}",
+            stderr.trim()
+        );
+    }
+
+    Ok(())
+}
+
+pub fn qemu_img_compare_raw_qcow2(
+    raw_exec: &str,
+    qcow2_exec: &str,
+    exec_target: &HostExecTarget,
+) -> anyhow::Result<bool> {
+    require_windows_native(exec_target, "raw/qcow2 write-back compare gate")?;
+
+    let qemu_img = binaries::qemu_image_binary(exec_target)
+        .context("Unable to get qemu-img binary for the write-back compare gate")?
+        .0;
+
+    let output = binaries::target_command(exec_target, &qemu_img)
+        .args(["compare", "-f", "raw", raw_exec, "-F", "qcow2", qcow2_exec])
+        .output()
+        .with_context(|| format!("Failed to run {qemu_img} compare"))?;
+
+    // qemu-img compare: 0 == identical, 1 == differ, 2+ == error.
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "qemu-img compare errored for raw '{raw_exec}' vs qcow2 '{qcow2_exec}':\n{}",
+                stderr.trim()
+            )
+        }
+    }
+}
+
 /// Attempt to get the virtual size of a QEMU disk. Doesn't need to boot.
 pub fn base_disk_virtual_size(
     disk_exec: &str,
