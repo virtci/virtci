@@ -717,6 +717,8 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
             let has_uefi = backend.uefi_code.is_some() || backend.uefi_vars.is_some();
             if !has_uefi && arch == Arch::host() {
                 push_arg(&mut args, "-accel", "whpx");
+            } else {
+                push_arg(&mut args, "-icount", "shift=0,sleep=on");
             }
         }
     }
