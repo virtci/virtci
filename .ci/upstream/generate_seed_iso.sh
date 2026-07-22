@@ -38,6 +38,12 @@ write_files:
     content: |
       [Service]
       ExecStartPre=-/usr/local/sbin/virtci-boot-diag rescue
+runcmd:
+  # Really tried a lot of stuff for Windows/TCG flakiness. systemd just keeps timing out.
+  # This hopefully should fix that. The disks themselves aren't corrupted or anything.
+  - |
+    awk '($2=="/boot"||$2=="/boot/efi")&&$4!~/nofail/{$4=$4",nofail,x-systemd.device-timeout=5s"}{print}' /etc/fstab > /etc/fstab.virtci && cat /etc/fstab.virtci > /etc/fstab && rm -f /etc/fstab.virtci
+  - systemctl mask serial-getty@ttyAMA0.service serial-getty@ttyS0.service
 EOF
 
 cat > "$SEED_DIR/meta-data" <<EOF

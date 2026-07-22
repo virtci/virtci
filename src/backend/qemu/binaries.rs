@@ -603,21 +603,15 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
     let disk = backend.disk.target().native_path();
     // `qcow2` everywhere except a native-Windows clone, which boots a `raw`.
     let disk_fmt = backend.run_disk_format.as_qemu();
-    // An attempt to fix windows flakiness.
-    // `cache=writeback` may be failing sometimes due to Windows page cache lazily flushing.
-    // `cache=none` doesn't work since FILE_FLAG_NO_BUFFERING fails on freshly created thin overlay.
-    let disk_cache = if matches!(backend.exec_target, HostExecTarget::WindowsNative) {
-        ",cache=writethrough,aio=threads"
-    } else {
-        ""
-    };
+    // tried all kinds of special `cache=` for Windows but it failed no matter what, so don't bother.
+    // seems that the disks themselves never actually got corrupted.
     if qemu_config.additional_devices.is_some() {
         // Config is supplying it's own `-device` list.
         // TODO investigate correctness of this with many drives/devices
         push_arg(
             &mut args,
             "-drive",
-            format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}{disk_cache}"),
+            format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}"),
         );
     } else {
         match arch {
@@ -625,7 +619,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                 push_arg(
                     &mut args,
                     "-drive",
-                    format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}{disk_cache}"),
+                    format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}"),
                 );
                 if qemu_config.nvme {
                     push_arg(
@@ -646,7 +640,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}{disk_cache}"),
+                        format!("id=SystemDisk,if=none,file={disk},format={disk_fmt}"),
                     );
                     push_arg(
                         &mut args,
@@ -657,13 +651,13 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("file={disk},format={disk_fmt},if=ide{disk_cache}"),
+                        format!("file={disk},format={disk_fmt},if=ide"),
                     );
                 } else {
                     push_arg(
                         &mut args,
                         "-drive",
-                        format!("file={disk},format={disk_fmt},if=virtio{disk_cache}"),
+                        format!("file={disk},format={disk_fmt},if=virtio"),
                     );
                 }
             }
