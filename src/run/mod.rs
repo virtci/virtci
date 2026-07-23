@@ -514,7 +514,7 @@ impl Job {
         use colored::Colorize;
 
         let shutdown_cmd = match self.backend.os() {
-            GuestOs::Windows => "Stop-Computer -Force",
+            GuestOs::Windows => "powercfg /h off; shutdown /s /f /t 0",
             _ => "sudo shutdown -h now",
         };
 
