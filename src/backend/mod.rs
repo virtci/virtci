@@ -134,6 +134,10 @@ pub trait VmBackend {
         self.vm_exit_error().is_some()
     }
 
+    fn request_powerdown(&mut self) -> bool {
+        false
+    }
+
     /// Commit this run's VM files into its cache slot so a future run can reuse them.
     /// Fingerprint is captured on the host-side notably, not inside the VM.
     /// No-op if no cache should be produced by this run.

@@ -494,6 +494,13 @@ impl VmBackend for QemuBackend {
         Ok(())
     }
 
+    fn request_powerdown(&mut self) -> bool {
+        match self.qmp_addr() {
+            Some(addr) => super::qmp::system_powerdown(addr),
+            None => false,
+        }
+    }
+
     fn stop_vm(&mut self) {
         if let Some(qemu) = self.qemu_process.take()
             && let Ok(mut guard) = qemu.lock()

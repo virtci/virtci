@@ -518,17 +518,53 @@ impl Job {
             _ => "sudo shutdown -h now",
         };
 
-        {
+        let ssh_shutdown_delivered = {
             let ssh = self.ssh();
             let empty_env = std::collections::HashMap::new();
             let fut = command::run_command(&ssh, shutdown_cmd, None, &empty_env, self.backend.os());
-            // The command may never return (the VM powers off mid-reply), so just fire it and then
-            // watch for the process to exit.
-            let _ = tokio::time::timeout(Duration::from_secs(15), fut).await;
+            match tokio::time::timeout(Duration::from_secs(15), fut).await {
+                Ok(Ok(res)) if res.exit_code == 0 => true,
+                Ok(Ok(res)) => {
+                    eprintln!(
+                        "{}",
+                        format!(
+                            "[VirtCI Warning]: VM shutdown command exited with code {}{}",
+                            res.exit_code,
+                            if res.stderr.trim().is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {}", res.stderr.trim())
+                            }
+                        )
+                        .yellow()
+                    );
+                    false
+                }
+                Ok(Err(e)) => {
+                    eprintln!(
+                        "{}",
+                        format!("[VirtCI Warning]: VM shutdown command failed over SSH: {e}")
+                            .yellow()
+                    );
+                    false
+                }
+                // Never replied within 15s: the guest likely powered off mid-command.
+                Err(_) => true,
+            }
+        };
+
+        if !ssh_shutdown_delivered && self.backend.request_powerdown() {
+            println!(
+                "{}",
+                "Falling back to an ACPI power-button press (QMP system_powerdown).".dimmed()
+            );
         }
 
         let timeout = cache_shutdown_timeout();
-        let deadline = Instant::now() + Duration::from_secs(timeout);
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(timeout);
+        let acpi_nudge_at = started + Duration::from_secs(timeout / 2);
+        let mut acpi_sent = !ssh_shutdown_delivered;
         let mut clean = false;
         loop {
             if self.backend.vm_has_exited() {
@@ -539,13 +575,34 @@ impl Job {
                 eprintln!(
                     "{}",
                     format!(
-                        "VirtCI Warning: VM did not power off within {timeout}s; forcing stop."
+                        "[VirtCI Warning]: VM did not power off within {timeout}s so forcing stop."
                     )
                     .yellow()
                 );
                 break;
             }
+            if !acpi_sent && Instant::now() >= acpi_nudge_at {
+                acpi_sent = true;
+                if self.backend.request_powerdown() {
+                    println!(
+                        "{}",
+                        format!(
+                            "VM still running after {}s so also pressed the ACPI power button \
+                             (QMP system_powerdown).",
+                            started.elapsed().as_secs()
+                        )
+                        .dimmed()
+                    );
+                }
+            }
             tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
+        if clean {
+            println!(
+                "{}",
+                format!("VM powered off after {}s.", started.elapsed().as_secs()).dimmed()
+            );
         }
 
         self.backend.stop_vm();

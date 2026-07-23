@@ -30,6 +30,27 @@ pub fn query_disk_io_stats(addr: SocketAddr) -> Option<DiskIoStats> {
     Some(sum_block_stats(&resp))
 }
 
+pub fn system_powerdown(addr: SocketAddr) -> bool {
+    fn inner(addr: SocketAddr) -> Option<()> {
+        let stream = TcpStream::connect_timeout(&addr, QMP_IO_TIMEOUT).ok()?;
+        stream.set_read_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
+        stream.set_write_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
+
+        let mut reader = BufReader::new(stream.try_clone().ok()?);
+        let mut writer = stream;
+
+        read_json_line(&mut reader)?;
+
+        send(&mut writer, r#"{"execute":"qmp_capabilities"}"#)?;
+        read_return(&mut reader)?;
+
+        send(&mut writer, r#"{"execute":"system_powerdown"}"#)?;
+        read_return(&mut reader)?;
+        Some(())
+    }
+    inner(addr).is_some()
+}
+
 fn send(writer: &mut TcpStream, line: &str) -> Option<()> {
     writer.write_all(line.as_bytes()).ok()?;
     writer.write_all(b"\r\n").ok()?;
