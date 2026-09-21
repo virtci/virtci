@@ -9,6 +9,8 @@ scripts/swtpm
 scripts/libtpms
 tests/temp/
 .ci/upstream/*.img
+.ci/upstream/*.iso
+!.ci/upstream/seed.iso
 .ci/temp/
 c_cpp_properties.json
 dillnotes.md
