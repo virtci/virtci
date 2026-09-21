@@ -29,6 +29,15 @@ pub enum Command {
     Shell(ShellArgs),
     Copy(CopyArgs),
     Serve(ServeArgs),
+    InspectIso(InspectIsoArgs),
+}
+
+/// Inspect an ISO. Will remove this.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "inspect-iso")]
+pub struct InspectIsoArgs {
+    #[argh(positional)]
+    pub file: PathBuf,
 }
 
 /// Get the VirtCI version

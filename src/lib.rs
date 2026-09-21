@@ -12,6 +12,7 @@ pub mod transfer_lock;
 pub mod util;
 pub mod vm_image;
 // pub mod web;
+pub mod client;
 pub mod yaml;
 
 use anyhow::Context;
@@ -134,6 +135,9 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
 
             // web::serve(&config);
             println!("soon!");
+        }
+        cli::Command::InspectIso(iso_args) => {
+            client::iso::inspect_iso(&iso_args.file);
         }
     }
 }
