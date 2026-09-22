@@ -5,6 +5,7 @@ use std::{path::Path, str::FromStr};
 
 use crate::util::cpu_arch::Arch;
 
+pub mod filesystem;
 pub mod installer;
 
 // Relevant reading.
@@ -156,5 +157,11 @@ pub fn inspect_iso(file: &Path) {
 
     println!("Volume Identifier {}", unsafe {
         str::from_utf8_unchecked(&sector.bytes[40..72])
+    });
+
+    println!("Root Directory Entry {:?}", unsafe {
+        filesystem::FileSystemRecord::parse_from_directory_entry_start(
+            sector.bytes.as_ptr().byte_add(156),
+        )
     });
 }
