@@ -85,6 +85,15 @@ impl Arch {
         }
     }
 
+    pub fn from_pe32_machine_field(value: u16) -> Option<Arch> {
+        match value {
+            0x8664 => Some(Arch::X64),
+            0xAA64 => Some(Arch::ARM64),
+            0x5064 => Some(Arch::RISCV64),
+            _ => None, // not supported currently
+        }
+    }
+
     /// [`Arch`] from a machine name as printed by `uname -m` or `/proc/sys/kernel/arch`.
     #[must_use]
     pub fn from_linux_machine_name(name: &str) -> Option<Arch> {

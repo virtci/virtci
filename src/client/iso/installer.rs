@@ -5,6 +5,29 @@ use serde_with::TimestampNanoSecondsWithFrac;
 
 use crate::{util::bin_version::BinVersion, vm_image::GuestOs};
 
+/*
+All of the information needed to automatically set up a VM from an ISO if possible:
+1. The CPU architecture.
+2. The OS itself (Linux, Windows, BSD).
+3. The distro (Ubnutu / Fedora / Debian, also Windows, FreeBSD).
+4. The distro version. This is sometimes relevant for edge cases.
+5. The distro flavour (desktop / server for example).
+6. If it supports automated setup.
+6a. If it supports automated setup, how to setup SSH, where the autoconfig mechanism lives, if it needs another drive, SSH key injection, EULA.
+6b. If doesn't support automated setup, provide the user precise instructions on how to.
+7. UEFI / BIOS / Any / None requirements.
+8. Any special drivers required.
+8a. Ensure network capabilities as a lot of things may need networking to setup. This includes virtio-net-pci for Windows for example.
+9. Validate that it's an installer .iso, not some other kind.
+10. Minimum / recommended hardware requirements.
+11. TPM required / recommended / optional.
+12. Secure boot required / supported / N/A.
+13. Can run over serial or needs graphics.
+14. Install lifecycle such as restarting and completion signals.
+15. Setting up the user account and probing SSH either for automation or after the user has done manual setup to validate the VM is ready for VirtCI use.
+16. Where to fetch extra media necessary on the host system or the internet (drivers, UEFI files, other).
+*/
+
 pub struct DetectedInstallOs {
     pub os: GuestOs,
     pub installer: Option<UnattendedInstaller>,
