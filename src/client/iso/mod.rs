@@ -3,8 +3,9 @@
 
 use std::{path::Path, str::FromStr};
 
-use crate::util::cpu_arch::Arch;
+use crate::{client::iso::extract::get_cpu_arch_from_efi_boot, util::cpu_arch::Arch};
 
+pub mod extract;
 pub mod filesystem;
 pub mod installer;
 
@@ -15,7 +16,7 @@ pub mod installer;
 
 pub struct IsoMetadata {
     arch: Arch,
-    boot_support: IsoBootSupport,
+    // boot_support: IsoBootSupport,
 }
 
 pub struct IsoBootSupport {
@@ -139,7 +140,7 @@ pub fn inspect_iso(file: &Path) {
     use std::io::{Read, Seek, SeekFrom};
 
     // ignore the first 16 sectors, so the first 32768 bytes.
-    let _ = opened_file.seek(SeekFrom::Start(32768));
+    let _ = opened_file.seek(SeekFrom::Start(16 * 2048));
 
     let mut sector = Iso9660Sector::default();
 
@@ -159,9 +160,93 @@ pub fn inspect_iso(file: &Path) {
         str::from_utf8_unchecked(&sector.bytes[40..72])
     });
 
-    println!("Root Directory Entry {:?}", unsafe {
+    let root_record = unsafe {
         filesystem::FileSystemRecord::parse_from_directory_entry_start(
             sector.bytes.as_ptr().byte_add(156),
         )
-    });
+        .expect("huh")
+    };
+    println!("");
+    println!("Root Directory Entry {root_record:?}");
+    println!("");
+
+    let entries = root_record
+        .directory_records(&mut opened_file.try_clone().expect("hmm"))
+        .expect("yeah");
+
+    for entry in entries {
+        println!("New FS Entry {entry:?}");
+        match entry.file_identifier.clone() {
+            filesystem::FileSystemRecordIdentifier::FileOrDir(items) => {
+                println!(
+                    "Entry Name as UTF8: {}, is file? {}, is directory? {}",
+                    std::str::from_utf8(items.as_slice()).expect("holy"),
+                    entry.is_file(),
+                    entry.is_directory()
+                )
+            }
+            _ => (),
+        }
+    }
+
+    println!(
+        "Read CPU arch: {:?}",
+        get_cpu_arch_from_efi_boot(&root_record, &mut opened_file.try_clone().expect("hmm"))
+    );
+
+    // let efi_boot_record = root_record
+    //     .record_for("efi/boot", &mut opened_file.try_clone().expect("hmm"))
+    //     .unwrap()
+    //     .unwrap();
+
+    // let efi_boot_entries = efi_boot_record
+    //     .directory_records(&mut opened_file.try_clone().expect("hmm"))
+    //     .expect("yeah");
+
+    // for entry in efi_boot_entries {
+    //     println!("");
+    //     println!("EFI/BOOT FS Entry {entry:?}");
+    //     match entry.file_identifier.clone() {
+    //         filesystem::FileSystemRecordIdentifier::FileOrDir(items) => {
+    //             let name = std::str::from_utf8(items.as_slice())
+    //                 .expect("holy")
+    //                 .trim_end_matches(";1");
+    //             println!(
+    //                 "Entry Name as UTF8 (with ';1' trimmed if present): {name}, is file? {}, is directory? {}",
+    //                 entry.is_file(),
+    //                 entry.is_directory()
+    //             );
+    //             if !name.starts_with("BOOT") || !name.ends_with(".EFI") {
+    //                 continue;
+    //             }
+
+    //             let _ = opened_file.seek(SeekFrom::Start(entry.location_of_extent as u64 * 2048));
+    //             let bytes_to_read = usize::min(entry.data_length as usize, 4096);
+    //             let mut maybe_elf_bytes = Vec::<u8>::with_capacity(bytes_to_read);
+    //             maybe_elf_bytes.resize(bytes_to_read, 0);
+
+    //             let _ = opened_file.read_exact(&mut maybe_elf_bytes);
+
+    //             let arch_from_elf = Arch::from_elf_header(&maybe_elf_bytes);
+    //             println!("Parsed ELF Arch: {arch_from_elf:?}");
+    //             let pe_offset = u32::from_le_bytes(
+    //                 maybe_elf_bytes[0x3c as usize..0x3c as usize + 4]
+    //                     .try_into()
+    //                     .expect("slice length mismatch"),
+    //             );
+
+    //             println!(
+    //                 "At pe_offset: {:x?}",
+    //                 &maybe_elf_bytes[pe_offset as usize..pe_offset as usize + 8]
+    //             );
+
+    //             // println!("Actual bytes trying to parse ELF arch: {maybe_elf_bytes:?}");
+    //             println!(
+    //                 "At 0x12: {:?}",
+    //                 &maybe_elf_bytes[0x12 as usize..0x12 as usize + 12]
+    //             );
+    //         }
+    //         _ => (),
+    //     }
+    // }
 }
