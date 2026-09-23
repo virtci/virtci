@@ -10,3 +10,5 @@ scripts/libtpms
 tests/temp/
 .ci/upstream/*.img
 .ci/temp/
+c_cpp_properties.json
+dillnotes.md

@@ -18,6 +18,7 @@ use anyhow::Context;
 use global_paths::VciGlobalPaths;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::println;
 use std::sync::OnceLock;
 
 use argh::FromArgs;
@@ -40,12 +41,26 @@ pub fn run_virtci_cli(paths: &VciGlobalPaths) {
     run_virtci(paths, argh::from_env());
 }
 
+/// Prints the VirtCI version information
+pub fn print_version_cli() {
+    let describe = env!("VIRTCI_GIT_DESCRIBE");
+    if describe.is_empty() {
+        println!("VirtCI version {}", env!("CARGO_PKG_VERSION"));
+    } else {
+        println!("VirtCI version: {describe}");
+    }
+}
+
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     if let Err(e) = std::fs::create_dir_all(&paths.temp) {
         eprintln!(
             "Warning: failed to create temp directory {}: {e}",
             paths.temp.display()
         );
+    }
+    if args.version {
+        print_version_cli();
+        return;
     }
 
     let orphans = orphan::OrphanTracker::new();
@@ -56,27 +71,25 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     vm_image::edit::reconcile(paths);
 
     match args.command {
-        cli::Command::Version(_) => {
-            let describe = env!("VIRTCI_GIT_DESCRIBE");
-            if describe.is_empty() {
-                println!("VirtCI version: {}", env!("CARGO_PKG_VERSION"));
-            } else {
-                println!("VirtCI version: {describe}");
-            }
+        None => {
+            eprintln!("No command provided. Run --help for more information.");
+            std::process::exit(1);
         }
-        cli::Command::Run(run_args) => {
+        Some(cli::Command::Version(_)) => print_version_cli(),
+
+        Some(cli::Command::Run(run_args)) => {
             run_workflow_command(&run_args, paths, &orphans);
         }
-        cli::Command::Setup(setup_args) => {
+        Some(cli::Command::Setup(setup_args)) => {
             run_setup(&setup_args, paths);
         }
-        cli::Command::Cleanup(cleanup_args) => {
+        Some(cli::Command::Cleanup(cleanup_args)) => {
             run_cleanup(cleanup_args, paths);
         }
-        cli::Command::List(list_args) => {
+        Some(cli::Command::List(list_args)) => {
             vm_image::list::run_list(list_args.verbose, paths);
         }
-        cli::Command::Export(export_args) => {
+        Some(cli::Command::Export(export_args)) => {
             if let Err(e) =
                 vm_image::export::run_export(&export_args.name, export_args.output, paths)
             {
@@ -84,7 +97,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                 std::process::exit(1);
             }
         }
-        cli::Command::Import(import_args) => {
+        Some(cli::Command::Import(import_args)) => {
             if let Err(e) =
                 vm_image::import::run_import(&import_args.archive, paths, import_args.system)
             {
@@ -92,37 +105,37 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
                 std::process::exit(1);
             }
         }
-        cli::Command::Active(_) => {
+        Some(cli::Command::Active(_)) => {
             run_state::run_active(&paths.temp);
         }
-        cli::Command::Remove(remove_args) => {
+        Some(cli::Command::Remove(remove_args)) => {
             vm_image::remove::run_remove(&remove_args, paths);
         }
-        cli::Command::Clone(clone_args) => {
+        Some(cli::Command::Clone(clone_args)) => {
             if let Err(e) = vm_image::clone::run_clone(&clone_args, paths) {
                 eprintln!("Clone failed: {e}");
                 std::process::exit(1);
             }
         }
-        cli::Command::Edit(edit_args) => {
+        Some(cli::Command::Edit(edit_args)) => {
             if let Err(e) = vm_image::edit::run_edit(&edit_args, paths) {
                 eprintln!("Edit failed: {e}");
                 std::process::exit(1);
             }
         }
-        cli::Command::Boot(boot_args) => {
+        Some(cli::Command::Boot(boot_args)) => {
             vm_image::boot::run_boot(&boot_args, paths, &orphans);
         }
-        cli::Command::Shell(shell_args) => {
+        Some(cli::Command::Shell(shell_args)) => {
             run_state::run_shell(&shell_args, &paths.temp);
         }
-        cli::Command::Copy(copy_args) => {
+        Some(cli::Command::Copy(copy_args)) => {
             if let Err(e) = run_state::run_copy(&copy_args, &paths.temp) {
                 eprintln!("Copy failed: {e}");
                 std::process::exit(1);
             }
         }
-        cli::Command::Serve(_serve_args) => {
+        Some(cli::Command::Serve(_serve_args)) => {
             // let mut config = crate::web::ServerConfig::default();
             // if let Some(port) = serve_args.port {
             //     config.port = port;
