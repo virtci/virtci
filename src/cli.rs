@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use argh::FromArgs;
-use russh::keys::ssh_key::certificate::OptionsMap;
+//use russh::keys::ssh_key::certificate::OptionsMap;
 use std::path::PathBuf;
 
 /// VCI: Virtual Machine CI Runner

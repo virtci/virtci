@@ -18,8 +18,8 @@ use anyhow::Context;
 use global_paths::VciGlobalPaths;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::println;
 use std::sync::OnceLock;
+use std::{eprintln, println, unreachable};
 
 use argh::FromArgs;
 
@@ -52,24 +52,30 @@ pub fn print_version_cli() {
 }
 
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
+    if args.version {
+        print_version_cli();
+        return;
+    }
+    let Some(ref _command) = args.command else {
+        eprintln!("No command provided. Run --help for more information.");
+        std::process::exit(1);
+    };
+
     if let Err(e) = std::fs::create_dir_all(&paths.temp) {
         eprintln!(
             "Warning: failed to create temp directory {}: {e}",
             paths.temp.display()
         );
     }
-    if args.version {
-        print_version_cli();
-        return;
-    }
 
-    let orphans = orphan::OrphanTracker::new();
+    let orphans: orphan::OrphanTracker = orphan::OrphanTracker::new();
     setup_signal_handlers(orphans.clone());
 
     backend::qemu::cleanup_stale_qemu_files(paths);
     backend::tart::cleanup_stale_tart_clones(&paths.temp);
     vm_image::edit::reconcile(paths);
 
+    // handles cases that exits early
     match args.command {
         None => {
             eprintln!("No command provided. Run --help for more information.");
