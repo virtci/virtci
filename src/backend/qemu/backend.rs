@@ -102,6 +102,9 @@ pub struct QemuBackend {
     /// QEMU QMP monitor thingy. Only used for native exec targets, not WSL2 but that has the more
     /// reliable file-metadata stuff so generally fine. QMP endpoints bind to 127.0.0.1 only.
     pub qmp: Option<PortFlock>,
+    /// Whether the running QEMU was launched with a hardware accelerator requested
+    /// (may not have for real).
+    hw_accel: bool,
 }
 
 impl QemuBackend {
@@ -217,6 +220,7 @@ impl QemuBackend {
             qemu_process: None,
             tpm_process: None,
             qmp: None,
+            hw_accel: false,
         })
     }
 
@@ -438,9 +442,13 @@ impl VmBackend for QemuBackend {
 
         let qemu = loop {
             let cmd = super::binaries::build_qemu_args(self)?;
+            self.hw_accel = cmd.hw_accel;
 
             eprintln!(
-                "QEMU launch command... Attempting to bind QEMU to TCP port [{}]:",
+                "QEMU {}.{}.{} launch command... Attempting to bind QEMU to TCP port [{}]:",
+                cmd.version.major,
+                cmd.version.minor,
+                cmd.version.patch,
                 self.host_port.as_ref().expect("what").port
             );
             eprintln!(
@@ -624,6 +632,30 @@ impl VmBackend for QemuBackend {
 
     fn vm_disk_io_stats(&self) -> Option<crate::backend::DiskIoStats> {
         super::qmp::query_disk_io_stats(self.qmp_addr()?)
+    }
+
+    fn vcpu_samples(&self) -> Option<Vec<Vec<crate::backend::VcpuState>>> {
+        const SAMPLES: usize = 5;
+        const SAMPLE_GAP: std::time::Duration = std::time::Duration::from_secs(1);
+
+        if !self.hw_accel {
+            return None;
+        }
+        let addr = self.qmp_addr()?;
+        // HVF and WHPX have no QMP query, so for them the requested accelerator is trusted.
+        // TODO improve this.
+        if matches!(self.exec_target, HostExecTarget::Linux) && !super::qmp::kvm_enabled(addr)? {
+            return None;
+        }
+
+        let mut samples = Vec::with_capacity(SAMPLES);
+        for sample in 0..SAMPLES {
+            if sample > 0 {
+                std::thread::sleep(SAMPLE_GAP);
+            }
+            samples.push(super::qmp::vcpu_states(addr)?);
+        }
+        Some(samples)
     }
 
     fn disk_integrity_report(&self) -> Option<String> {

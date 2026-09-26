@@ -509,6 +509,10 @@ fn firmware_pair_exists(exec_target: &HostExecTarget, code: &str, vars: &str) ->
 pub struct QemuBuiltCommand {
     pub program: String,
     pub arguments: Vec<String>,
+    pub version: BinVersion,
+    /// Whether a hardware accelerator (KVM/HVF/WHPX) was requested. QEMU can still fall back to
+    /// TCG if it fails to initialize.
+    pub hw_accel: bool,
 }
 
 /// Append a QEMU `-flag value` pair. MUST be two separate argv strings.
@@ -698,6 +702,8 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
 
     push_arg(&mut args, "-rtc", "base=utc");
 
+    let mut whpx = false;
+
     match backend.exec_target {
         HostExecTarget::Linux | HostExecTarget::WSL2(_) => {
             if hw_accel {
@@ -714,9 +720,11 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
             // MMIO that UEFI needs (QEMU GitLab #513). In either case fall through to TCG below.
             let has_uefi = backend.uefi_code.is_some() || backend.uefi_vars.is_some();
             if !has_uefi && arch == Arch::host() {
+                whpx = true;
                 push_arg(&mut args, "-accel", "whpx");
             } else {
-                push_arg(&mut args, "-icount", "shift=0,sleep=on");
+                // For some reason Windows x86_64 under VM just completely is failing to boot with this not off?
+                push_arg(&mut args, "-icount", "off");
             }
         }
     }
@@ -772,6 +780,8 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
     Ok(QemuBuiltCommand {
         program,
         arguments: args,
+        version,
+        hw_accel: hw_accel || whpx,
     })
 }
 

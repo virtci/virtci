@@ -1,6 +1,7 @@
 // Copyright (C) 2026 gabkhanfig
 // SPDX-License-Identifier: GPL-2.0-only
 
+mod boot_report;
 pub mod cache;
 mod command;
 pub mod copy;
@@ -15,8 +16,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use std::fmt::Write;
-
 use anyhow::Context;
 use russh::client;
 use russh::keys::PrivateKeyWithHashAlg;
@@ -29,6 +28,7 @@ use crate::{
     vm_image::{GuestOs, SshTarget},
     yaml,
 };
+use boot_report::VmLiveness;
 
 pub const SSH_WAIT_TIMEOUT: u64 = 600;
 pub const SSH_POLL_INTERVAL: u64 = 2;
@@ -961,33 +961,65 @@ async fn exec_trivial(handle: &client::Handle<ClientHandler>, os: GuestOs) -> bo
 
 /// Actually count the bytes in the log rather than `stat`ing the file cause Windows seemingly
 /// does the writes in bursts? Not sure why.
+/// Drains the serial log as it grows, counting bytes and following the kernel's printk timestamps
+/// to measure how fast the guest clock runs.
 struct SerialCounter {
     path: Option<std::path::PathBuf>,
     file: Option<std::fs::File>,
     total: u64,
+    /// Bytes after the last newline, held until the rest of the line arrives.
+    partial: Vec<u8>,
+    clock: boot_report::GuestClock,
 }
 
 impl SerialCounter {
+    /// A line with no newline in sight this long is not a console line worth parsing.
+    const MAX_PARTIAL: usize = 64 * 1024;
+
     fn new(path: Option<std::path::PathBuf>) -> Self {
         Self {
             path,
             file: None,
             total: 0,
+            partial: Vec::new(),
+            clock: boot_report::GuestClock::default(),
         }
     }
 
-    fn poll(&mut self) -> u64 {
+    /// Read whatever the guest wrote since the last poll, `wall` into the boot. Returns the total
+    /// bytes read so far.
+    fn poll(&mut self, wall: Duration) -> u64 {
+        use std::io::Read;
+
         if self.file.is_none()
             && let Some(p) = &self.path
         {
             self.file = std::fs::File::open(p).ok();
         }
         if let Some(f) = &mut self.file
-            && let Ok(n) = std::io::copy(f, &mut std::io::sink())
+            && let Ok(n) = f.read_to_end(&mut self.partial)
         {
-            self.total = self.total.saturating_add(n);
+            self.total = self.total.saturating_add(n as u64);
+            self.scan_lines(wall);
         }
         self.total
+    }
+
+    fn scan_lines(&mut self, wall: Duration) {
+        let Some(end) = self.partial.iter().rposition(|&b| b == b'\n') else {
+            if self.partial.len() > Self::MAX_PARTIAL {
+                self.partial.clear();
+            }
+            return;
+        };
+        let complete: Vec<u8> = self.partial.drain(..=end).collect();
+        let newest = String::from_utf8_lossy(&complete)
+            .lines()
+            .rev()
+            .find_map(boot_report::kernel_timestamp);
+        if let Some(guest_secs) = newest {
+            self.clock.observe(guest_secs, wall);
+        }
     }
 }
 
@@ -1222,7 +1254,7 @@ pub async fn wait_for_ssh_watching(
     let start = Instant::now();
     let mut last_status = start;
     let mut banner_seen = false;
-    let mut status_bytes = serial.poll();
+    let mut status_bytes = serial.poll(Duration::ZERO);
 
     let mut watch = BootWatch::new(
         idle_timeout,
@@ -1236,10 +1268,10 @@ pub async fn wait_for_ssh_watching(
         if let Some(err) = backend.vm_exit_error() {
             anyhow::bail!(
                 "VM process exited while waiting for SSH: {err}{}",
-                boot_failure_context(
-                    serial_path.as_deref(),
-                    disk_path.as_deref(),
-                    backend.disk_integrity_report(),
+                boot_report::BootFailureReport::collect(
+                    &*backend,
+                    VmLiveness::Exited,
+                    serial.clock
                 ),
             );
         }
@@ -1263,7 +1295,7 @@ pub async fn wait_for_ssh_watching(
             SshProgress::NotReady => {}
         }
 
-        let serial_bytes = serial.poll();
+        let serial_bytes = serial.poll(start.elapsed());
 
         // Disk-write liveness: a grown file or a bumped mtime both mean the guest just wrote.
         if let Some(fp) = disk_path.as_deref().and_then(disk_fingerprint)
@@ -1300,20 +1332,20 @@ pub async fn wait_for_ssh_watching(
                  CPU activity, and SSH not up). Change VIRTCI_VM_START_IDLE_TIMEOUT to increase the idle timeout.\n{}{}",
                 status.idle.as_secs(),
                 signals,
-                boot_failure_context(
-                    serial_path.as_deref(),
-                    disk_path.as_deref(),
-                    backend.disk_integrity_report(),
+                boot_report::BootFailureReport::collect(
+                    &*backend,
+                    VmLiveness::Running,
+                    serial.clock
                 ),
             ),
             BootVerdict::MaxTimeout => anyhow::bail!(
                 "VM did not become SSH-reachable within the {max_timeout_secs}s maximum boot \
                  timeout. Change VIRTCI_VM_START_MAX_TIMEOUT to increase the max timeout.\n{}{}",
                 signals,
-                boot_failure_context(
-                    serial_path.as_deref(),
-                    disk_path.as_deref(),
-                    backend.disk_integrity_report(),
+                boot_report::BootFailureReport::collect(
+                    &*backend,
+                    VmLiveness::Running,
+                    serial.clock
                 ),
             ),
             BootVerdict::Booting => {}
@@ -1374,10 +1406,10 @@ pub async fn wait_for_ssh_watching(
         if let Some(err) = backend.vm_exit_error() {
             anyhow::bail!(
                 "VM process exited while waiting for SSH: {err}{}",
-                boot_failure_context(
-                    serial_path.as_deref(),
-                    disk_path.as_deref(),
-                    backend.disk_integrity_report(),
+                boot_report::BootFailureReport::collect(
+                    &*backend,
+                    VmLiveness::Exited,
+                    serial.clock
                 ),
             );
         }
@@ -1386,10 +1418,10 @@ pub async fn wait_for_ssh_watching(
                 "VM did not stay SSH-reachable within the {max_timeout_secs}s maximum boot \
                  timeout (SSH kept dropping during the post-boot settle window). Tune with \
                  VIRTCI_VM_START_MAX_TIMEOUT.{}",
-                boot_failure_context(
-                    serial_path.as_deref(),
-                    disk_path.as_deref(),
-                    backend.disk_integrity_report(),
+                boot_report::BootFailureReport::collect(
+                    &*backend,
+                    VmLiveness::Running,
+                    serial.clock
                 ),
             );
         }
@@ -1425,190 +1457,6 @@ pub async fn wait_for_ssh(ssh: &SshTarget, os: GuestOs, timeout_secs: u64) -> Op
         }
         tokio::time::sleep(poll).await;
     }
-}
-
-/// Attempt to get last 4KB of serial log. Formatted for log output. Returns an
-/// empty string when there's no log or it can't be read.
-fn serial_tail(path: Option<&std::path::Path>) -> String {
-    use std::io::{Read, Seek, SeekFrom};
-
-    const TAIL_BYTES: u64 = 4096;
-    let Some(path) = path else {
-        return String::new();
-    };
-    let (Ok(mut file), Ok(len)) = (
-        std::fs::File::open(path),
-        std::fs::metadata(path).map(|m| m.len()),
-    ) else {
-        return String::new();
-    };
-    if len == 0 {
-        return "\n(serial log is empty — the guest produced no console output)".to_string();
-    }
-    let from = len.saturating_sub(TAIL_BYTES);
-    if file.seek(SeekFrom::Start(from)).is_err() {
-        return String::new();
-    }
-    let mut buf = Vec::new();
-    if file.take(TAIL_BYTES).read_to_end(&mut buf).is_err() {
-        return String::new();
-    }
-    let tail = String::from_utf8_lossy(&buf);
-    format!(
-        "[VirtCI] last {} bytes of serial log:\n{}",
-        buf.len(),
-        tail.trim_end()
-    )
-}
-
-/// Attempt to diagnose the serial output issues with some known snippets that appear under certain
-/// failure cases.
-fn diagnose_serial(path: Option<&std::path::Path>) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    const SCAN_BYTES: u64 = 64 * 1024;
-    const DOC: &str = "See CHANGELOG.md for known issues";
-
-    let path = path?;
-    let mut file = std::fs::File::open(path).ok()?;
-    let len = std::fs::metadata(path).ok()?.len();
-    if len == 0 {
-        return None;
-    }
-    let from = len.saturating_sub(SCAN_BYTES);
-    file.seek(SeekFrom::Start(from)).ok()?;
-    let mut buf = Vec::new();
-    file.take(SCAN_BYTES).read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-
-    if text.contains("Kernel panic") {
-        return Some(format!(
-            "DIAGNOSIS: VM KERNEL PANIC in the serial log so the kernel halted, meaning SSH will never \
-             come up. {DOC}"
-        ));
-    }
-    if text.contains("UNEXPECTED INCONSISTENCY")
-        || text.contains("RUN fsck MANUALLY")
-        || text.contains("fsck failed")
-    {
-        return Some(format!(
-            "DIAGNOSIS: filesystem check (fsck) reported problems on boot so the VM disk may be \
-             corrupt. Check it with `qemu-img check`. {DOC}"
-        ));
-    }
-    if text.contains("emergency.target")
-        || text.contains("emergency mode")
-        || text.contains("system maintenance")
-    {
-        return Some(format!(
-            "DIAGNOSIS: VM booted into systemd emergency mode. A boot unit failed, so sshd never \
-             starts and the boot cannot complete (the watcher correctly sees no progress). See the \
-             guest boot-failure diagnostics below (failed units + journal) for which unit tripped it; \
-             a failed/slow mount, device timeout, or a corrupt disk can all cause it. This has so far \
-             only been seen on the Windows-host restart path. {DOC}"
-        ));
-    }
-    if text.contains("rescue.target") || text.contains("rescue mode") {
-        return Some(format!(
-            "DIAGNOSIS: VM booted into systemd rescue mode. Boot did not reach multi-user, so \
-             sshd is not running. {DOC}"
-        ));
-    }
-    None
-}
-
-fn serial_diag_block(path: Option<&std::path::Path>) -> Option<String> {
-    const START: &str = "=== VIRTCI BOOT DIAGNOSTICS";
-    const END: &str = "=== END VIRTCI BOOT DIAGNOSTICS";
-
-    let path = path?;
-    let bytes = std::fs::read(path).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    let start = text.rfind(START)?;
-    let end = match text[start..].find(END) {
-        Some(rel) => {
-            let marker = start + rel;
-            text[marker..]
-                .find('\n')
-                .map_or(text.len(), |nl| marker + nl)
-        }
-        None => text.len(),
-    };
-    Some(text[start..end].trim_end().to_string())
-}
-
-fn serial_failure_lines(path: Option<&std::path::Path>) -> Option<String> {
-    const MARKERS: &[&str] = &[
-        "Dependency failed for",
-        "Failed to start",
-        "Failed to mount",
-        "Timed out waiting for",
-        "FAILED]",
-        "start request repeated too quickly",
-        "UNEXPECTED INCONSISTENCY",
-        "Kernel panic",
-    ];
-    const MAX: usize = 40;
-
-    let path = path?;
-    let bytes = std::fs::read(path).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-
-    let mut lines: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        let l = line.trim();
-        if !l.is_empty() && MARKERS.iter().any(|m| l.contains(m)) && !lines.contains(&l) {
-            lines.push(l);
-        }
-    }
-    if lines.is_empty() {
-        return None;
-    }
-
-    let from = lines.len().saturating_sub(MAX);
-    Some(lines[from..].join("\n"))
-}
-
-fn boot_failure_context(
-    serial_path: Option<&std::path::Path>,
-    disk_path: Option<&std::path::Path>,
-    disk_check: Option<String>,
-) -> String {
-    let mut out = String::new();
-    if let Some(diag) = diagnose_serial(serial_path) {
-        out.push_str("\n[VirtCI] ");
-        out.push_str(&diag);
-    }
-    if let Some(fails) = serial_failure_lines(serial_path) {
-        out.push_str(
-            "\n[VirtCI] unit failures found in the serial log (these pull in emergency mode):\n",
-        );
-        out.push_str(&fails);
-    }
-    if let Some(block) = serial_diag_block(serial_path) {
-        out.push_str(
-            "\n[VirtCI] guest boot-failure diagnostics (dumped to serial by the guest):\n",
-        );
-        out.push_str(&block);
-    }
-    match disk_check {
-        Some(report) => {
-            out.push_str("\n[VirtCI] qemu-img check of the disk:\n");
-            out.push_str(&report);
-        }
-        None => {
-            if let Some(disk) = disk_path {
-                let _ = write!(
-                    out,
-                    "\n[VirtCI] to rule out disk corruption, run: `qemu-img check \"{}\"` if you can (you may want to use virtci shell)",
-                    disk.display()
-                );
-            }
-        }
-    }
-    out.push('\n');
-    out.push_str(&serial_tail(serial_path));
-    out
 }
 
 pub struct ClientHandler;

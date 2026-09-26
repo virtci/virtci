@@ -5,56 +5,114 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
-use crate::backend::DiskIoStats;
+use crate::backend::{DiskIoStats, VcpuState};
 
 /// QMP should never take this long.
 const QMP_IO_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Connects to QMP TCP endpoint and returns the cumulative block-layer IO counters across every
-/// drive, or None if it wasn't able to.
-pub fn query_disk_io_stats(addr: SocketAddr) -> Option<DiskIoStats> {
-    let stream = TcpStream::connect_timeout(&addr, QMP_IO_TIMEOUT).ok()?;
-    stream.set_read_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
-    stream.set_write_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
-
-    let mut reader = BufReader::new(stream.try_clone().ok()?);
-    let mut writer = stream;
-
-    read_json_line(&mut reader)?;
-
-    send(&mut writer, r#"{"execute":"qmp_capabilities"}"#)?;
-    read_return(&mut reader)?;
-
-    send(&mut writer, r#"{"execute":"query-blockstats"}"#)?;
-    let resp = read_return(&mut reader)?;
-    Some(sum_block_stats(&resp))
+/// A negotiated QMP connection, ready for commands.
+struct QmpSession {
+    reader: BufReader<TcpStream>,
+    writer: TcpStream,
 }
 
-pub fn system_powerdown(addr: SocketAddr) -> bool {
-    fn inner(addr: SocketAddr) -> Option<()> {
+impl QmpSession {
+    /// Connect, read the greeting, and leave capabilities negotiation mode.
+    fn connect(addr: SocketAddr) -> Option<Self> {
         let stream = TcpStream::connect_timeout(&addr, QMP_IO_TIMEOUT).ok()?;
         stream.set_read_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
         stream.set_write_timeout(Some(QMP_IO_TIMEOUT)).ok()?;
 
-        let mut reader = BufReader::new(stream.try_clone().ok()?);
-        let mut writer = stream;
-
-        read_json_line(&mut reader)?;
-
-        send(&mut writer, r#"{"execute":"qmp_capabilities"}"#)?;
-        read_return(&mut reader)?;
-
-        send(&mut writer, r#"{"execute":"system_powerdown"}"#)?;
-        read_return(&mut reader)?;
-        Some(())
+        let mut session = Self {
+            reader: BufReader::new(stream.try_clone().ok()?),
+            writer: stream,
+        };
+        read_json_line(&mut session.reader)?;
+        session.execute(&serde_json::json!({ "execute": "qmp_capabilities" }))?;
+        Some(session)
     }
-    inner(addr).is_some()
+
+    /// Send one command and return its `return` value, `None` on an error reply or IO failure.
+    fn execute(&mut self, command: &serde_json::Value) -> Option<serde_json::Value> {
+        self.writer.write_all(command.to_string().as_bytes()).ok()?;
+        self.writer.write_all(b"\r\n").ok()?;
+        self.writer.flush().ok()?;
+        read_return(&mut self.reader)
+    }
+
+    /// Run an HMP command (such as `info registers -a`) and return its text output.
+    fn human_monitor_command(&mut self, command_line: &str) -> Option<String> {
+        let ret = self.execute(&serde_json::json!({
+            "execute": "human-monitor-command",
+            "arguments": { "command-line": command_line },
+        }))?;
+        ret.as_str().map(str::to_string)
+    }
 }
 
-fn send(writer: &mut TcpStream, line: &str) -> Option<()> {
-    writer.write_all(line.as_bytes()).ok()?;
-    writer.write_all(b"\r\n").ok()?;
-    writer.flush().ok()
+/// Connects to QMP TCP endpoint and returns the cumulative block-layer IO counters across every
+/// drive, or None if it wasn't able to.
+pub fn query_disk_io_stats(addr: SocketAddr) -> Option<DiskIoStats> {
+    let resp = QmpSession::connect(addr)?
+        .execute(&serde_json::json!({ "execute": "query-blockstats" }))?;
+    Some(sum_block_stats(&resp))
+}
+
+/// Whether QEMU is actually running on KVM. `-accel kvm -accel tcg` can silently fall back to TCG
+/// when KVM can't initialize.
+pub fn kvm_enabled(addr: SocketAddr) -> Option<bool> {
+    let resp =
+        QmpSession::connect(addr)?.execute(&serde_json::json!({ "execute": "query-kvm" }))?;
+    resp.get("enabled").and_then(serde_json::Value::as_bool)
+}
+
+/// Every vCPU's program counter right now, from `info registers -a`.
+pub fn vcpu_states(addr: SocketAddr) -> Option<Vec<VcpuState>> {
+    let dump = QmpSession::connect(addr)?.human_monitor_command("info registers -a")?;
+    Some(parse_vcpu_states(&dump))
+}
+
+pub fn system_powerdown(addr: SocketAddr) -> bool {
+    QmpSession::connect(addr)
+        .and_then(|mut qmp| qmp.execute(&serde_json::json!({ "execute": "system_powerdown" })))
+        .is_some()
+}
+
+/// Pull each vCPU's program counter out of an `info registers -a` dump. `CPU#n` headers separate
+/// the vCPUs; the PC line differs per arch: aarch64 `PC=`, x86 `RIP=`/`EIP=` (with `HLT=`), riscv
+/// ` pc       <hex>`.
+fn parse_vcpu_states(dump: &str) -> Vec<VcpuState> {
+    let hex = |s: &str| u64::from_str_radix(s.split_whitespace().next()?, 16).ok();
+
+    let mut states = Vec::new();
+    let mut cpu = 0;
+    for line in dump.lines() {
+        let line = line.trim();
+        if let Some(n) = line.strip_prefix("CPU#") {
+            cpu = n.trim().parse().unwrap_or(cpu);
+            continue;
+        }
+        let (pc, halted) = if let Some(rest) = line.strip_prefix("PC=") {
+            (hex(rest), None)
+        } else if let Some(rest) = line
+            .strip_prefix("RIP=")
+            .or_else(|| line.strip_prefix("EIP="))
+        {
+            let halted = line
+                .split_whitespace()
+                .find_map(|field| field.strip_prefix("HLT="))
+                .map(|v| v == "1");
+            (hex(rest), halted)
+        } else if let Some(rest) = line.strip_prefix("pc ") {
+            (hex(rest), None)
+        } else {
+            continue;
+        };
+        if let Some(pc) = pc {
+            states.push(VcpuState { cpu, pc, halted });
+        }
+    }
+    states
 }
 
 /// Read one line and parse it as JSON, skipping blank lines.
@@ -187,5 +245,54 @@ mod tests {
         let mut input =
             std::io::Cursor::new("{\"error\":{\"class\":\"GenericError\"}}\n".to_string());
         assert!(super::read_return(&mut input).is_none());
+    }
+
+    #[test]
+    fn parses_aarch64_vcpus() {
+        let dump = "CPU#0\n\
+                    PC=ffff800081b1b9a0 X00=0000000000000000 X01=0000000000000001\n\
+                    PSTATE=00000000804000c5 N--- EL1h     FPCR=00000000 FPSR=00000000\n\
+                    CPU#1\n\
+                    PC=ffff800080023294 X00=ffff800085633988 X01=ffff800085633a66\n";
+        let states = super::parse_vcpu_states(dump);
+        assert_eq!(
+            states,
+            vec![
+                crate::backend::VcpuState {
+                    cpu: 0,
+                    pc: 0xffff_8000_81b1_b9a0,
+                    halted: None
+                },
+                crate::backend::VcpuState {
+                    cpu: 1,
+                    pc: 0xffff_8000_8002_3294,
+                    halted: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_x86_vcpus_with_halt_state() {
+        let dump = "CPU#0\r\n\
+                    RAX=0000000000000000 RBX=0000000000000000\r\n\
+                    RIP=00007a8f6e0dd458 RFL=00000202 [-------] CPL=3 II=0 A20=1 SMM=0 HLT=0\r\n\
+                    CPU#1\r\n\
+                    EIP=000052fa EFL=00000246 [---Z-P-] CPL=0 II=0 A20=1 SMM=0 HLT=1\r\n";
+        let states = super::parse_vcpu_states(dump);
+        assert_eq!(states.len(), 2);
+        assert_eq!(states[0].pc, 0x7a8f_6e0d_d458);
+        assert_eq!(states[0].halted, Some(false));
+        assert_eq!(states[1].cpu, 1);
+        assert_eq!(states[1].pc, 0x52fa);
+        assert_eq!(states[1].halted, Some(true));
+    }
+
+    #[test]
+    fn parses_riscv_vcpus() {
+        let dump = "CPU#0\n V      =   0\n pc       ffffffff80001234\n mhartid  0000000000000000\n";
+        let states = super::parse_vcpu_states(dump);
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].pc, 0xffff_ffff_8000_1234);
     }
 }
