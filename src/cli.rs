@@ -2,13 +2,18 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use argh::FromArgs;
+//use russh::keys::ssh_key::certificate::OptionsMap;
 use std::path::PathBuf;
 
 /// VCI: Virtual Machine CI Runner
 #[derive(FromArgs, Debug)]
 pub struct Args {
+    ///print --version information
+    #[argh(switch, short = 'V')]
+    pub version: bool,
+
     #[argh(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(FromArgs, Debug)]
