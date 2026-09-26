@@ -723,8 +723,7 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
                 whpx = true;
                 push_arg(&mut args, "-accel", "whpx");
             } else {
-                // For some reason Windows x86_64 under VM just completely is failing to boot with this not off?
-                push_arg(&mut args, "-icount", "off");
+                // For some reason Windows x86_64 under VM just completely is failing to boot with -icount not off
             }
         }
     }

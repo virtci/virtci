@@ -2,6 +2,12 @@
 
 VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Fixed Windows booting TCG VMs sometimes failing with `-icount` due to being far too slow.
+
 ## Version 0.4.0 - 2026-07-27
 
 ### Added
