@@ -26,6 +26,15 @@ pub struct VmStartConfig {
     pub disk_gb: Option<u64>,
 }
 
+/// Where one vCPU was executing at a sample instant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VcpuState {
+    pub cpu: usize,
+    pub pc: u64,
+    /// Whether the vCPU is halted waiting for an interrupt. Only x86 reports this I think.
+    pub halted: Option<bool>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DiskIoStats {
     pub rd_ops: u64,
@@ -116,6 +125,14 @@ pub trait VmBackend {
 
     /// Give it an honest effort to get a report of disk integrity to detect boot failure.
     fn disk_integrity_report(&self) -> Option<String> {
+        None
+    }
+
+    /// Several spaced-out samples of where each vCPU is executing, to tell a guest spinning in
+    /// one spot apart from an idle or merely slow one. Blocks for a few seconds. `None` unless the
+    /// VM is hardware accelerated: under TCG the reported PC is only synced at translation block
+    /// exits, so it can be arbitrarily stale.
+    fn vcpu_samples(&self) -> Option<Vec<Vec<VcpuState>>> {
         None
     }
 
