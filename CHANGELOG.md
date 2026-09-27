@@ -4,6 +4,10 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Added
+
+`virtci --version` and `virtci -V` to be consistent with other CLI tools.
+
 ### Fixed
 
 - Fixed Windows booting TCG VMs sometimes failing with `-icount` due to being far too slow.
