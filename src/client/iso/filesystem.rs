@@ -144,19 +144,30 @@ impl FileSystemRecord {
             .seek(SeekFrom::Start(old_seek))
             .expect("Why did restoring old seek fail?"); // restore since it's shared
 
+        const SECTOR_SIZE: usize = 2048;
+        let data_length = self.data_length as usize;
         let mut entries = Vec::<FileSystemRecord>::default();
 
         let start = entries_bytes.as_slice().as_ptr();
         let mut offset = 0 as usize;
-        while offset < self.data_length as usize
-            && unsafe { *start.byte_add(offset) > 0 } // the first byte is always the `len` field.
-            && (offset + unsafe { *start.byte_add(offset) as usize }) <= self.data_length as usize
-        {
-            let len = unsafe { *start.byte_add(offset) };
+        while offset < data_length {
+            let len = entries_bytes[offset] as usize;
+
+            if len == 0 {
+                // In fedora ISO and probably others, it can span multiple sectors,
+                // and the sectors are zero padded, so jump to the next.
+                offset = (offset / SECTOR_SIZE + 1) * SECTOR_SIZE;
+                continue;
+            }
+
             if len < 34 {
                 return Err(FileSystemRecordParseError::TooSmall);
             }
-            // TODO what if len says one thing but name len says another?
+
+            let sector_end = (offset / SECTOR_SIZE + 1) * SECTOR_SIZE;
+            if offset + len > sector_end.min(data_length) {
+                return Err(FileSystemRecordParseError::TooSmall); // TODO cross sectors somehow?
+            }
 
             let entry = unsafe {
                 FileSystemRecord::parse_from_directory_entry_start(start.byte_add(offset))?

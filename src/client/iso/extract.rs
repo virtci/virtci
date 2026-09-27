@@ -16,6 +16,8 @@ pub fn get_cpu_arch_from_efi_boot<T: Seek + Read>(
 
     let efi_boot_entries = efi_boot_record.directory_records(stream)?;
 
+    let mut found_architectures = Vec::<Arch>::default();
+
     // Should be PE32 or PE32+
     for entry in efi_boot_entries {
         match entry.file_identifier.clone() {
@@ -30,6 +32,7 @@ pub fn get_cpu_arch_from_efi_boot<T: Seek + Read>(
                     continue;
                 }
 
+                // TODO could be out of bounds reads. Fix
                 let file_bytes = entry.read_file_bytes(stream, Some(4096));
                 let pe_offset =
                     u32::from_le_bytes(file_bytes[0x3c as usize..0x3c as usize + 4].try_into()?);
@@ -47,11 +50,26 @@ pub fn get_cpu_arch_from_efi_boot<T: Seek + Read>(
                     file_bytes[pe_offset as usize + 5],
                 ]);
 
-                return Ok(Arch::from_pe32_machine_field(machine_arch_value));
+                if let Some(arch) = Arch::from_pe32_machine_field(machine_arch_value) {
+                    found_architectures.push(arch);
+                }
             }
             _ => (),
         }
     }
 
-    Ok(None)
+    let Some(first) = found_architectures.first() else {
+        return Ok(None);
+    };
+
+    if found_architectures.iter().all(|x| *x == *first) {
+        return Ok(Some(found_architectures[0]));
+    } else {
+        // TODO obviously don't print out here but get something useful?
+        println!(
+            "[VirtCI] Found mismatching architectures in EFI/BOOT/: {:?}",
+            found_architectures
+        );
+        return Ok(None);
+    }
 }
