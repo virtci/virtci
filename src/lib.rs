@@ -51,9 +51,26 @@ pub fn print_version_cli() {
     }
 }
 
+/// Silences the visualization of the progress indicators. It will display run, warnings or higher error logs.
+pub fn quiet_process() {
+    let quiet_process = env!("");
+    if quiet_process.is_empty() {
+        //wanna substitude the error code into the process to exit gracefully
+        std::process::exit(1);
+    } else {
+        //if not empty then it's provided a command
+        //If the process is running
+        ${1} > /dev/null 2>&1
+    }
+}
+
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     if args.version {
         print_version_cli();
+        return;
+    }
+    if args.quiet {
+        quiet_process();
         return;
     }
     let Some(ref _command) = args.command else {

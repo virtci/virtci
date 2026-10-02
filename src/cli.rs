@@ -34,12 +34,21 @@ pub enum Command {
     Shell(ShellArgs),
     Copy(CopyArgs),
     Serve(ServeArgs),
+    Quiet(QuietProcess),
 }
 
 /// Get the VirtCI version
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "version")]
 pub struct VersionCommand {}
+
+/// Quiets the process
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "quiet")]
+pub struct QuietProcess {
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
+}
 
 /// Run a workflow file
 #[derive(FromArgs, Debug)]
