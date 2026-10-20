@@ -26,7 +26,11 @@ pub fn run_export(
     let desc = super::load_image(name, &home.path)?;
     let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{name}.tar")));
 
-    println!("Exporting '{}' to {}", name, output_path.display());
+    crate::quiet_flag_helper(&format!(
+        "Exporting '{}' to {}",
+        name,
+        output_path.display()
+    ));
 
     let file = std::fs::File::create(&output_path)
         .with_context(|| format!("Failed to create {}", output_path.display()))?;
@@ -64,7 +68,7 @@ pub fn run_export(
 
     archive.finish().context("Failed to finalize archive")?;
 
-    println!("Export complete: {}", output_path.display());
+    crate::quiet_flag_helper(&format!("Export complete: {}", output_path.display()));
     Ok(())
 }
 
@@ -279,11 +283,11 @@ fn export_tart<W: std::io::Write>(
     let temp_dir = std::env::temp_dir();
     let tvm_temp_path = temp_dir.join(&tvm_filename);
 
-    println!(
+    crate::quiet_flag_helper(&format!(
         "  Running: tart export {} {}",
         tart.vm_name,
         tvm_temp_path.display()
-    );
+    ));
 
     let output = std::process::Command::new("tart")
         .arg("export")

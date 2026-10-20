@@ -37,7 +37,7 @@ impl<R: Read> Read for ProgressReader<R> {
             100.0
         };
 
-        if percent != self.last_percent {
+        if percent != self.last_percent && crate::QUIET_FLAG.get() != Some(&true) {
             self.last_percent = percent;
             print!(
                 "\r  {} ... {:.1}% ({}/{})\x1b[K",
