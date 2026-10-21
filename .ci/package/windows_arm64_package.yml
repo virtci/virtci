@@ -17,7 +17,22 @@ win-11-arm64:
       run: Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
     - name: Install Rust
-      run: curl -o rustup-init.exe https://win.rustup.rs/aarch64; .\rustup-init.exe -y
+      run: |
+        $ErrorActionPreference = "Stop"
+        & curl.exe -fsSL --retry 3 -o rustup-init.exe https://win.rustup.rs/aarch64
+        if ($LASTEXITCODE -ne 0) { throw "Failed to download rustup-init (curl exit $LASTEXITCODE)." }
+        .\rustup-init.exe -y --profile minimal --default-toolchain none
+        if ($LASTEXITCODE -ne 0) { throw "rustup-init failed (exit $LASTEXITCODE)." }
+        $rustup = Join-Path $env:USERPROFILE ".cargo\bin\rustup.exe"
+        # rustup keeps partial downloads, so retry is a resume!
+        for ($i = 1; $i -le 5; $i++) {
+          & $rustup toolchain install stable --profile minimal
+          if ($LASTEXITCODE -eq 0) { break }
+          if ($i -eq 5) { throw "rustup toolchain install failed after $i attempts" }
+          Start-Sleep -Seconds 10
+        }
+        & $rustup default stable
+        if ($LASTEXITCODE -ne 0) { throw "rustup default stable failed (exit $LASTEXITCODE)." }
 
     - name: Install Node and NPM
       # https://nodejs.org/dist/v24.16.0/SHASUMS256.txt

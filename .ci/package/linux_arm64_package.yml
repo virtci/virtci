@@ -14,7 +14,16 @@ ubuntu-arm64:
           - target
 
     - name: Install Rust
-      run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf --retry 3 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+        . "$HOME/.cargo/env"
+        # rustup keeps partial downloads, so retry is a resume!
+        for i in 1 2 3 4 5; do
+          rustup toolchain install stable --profile minimal && break
+          if [ "$i" -eq 5 ]; then echo "rustup toolchain install failed after $i attempts"; exit 1; fi
+          sleep 10
+        done
+        rustup default stable
 
     - name: Install Node and NPM
       # https://nodejs.org/dist/v24.16.0/SHASUMS256.txt
