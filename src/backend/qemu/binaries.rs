@@ -871,7 +871,7 @@ pub fn qemu_launch_outcome(
 
 #[cfg(test)]
 mod hyperv_tests {
-    use super::{HYPERV_ENLIGHTENMENTS, with_hyperv_enlightenments};
+    use super::{HYPERV_ENLIGHTENMENTS, with_hyperv_enlightenments_if_needed};
     use crate::util::cpu_arch::Arch;
     use crate::vm_image::{GuestOs, HostExecTarget};
 
@@ -883,7 +883,13 @@ mod hyperv_tests {
             HostExecTarget::WSL2("Ubuntu".to_string()),
         ] {
             assert_eq!(
-                with_hyperv_enlightenments("max", Arch::X64, GuestOs::Windows, &target, true),
+                with_hyperv_enlightenments_if_needed(
+                    "max",
+                    Arch::X64,
+                    GuestOs::Windows,
+                    &target,
+                    true
+                ),
                 expected
             );
         }
@@ -909,7 +915,7 @@ mod hyperv_tests {
         ];
         for (arch, os, target, hw_accel) in cases {
             assert_eq!(
-                with_hyperv_enlightenments("max", arch, os, &target, hw_accel),
+                with_hyperv_enlightenments_if_needed("max", arch, os, &target, hw_accel),
                 "max",
                 "{arch:?} {os:?} {target:?} hw_accel={hw_accel}"
             );
