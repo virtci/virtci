@@ -142,7 +142,7 @@ qemu-system-x86_64 \
 
 qemu-system-x86_64
 -machine q35
--cpu max
+-cpu max,hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-vpindex,hv-runtime,hv-synic,hv-stimer,hv-time,hv-frequencies,hv-tlbflush,hv-ipi
 -name win-x64
 -m 8192M
 -smp 4

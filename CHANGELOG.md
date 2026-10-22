@@ -11,6 +11,8 @@ VirtCI adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Fixed Windows booting TCG VMs sometimes failing with `-icount` due to being far too slow.
+- Fixed x86_64 Windows VMs running in Linux causing a massive slowdown to anything timer-heavy, such as nested QEMU TCG VMs.
+  - By default, now use `hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-vpindex,hv-runtime,hv-synic,hv-stimer,hv-time,hv-frequencies,hv-tlbflush,hv-ipi` for the QEMU CPU model for a Windows VM.
 
 ## Version 0.4.0 - 2026-07-27
 

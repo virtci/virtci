@@ -158,6 +158,29 @@ pub fn warn_arm64_tcg_on_old_qemu(version: &BinVersion) {
     }
 }
 
+/// `hv-stimer` needs `hv-synic`, `hv-vpindex` and `hv-time`. `hv-synic` and `hv-stimer` must be
+/// enabled together, or Windows keeps the RTC storm. See
+/// <https://www.qemu.org/docs/master/system/i386/hyperv.html>.
+const HYPERV_ENLIGHTENMENTS: &str = "hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-vpindex,\
+hv-runtime,hv-synic,hv-stimer,hv-time,hv-frequencies,hv-tlbflush,hv-ipi";
+
+/// Append [`HYPERV_ENLIGHTENMENTS`] to `cpu` for an x86_64 Windows guest running under KVM. These
+/// are KVM features, so HVF/WHPX/TCG launches are left alone.
+fn with_hyperv_enlightenments_if_needed(
+    cpu: &str,
+    arch: Arch,
+    os: crate::vm_image::GuestOs,
+    exec_target: &HostExecTarget,
+    hw_accel: bool,
+) -> String {
+    let kvm = hw_accel && matches!(exec_target, HostExecTarget::Linux | HostExecTarget::WSL2(_));
+    if kvm && arch == Arch::X64 && os == crate::vm_image::GuestOs::Windows {
+        format!("{cpu},{HYPERV_ENLIGHTENMENTS}")
+    } else {
+        cpu.to_string()
+    }
+}
+
 /// `hw_accel` is whether a same-arch hardware accelerator (KVM/HVF) is usable
 /// for this launch, NOT whether one was merely requested.
 #[allow(clippy::match_same_arms)]
@@ -564,7 +587,13 @@ pub fn build_qemu_args(backend: &super::backend::QemuBackend) -> anyhow::Result<
 
     let cpu = match &qemu_config.cpu_model {
         Some(model) => model.clone(),
-        None => binaries::qemu_cpu(arch, &backend.exec_target, hw_accel, &version).to_string(),
+        None => with_hyperv_enlightenments_if_needed(
+            binaries::qemu_cpu(arch, &backend.exec_target, hw_accel, &version),
+            arch,
+            backend.base_image.os,
+            &backend.exec_target,
+            hw_accel,
+        ),
     };
     push_arg(&mut args, "-cpu", cpu);
 
@@ -838,6 +867,60 @@ pub fn qemu_launch_outcome(
     }
 
     Ok(QemuLaunchOutcome::Running)
+}
+
+#[cfg(test)]
+mod hyperv_tests {
+    use super::{HYPERV_ENLIGHTENMENTS, with_hyperv_enlightenments_if_needed};
+    use crate::util::cpu_arch::Arch;
+    use crate::vm_image::{GuestOs, HostExecTarget};
+
+    #[test]
+    fn windows_x64_under_kvm_gets_enlightenments() {
+        let expected = format!("max,{HYPERV_ENLIGHTENMENTS}");
+        for target in [
+            HostExecTarget::Linux,
+            HostExecTarget::WSL2("Ubuntu".to_string()),
+        ] {
+            assert_eq!(
+                with_hyperv_enlightenments_if_needed(
+                    "max",
+                    Arch::X64,
+                    GuestOs::Windows,
+                    &target,
+                    true
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn other_launches_are_untouched() {
+        let cases = [
+            // TCG fallback: no KVM to provide them.
+            (Arch::X64, GuestOs::Windows, HostExecTarget::Linux, false),
+            // Not Windows.
+            (Arch::X64, GuestOs::Linux, HostExecTarget::Linux, true),
+            // Not x86.
+            (Arch::ARM64, GuestOs::Windows, HostExecTarget::Linux, true),
+            // HVF / WHPX are not KVM.
+            (Arch::X64, GuestOs::Windows, HostExecTarget::MacOS, true),
+            (
+                Arch::X64,
+                GuestOs::Windows,
+                HostExecTarget::WindowsNative,
+                true,
+            ),
+        ];
+        for (arch, os, target, hw_accel) in cases {
+            assert_eq!(
+                with_hyperv_enlightenments_if_needed("max", arch, os, &target, hw_accel),
+                "max",
+                "{arch:?} {os:?} {target:?} hw_accel={hw_accel}"
+            );
+        }
+    }
 }
 
 // The WSL2 probe helpers only exist on Windows builds.
