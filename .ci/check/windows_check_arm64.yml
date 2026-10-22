@@ -25,7 +25,7 @@ windows-check-arm64:
         $rustup = Join-Path $env:USERPROFILE ".cargo\bin\rustup.exe"
         # rustup keeps partial downloads, so retry is a resume!
         for ($i = 1; $i -le 5; $i++) {
-          & $rustup toolchain install stable --profile minimal
+          & $rustup toolchain install stable --profile minimal --component clippy,rustfmt && break
           if ($LASTEXITCODE -eq 0) { break }
           if ($i -eq 5) { throw "rustup toolchain install failed after $i attempts" }
           Start-Sleep -Seconds 10
