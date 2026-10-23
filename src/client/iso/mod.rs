@@ -3,7 +3,13 @@
 
 use std::{path::Path, str::FromStr};
 
-use crate::{client::iso::extract::get_cpu_arch_from_efi_boot, util::cpu_arch::Arch};
+use crate::{
+    client::iso::{
+        extract::FoundCpuArch,
+        filesystem::{VolumeDescriptorSet, udf::UdfSectorType},
+    },
+    util::cpu_arch::Arch,
+};
 
 pub mod extract;
 pub mod filesystem;
@@ -25,7 +31,9 @@ pub struct IsoBootSupport {
     // track the entries here too?
 }
 
-pub struct Iso9660Sector {
+pub const BYTES_PER_SECTOR: usize = 2048;
+
+pub struct IsoSector {
     /// Volume descriptor is 2048 bytes.
     /// Offset 0, Size 1, Field "Type"
     /// - `0` Boot record volume descriptor.
@@ -41,41 +49,52 @@ pub struct Iso9660Sector {
     /// - `'NSR03'` ECMA-167 Revision 3. UDF stuff.
     /// - `'TEA01'` Terminating Extended Area. Complementary with `'BEA01'` to mark its end.
     /// - `'CDW02'` ECMA-168 (CD-RW). Seemingly nothing uses this.
+    /// - Zeroes is unallocated space descriptor
     ///
     /// Offset 6, Size 1, Field "Version" (should always be 0x01)
     ///
     /// Offset 7, Size 2041, Field "Data" payload depending on "Type".
-    bytes: [u8; 2048],
+    bytes: [u8; BYTES_PER_SECTOR],
 }
 
-impl Iso9660Sector {
+impl IsoSector {
     /// Returns either the right sector type, or the byte value which is an unknown sector type.
-    pub fn sector_type(&self) -> Result<IsoSectorType, u8> {
-        return IsoSectorType::try_from(self.bytes[0]);
+    pub fn iso_9660_sector_type(&self) -> Result<Iso9660SectorType, u8> {
+        return Iso9660SectorType::try_from(self.bytes[0]);
+    }
+
+    pub fn udf_sector_type(&self) -> Result<UdfSectorType, u16> {
+        return UdfSectorType::try_from(u16::from_le_bytes([self.bytes[0], self.bytes[1]]));
     }
 
     pub fn standard_identifier(
         &self,
-    ) -> Result<IsoStandardIdentifier, IsoStandardIdentifierParseErr> {
+    ) -> Result<Option<IsoStandardIdentifier>, IsoStandardIdentifierParseErr> {
         let part = &self.bytes[1..6];
+        if part.iter().all(|&x| x == 0) {
+            return Ok(None);
+        }
         let s = match str::from_utf8(part) {
             Ok(string) => string,
             // if not valid utf8, definitely not valid ascii
             Err(_) => return Err(IsoStandardIdentifierParseErr::InvalidAscii),
         };
-        return IsoStandardIdentifier::from_str(s);
+        match IsoStandardIdentifier::from_str(s) {
+            Ok(id) => Ok(Some(id)),
+            Err(e) => Err(e),
+        }
     }
 }
 
-impl Default for Iso9660Sector {
+impl Default for IsoSector {
     fn default() -> Self {
         Self { bytes: [0u8; 2048] }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum IsoSectorType {
+pub enum Iso9660SectorType {
     BootRecord = 0,
     PrimaryVolumeDescriptor = 1,
     SupplementaryVolumeDescriptor = 2,
@@ -83,34 +102,38 @@ pub enum IsoSectorType {
     VolumeDescriptorSetTerminator = 255,
 }
 
-impl TryFrom<u8> for IsoSectorType {
+impl TryFrom<u8> for Iso9660SectorType {
     type Error = u8;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(IsoSectorType::BootRecord),
-            1 => Ok(IsoSectorType::PrimaryVolumeDescriptor),
-            2 => Ok(IsoSectorType::SupplementaryVolumeDescriptor),
-            3 => Ok(IsoSectorType::VolumePartitionDescriptor),
-            255 => Ok(IsoSectorType::VolumeDescriptorSetTerminator),
+            0 => Ok(Iso9660SectorType::BootRecord),
+            1 => Ok(Iso9660SectorType::PrimaryVolumeDescriptor),
+            2 => Ok(Iso9660SectorType::SupplementaryVolumeDescriptor),
+            3 => Ok(Iso9660SectorType::VolumePartitionDescriptor),
+            255 => Ok(Iso9660SectorType::VolumeDescriptorSetTerminator),
             _ => Err(value),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IsoStandardIdentifier {
     CD001,
+    /// Beginning Extended Area. This is only present for Universal Disk Format (UDF).
     BEA01,
+    /// ECMA-167 Revision 2. UDF 1.x
     NSR02,
+    /// ECMA-167 Revision 3. UDF 2.0+
     NSR03,
+    /// Terminating Extended Area. Complementary with `'BEA01'` to mark its end.
     TEA01,
+    BOOT2,
+    CDW02,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsoStandardIdentifierParseErr {
-    /// Why was this found.
-    CDW02,
     InvalidAscii,
     Unknown,
 }
@@ -128,7 +151,8 @@ impl FromStr for IsoStandardIdentifier {
             "NSR02" => Ok(IsoStandardIdentifier::NSR02),
             "NSR03" => Ok(IsoStandardIdentifier::NSR03),
             "TEA01" => Ok(IsoStandardIdentifier::TEA01),
-            "CDW02" => Err(IsoStandardIdentifierParseErr::CDW02),
+            "BOOT2" => Ok(IsoStandardIdentifier::BOOT2),
+            "CDW02" => Ok(IsoStandardIdentifier::CDW02),
             _ => Err(IsoStandardIdentifierParseErr::Unknown),
         }
     }
@@ -139,17 +163,58 @@ pub fn inspect_iso(file: &Path) {
 
     use std::io::{Read, Seek, SeekFrom};
 
+    println!(
+        "ISO Type: {:?}",
+        VolumeDescriptorSet::from_stream(&mut opened_file)
+    );
+
     // ignore the first 16 sectors, so the first 32768 bytes.
     let _ = opened_file.seek(SeekFrom::Start(16 * 2048));
 
-    let mut sector = Iso9660Sector::default();
+    let mut sector = IsoSector::default();
 
     let _ = opened_file.read_exact(&mut sector.bytes);
 
+    let _ = opened_file.seek(SeekFrom::Start(17 * 2048));
+    let mut sector17 = IsoSector::default();
+    let _ = opened_file.read_exact(&mut sector17.bytes);
+
+    let _ = opened_file.seek(SeekFrom::Start(18 * 2048));
+    let mut sector18 = IsoSector::default();
+    let _ = opened_file.read_exact(&mut sector18.bytes);
+
+    let _ = opened_file.seek(SeekFrom::Start(19 * 2048));
+    let mut sector19 = IsoSector::default();
+    let _ = opened_file.read_exact(&mut sector19.bytes);
+
+    let _ = opened_file.seek(SeekFrom::Start(20 * 2048));
+    let mut sector20 = IsoSector::default();
+    let _ = opened_file.read_exact(&mut sector20.bytes);
+
     println!(
-        "Type: {:?}, Standard Identifier: {:?}",
-        sector.sector_type().unwrap(),
-        sector.standard_identifier().unwrap()
+        "Sector 16... Type: {:?}, Standard Identifier: {:?}",
+        sector.iso_9660_sector_type().unwrap(),
+        sector.standard_identifier()
+    );
+    println!(
+        "Sector 17... Type: {:?}, Standard Identifier: {:?}",
+        sector17.iso_9660_sector_type().unwrap(),
+        sector17.standard_identifier()
+    );
+    println!(
+        "Sector 18... Type: {:?}, Standard Identifier: {:?}",
+        sector18.iso_9660_sector_type().unwrap(),
+        sector18.standard_identifier()
+    );
+    println!(
+        "Sector 19... Type: {:?}, Standard Identifier: {:?}",
+        sector19.iso_9660_sector_type().unwrap(),
+        sector19.standard_identifier()
+    );
+    println!(
+        "Sector 20... Type: {:?}, Standard Identifier: {:?}",
+        sector20.iso_9660_sector_type().unwrap(),
+        sector20.standard_identifier()
     );
 
     println!("System Identifier {}", unsafe {
@@ -191,7 +256,10 @@ pub fn inspect_iso(file: &Path) {
 
     println!(
         "Read CPU arch: {:?}",
-        get_cpu_arch_from_efi_boot(&root_record, &mut opened_file.try_clone().expect("hmm"))
+        FoundCpuArch::get_cpu_arch_from_efi_boot(
+            &root_record,
+            &mut opened_file.try_clone().expect("hmm")
+        )
     );
 
     // let efi_boot_record = root_record

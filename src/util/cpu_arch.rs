@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 #[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 // All `unsafe` usage is just FFI in `src/util/exec_built_cpu_arch.c`, and is fully
 // validated, so it's fine.
 #[allow(clippy::unsafe_derive_deserialize)]

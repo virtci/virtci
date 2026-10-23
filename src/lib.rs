@@ -155,7 +155,7 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             // web::serve(&config);
             println!("soon!");
         }
-        cli::Command::InspectIso(iso_args) => {
+        Some(cli::Command::InspectIso(iso_args)) => {
             client::iso::inspect_iso(&iso_args.file);
         }
     }

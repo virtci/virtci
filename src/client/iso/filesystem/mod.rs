@@ -1,5 +1,142 @@
 use std::io::{Read, Seek, SeekFrom};
 
+use crate::client::iso::{Iso9660SectorType, IsoSector, IsoStandardIdentifier};
+
+pub mod udf;
+
+pub const PRIMARY_VOLUME_DESCRIPTOR_START_LOOKING_SECTOR_OFFSET: u64 = 16;
+
+#[derive(Debug, Clone)]
+pub struct VolumeDescriptorSet {
+    /// The first sector containing the primary volume descriptor. Nearly always 16.
+    /// Technically UDF doesn't require containing iso 9660 data at all.
+    /// TODO what happens when multiple copies of the same descriptor?
+    pub primary_sector: Option<u64>,
+    /// The first sector containing the el torito boot record sector. Nearly always 17.
+    pub el_torito_boot_record_sector: Option<u64>,
+    /// The first sector containing the joliet sector as a supplementary volume descriptor.
+    pub joliet_sector: Option<u64>,
+    pub udf: Option<NsrRevision>,
+}
+
+impl VolumeDescriptorSet {
+    pub fn from_stream<T: Seek + Read>(stream: &mut T) -> anyhow::Result<Self> {
+        let old_seek = stream.stream_position().expect("Why fail");
+        let result = Self::from_stream_helper(stream);
+        stream
+            .seek(SeekFrom::Start(old_seek))
+            .expect("Why did restoring old seek fail?"); // restore since it's shared
+        result
+    }
+
+    fn from_stream_helper<T: Seek + Read>(stream: &mut T) -> anyhow::Result<Self> {
+        let mut found_identifiers = Vec::new();
+
+        let mut primary_sector = None;
+        let mut el_torito_boot_record_sector = None;
+        let mut joliet_sector = None;
+
+        for lba in PRIMARY_VOLUME_DESCRIPTOR_START_LOOKING_SECTOR_OFFSET.. {
+            // TODO upper bounds on this loop, or continue on errors after a certain point?
+            let mut sector = IsoSector::default();
+            stream.seek(SeekFrom::Start(lba * super::BYTES_PER_SECTOR as u64))?;
+            stream.read_exact(&mut sector.bytes)?;
+            match sector.standard_identifier() {
+                Ok(Some(id)) => {
+                    match sector.iso_9660_sector_type() {
+                        Ok(t) => {
+                            if t == Iso9660SectorType::PrimaryVolumeDescriptor
+                                && id == IsoStandardIdentifier::CD001
+                            {
+                                if primary_sector.is_some() {
+                                    anyhow::bail!("Found two primary volume descriptors");
+                                }
+                                primary_sector = Some(lba);
+                            }
+                            if t == Iso9660SectorType::BootRecord
+                                && id == IsoStandardIdentifier::CD001
+                            {
+                                if sector.bytes[7..30] == *b"EL TORITO SPECIFICATION" {
+                                    if el_torito_boot_record_sector.is_some() {
+                                        anyhow::bail!("Found two el torito boot record sectors");
+                                    }
+                                    el_torito_boot_record_sector = Some(lba);
+                                }
+                            }
+                            if t == Iso9660SectorType::SupplementaryVolumeDescriptor
+                                && id == IsoStandardIdentifier::CD001
+                                && is_joliet_escape(&sector.bytes[88..91])
+                            {
+                                if joliet_sector.is_some() {
+                                    anyhow::bail!(
+                                        "Found two joliet supplementary volume descriptors"
+                                    );
+                                }
+                                joliet_sector = Some(lba);
+                            }
+                        }
+                        _ => (),
+                    };
+                    found_identifiers.push(id);
+                }
+                _ => break,
+            }
+        }
+
+        let mut inside_extended_area = false;
+        let mut found_nsr_revision = None;
+
+        for id in found_identifiers {
+            if id == IsoStandardIdentifier::BEA01 {
+                if inside_extended_area {
+                    anyhow::bail!("Already inside extended area");
+                }
+
+                inside_extended_area = true;
+                continue;
+            }
+
+            if inside_extended_area {
+                if id == IsoStandardIdentifier::NSR02 || id == IsoStandardIdentifier::NSR03 {
+                    if found_nsr_revision.is_some() {
+                        anyhow::bail!("Already found nsr revision in extended area");
+                    }
+                    found_nsr_revision = Some(match id {
+                        IsoStandardIdentifier::NSR02 => NsrRevision::NSR02,
+                        IsoStandardIdentifier::NSR03 => NsrRevision::NSR03,
+                        _ => unreachable!(),
+                    });
+                }
+            }
+
+            if id == IsoStandardIdentifier::TEA01 {
+                break;
+            }
+        }
+
+        Ok(Self {
+            primary_sector,
+            el_torito_boot_record_sector,
+            joliet_sector,
+            udf: found_nsr_revision,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NsrRevision {
+    NSR02,
+    NSR03,
+}
+
+fn is_joliet_escape(bytes: &[u8]) -> bool {
+    if bytes == *b"%/@" || bytes == *b"%/C" || bytes == *b"%/E" {
+        true
+    } else {
+        false
+    }
+}
+
 /// A record for something on the filesystem.
 /// For directories, when you go to the extent where it lives, its just a bunch more contiguous
 /// instances of `FileSystemRecord` (at least the raw data that gets parsed into multiple
@@ -132,17 +269,6 @@ impl FileSystemRecord {
         entries_bytes.resize(self.data_length as usize, 0);
 
         let old_seek = stream.stream_position().expect("Why fail");
-
-        stream
-            .seek(SeekFrom::Start(self.location_of_extent as u64 * 2048))
-            .expect("Why did seek fail?");
-        stream
-            .read_exact(&mut entries_bytes)
-            .expect("Why did reading fail");
-
-        stream
-            .seek(SeekFrom::Start(old_seek))
-            .expect("Why did restoring old seek fail?"); // restore since it's shared
 
         const SECTOR_SIZE: usize = 2048;
         let data_length = self.data_length as usize;
