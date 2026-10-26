@@ -1,21 +1,52 @@
 use std::io::{Read, Seek, SeekFrom};
 
-use crate::client::iso::{Iso9660SectorType, IsoSector, IsoStandardIdentifier};
+use crate::client::iso::{BYTES_PER_SECTOR, Iso9660SectorType, IsoSector, IsoStandardIdentifier};
 
 pub mod udf;
 
-pub const PRIMARY_VOLUME_DESCRIPTOR_START_LOOKING_SECTOR_OFFSET: u64 = 16;
+pub const PRIMARY_VOLUME_DESCRIPTOR_START_LOOKING_SECTOR_OFFSET: AbsoluteSector =
+    AbsoluteSector(16);
+
+/// Absolute 2048-byte sector index from the start of the image.
+/// ISO9660 calls this a logical block address (LBA).
+/// Not to be confused with UDF's [`udf::PartitionRelativeBlock`].
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AbsoluteSector(pub u32);
+
+impl AbsoluteSector {
+    /// Byte offset from the start of the image, for seeking.
+    pub fn byte_offset(self) -> u64 {
+        self.0 as u64 * BYTES_PER_SECTOR as u64
+    }
+}
+
+/// Seeks to `lba`, reads the whole sector, and restores the old seek position since the stream
+/// is shared.
+pub fn read_sector<T: Seek + Read>(
+    stream: &mut T,
+    lba: AbsoluteSector,
+) -> anyhow::Result<[u8; BYTES_PER_SECTOR]> {
+    let old_seek = stream.stream_position().expect("Why fail");
+    let mut buffer: [u8; BYTES_PER_SECTOR] = [0u8; BYTES_PER_SECTOR];
+    stream.seek(SeekFrom::Start(lba.byte_offset()))?;
+    stream.read_exact(&mut buffer)?;
+    stream
+        .seek(SeekFrom::Start(old_seek))
+        .expect("Why did restoring old seek fail?"); // restore since it's shared
+    Ok(buffer)
+}
 
 #[derive(Debug, Clone)]
 pub struct VolumeDescriptorSet {
     /// The first sector containing the primary volume descriptor. Nearly always 16.
     /// Technically UDF doesn't require containing iso 9660 data at all.
     /// TODO what happens when multiple copies of the same descriptor?
-    pub primary_sector: Option<u64>,
+    pub primary_sector: Option<AbsoluteSector>,
     /// The first sector containing the el torito boot record sector. Nearly always 17.
-    pub el_torito_boot_record_sector: Option<u64>,
+    pub el_torito_boot_record_sector: Option<AbsoluteSector>,
     /// The first sector containing the joliet sector as a supplementary volume descriptor.
-    pub joliet_sector: Option<u64>,
+    pub joliet_sector: Option<AbsoluteSector>,
     pub udf: Option<NsrRevision>,
 }
 
@@ -36,10 +67,10 @@ impl VolumeDescriptorSet {
         let mut el_torito_boot_record_sector = None;
         let mut joliet_sector = None;
 
-        for lba in PRIMARY_VOLUME_DESCRIPTOR_START_LOOKING_SECTOR_OFFSET.. {
+        for lba in (PRIMARY_VOLUME_DESCRIPTOR_START_LOOKING_SECTOR_OFFSET.0..).map(AbsoluteSector) {
             // TODO upper bounds on this loop, or continue on errors after a certain point?
             let mut sector = IsoSector::default();
-            stream.seek(SeekFrom::Start(lba * super::BYTES_PER_SECTOR as u64))?;
+            stream.seek(SeekFrom::Start(lba.byte_offset()))?;
             stream.read_exact(&mut sector.bytes)?;
             match sector.standard_identifier() {
                 Ok(Some(id)) => {
@@ -149,7 +180,7 @@ pub struct FileSystemRecord {
     /// Byte offset 1.
     pub extended_attr_record_len: u8,
     /// Byte offset 2
-    pub location_of_extent: u32,
+    pub location_of_extent: AbsoluteSector,
     /// Byte offset 10
     pub data_length: u32,
     /// Byte offset 18
@@ -176,11 +207,11 @@ impl FileSystemRecord {
     ) -> Result<Self, FileSystemRecordParseError> {
         unsafe {
             // Aligning some memory accesses.
-            let location_of_extent = u32::from_le_bytes(
+            let location_of_extent = AbsoluteSector(u32::from_le_bytes(
                 std::slice::from_raw_parts(start.byte_add(2), 4)
                     .try_into()
                     .expect("how??"),
-            );
+            ));
             let data_length = u32::from_le_bytes(
                 std::slice::from_raw_parts(start.byte_add(10), 4)
                     .try_into()
@@ -269,6 +300,17 @@ impl FileSystemRecord {
         entries_bytes.resize(self.data_length as usize, 0);
 
         let old_seek = stream.stream_position().expect("Why fail");
+
+        stream
+            .seek(SeekFrom::Start(self.location_of_extent.byte_offset()))
+            .expect("Why did seek fail?");
+        stream
+            .read_exact(&mut entries_bytes)
+            .expect("Why did reading fail");
+
+        stream
+            .seek(SeekFrom::Start(old_seek))
+            .expect("Why did restoring old seek fail?"); // restore since it's shared
 
         const SECTOR_SIZE: usize = 2048;
         let data_length = self.data_length as usize;
@@ -378,7 +420,7 @@ impl FileSystemRecord {
         bytes_out.resize(bytes_to_read, 0);
 
         stream
-            .seek(SeekFrom::Start(self.location_of_extent as u64 * 2048))
+            .seek(SeekFrom::Start(self.location_of_extent.byte_offset()))
             .expect("Why did seek fail?");
         stream
             .read_exact(&mut bytes_out)
