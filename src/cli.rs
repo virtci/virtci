@@ -8,9 +8,13 @@ use std::path::PathBuf;
 /// VCI: Virtual Machine CI Runner
 #[derive(FromArgs, Debug)]
 pub struct Args {
-    ///print --version information
+    /// print --version information
     #[argh(switch, short = 'V')]
     pub version: bool,
+
+    /// suppress progress and status output (warnings and errors are still shown)
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
 
     #[argh(subcommand)]
     pub command: Option<Command>,
@@ -40,6 +44,11 @@ pub enum Command {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "version")]
 pub struct VersionCommand {}
+
+// /// Silences the process indicator and only displays run, warnings or errors.
+// #[derive(FromArgs, Debug)]
+// #[argh(subcommand, name = "quiet")]
+// pub struct QuietProcess {}
 
 /// Run a workflow file
 #[derive(FromArgs, Debug)]
