@@ -28,7 +28,7 @@ use crate::util::git::GitInfo;
 /// PID of the QEMU process running the qcow2 for `virtci boot` (no --clone).
 pub static QEMU_BOOT_GRACEFUL_PID: OnceLock<u32> = OnceLock::new();
 
-/// Quiet process running
+/// Set once at startup when `-q`/`--quiet` is passed. Read by `quiet_flag_helper()`.
 pub static QUIET_FLAG: OnceLock<bool> = OnceLock::new();
 
 /// `args` should not contain the command/executable name.
@@ -67,13 +67,13 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
         print_version_cli();
         return;
     }
-    if args.quiet {
-        let _ = crate::QUIET_FLAG.set(true);
-    }
-    let Some(ref _command) = args.command else {
+    let Some(ref command) = args.command else {
         eprintln!("No command provided. Run --help for more information.");
         std::process::exit(1);
     };
+    if args.quiet || command.quiet() {
+        let _ = crate::QUIET_FLAG.set(true);
+    }
 
     if let Err(e) = std::fs::create_dir_all(&paths.temp) {
         eprintln!(
