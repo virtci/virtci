@@ -8,13 +8,13 @@ license = "GPL-2.0-only"
 argh = "0.1.13"
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
-serde_json = "1.0.149"
-serde_with = "3.17.0"
-russh = { version = "0.60.3", default-features = false, features = [
+serde_json = "1.0.154"
+serde_with = "3.24.0"
+russh = { version = "0.65.1", default-features = false, features = [
   "aws-lc-rs",
 ] }
-aws-lc-rs = { version = "1", features = ["prebuilt-nasm"] }
-russh-sftp = "2.0"
+aws-lc-rs = { version = "1.19.0", features = ["prebuilt-nasm"] }
+russh-sftp = "3.0.1"
 tokio = { version = "1", features = [
   "rt",
   "net",
@@ -25,20 +25,20 @@ tokio = { version = "1", features = [
   "sync",
   "signal",
 ] }
-colored = "3"
-tar = "0.4.45"
-glob = "0.3.3"
-rust-embed = "8"
+colored = "3.1.1"
+tar = "0.4.46"
+glob = "0.3.4"
+rust-embed = "8.13.0"
 mime_guess = "2"
 tiny_http = "0.12"
-anyhow = "1.0.103"
-blake3 = "1.8.5"
+anyhow = "1.0.104"
+blake3 = "1.8.7"
 dotenvy = "0.15.7"
-ignore = "0.4.28"
+ignore = "0.4.34"
 gpt = "4.1.0"
 
 [build-dependencies]
-cc = "1.2.27"
+cc = "1.11.1"
 
 [[bin]]
 name = "virtci"

@@ -19,7 +19,6 @@ use std::{
 use anyhow::Context;
 use russh::client;
 use russh::keys::PrivateKeyWithHashAlg;
-use russh::keys::ssh_key;
 
 use crate::{
     VciGlobalPaths,
@@ -1467,7 +1466,7 @@ impl client::Handler for ClientHandler {
     #[allow(clippy::manual_async_fn)]
     fn check_server_key(
         &mut self,
-        _key: &ssh_key::PublicKey,
+        _key: &russh::keys::PublicKeyOrCertificate,
     ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         async { Ok(true) }
     }
