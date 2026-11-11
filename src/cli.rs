@@ -8,9 +8,13 @@ use std::path::PathBuf;
 /// VCI: Virtual Machine CI Runner
 #[derive(FromArgs, Debug)]
 pub struct Args {
-    ///print --version information
+    /// print --version information
     #[argh(switch, short = 'V')]
     pub version: bool,
+
+    /// suppress progress and status output (warnings and errors are still shown)
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
 
     #[argh(subcommand)]
     pub command: Option<Command>,
@@ -84,6 +88,9 @@ pub struct RunArgs {
     /// do not use any ignore files, even if specified in a `copy:` step.
     #[argh(switch)]
     pub no_ignore: bool,
+    /// suppress progress and status output (warnings and errors are still shown)
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
 }
 
 /// Interactive setup for a new VM image description
@@ -122,6 +129,10 @@ pub struct CleanupArgs {
     /// list files that would be deleted without deleting
     #[argh(switch)]
     pub list: bool,
+
+    /// suppress progress and status output (warnings and errors are still shown)
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
 }
 
 /// List all configured VM images
@@ -144,6 +155,10 @@ pub struct ExportArgs {
     /// output file path (defaults to ./<name>.tar)
     #[argh(option, short = 'o')]
     pub output: Option<PathBuf>,
+
+    /// suppress progress and status output (warnings and errors are still shown)
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
 }
 
 /// Import a VM image from a .tar archive
@@ -157,6 +172,10 @@ pub struct ImportArgs {
     /// import into the system-wide image directory (requires elevated privileges)
     #[argh(switch)]
     pub system: bool,
+
+    /// suppress progress and status output (warnings and errors are still shown)
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
 }
 
 /// List all currently running VirtCI jobs
@@ -192,6 +211,10 @@ pub struct CloneArgs {
     /// register the clone into the system-wide image directory (requires elevated privileges)
     #[argh(switch)]
     pub system: bool,
+
+    /// suppress progress and status output (warnings and errors are still shown)
+    #[argh(switch, short = 'q')]
+    pub quiet: bool,
 }
 
 /// Edit an existing VM image. Currently supports renaming; more fields will be editable later.
@@ -388,3 +411,17 @@ pub fn default_cpus() -> u32 {
 }
 
 pub const DEFAULT_MEM_MB: u64 = 8192;
+
+impl Command {
+    /// Whether `-q`/`--quiet` was passed after this subcommand activates the flag
+    pub fn quiet(&self) -> bool {
+        match self {
+            Command::Run(a) => a.quiet,
+            Command::Cleanup(a) => a.quiet,
+            Command::Export(a) => a.quiet,
+            Command::Import(a) => a.quiet,
+            Command::Clone(a) => a.quiet,
+            _ => false,
+        }
+    }
+}

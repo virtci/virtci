@@ -28,6 +28,9 @@ use crate::util::git::GitInfo;
 /// PID of the QEMU process running the qcow2 for `virtci boot` (no --clone).
 pub static QEMU_BOOT_GRACEFUL_PID: OnceLock<u32> = OnceLock::new();
 
+/// Set once at startup when `-q`/`--quiet` is passed. Read by `quiet_flag_helper()`.
+pub static QUIET_FLAG: OnceLock<bool> = OnceLock::new();
+
 /// `args` should not contain the command/executable name.
 ///
 /// For instance, if you're testing `virtci import hello.tar`, the `args` should be
@@ -51,15 +54,26 @@ pub fn print_version_cli() {
     }
 }
 
+/// It prints the message unless quiet mode is on.
+pub fn quiet_flag_helper(print_lines: &str) {
+    if let Some(true) = QUIET_FLAG.get() {
+        return;
+    }
+    println!("{print_lines}");
+}
+
 fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
     if args.version {
         print_version_cli();
         return;
     }
-    let Some(ref _command) = args.command else {
+    let Some(ref command) = args.command else {
         eprintln!("No command provided. Run --help for more information.");
         std::process::exit(1);
     };
+    if args.quiet || command.quiet() {
+        let _ = crate::QUIET_FLAG.set(true);
+    }
 
     if let Err(e) = std::fs::create_dir_all(&paths.temp) {
         eprintln!(

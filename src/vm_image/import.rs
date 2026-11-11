@@ -18,7 +18,7 @@ pub fn run_import(archive_path: &Path, paths: &VciGlobalPaths, system: bool) -> 
         anyhow::bail!("File not found: {}", archive_path.display());
     }
 
-    println!("Importing from {}", archive_path.display());
+    crate::quiet_flag_helper(&format!("Importing from {}", archive_path.display()));
 
     let (name, json) = read_vci_from_archive(archive_path)?;
     let mut desc: ImageDescription =
@@ -248,11 +248,11 @@ fn import_native(
             .context("No .tvm file found in archive for tart backend")?;
         let tvm_path = managed_dir.join(tvm_file);
 
-        println!(
+        crate::quiet_flag_helper(&format!(
             "  Running: tart import {} {}",
             tart.vm_name,
             tvm_path.display()
-        );
+        ));
 
         let output = std::process::Command::new("tart")
             .arg("import")
@@ -291,9 +291,9 @@ fn import_native(
             .with_context(|| format!("Failed to set permissions on {}", dest_vci.display()))?;
     }
 
-    println!("Import complete: {name}");
-    println!("  Config: {}", dest_vci.display());
-    println!("  Files:  {}", managed_dir.display());
+    crate::quiet_flag_helper(&format!("Import complete: {name}"));
+    crate::quiet_flag_helper(&format!("  Config: {}", dest_vci.display()));
+    crate::quiet_flag_helper(&format!("  Files:  {}", managed_dir.display()));
     Ok(())
 }
 
@@ -337,7 +337,9 @@ fn import_into_wsl(
     // tar -C needs the parent to exist
     wsl_mkdir_p(distro, wsl_home)?;
 
-    println!("  Extracting '{name}' into WSL distro '{distro}' (ext4)...");
+    crate::quiet_flag_helper(&format!(
+        "  Extracting '{name}' into WSL distro '{distro}' (ext4)..."
+    ));
     wsl_tar_extract(archive_path, distro, wsl_home, name)?;
 
     rewrite_paths_to_managed_wsl(desc, &wsl_managed_dir);
@@ -352,9 +354,11 @@ fn import_into_wsl(
         )
     })?;
 
-    println!("Import complete: {name}");
-    println!("  Config: {}", dest_vci.display());
-    println!("  Files:  {wsl_managed_dir} (in WSL distro '{distro}')");
+    crate::quiet_flag_helper(&format!("Import complete: {name}"));
+    crate::quiet_flag_helper(&format!("  Config: {}", dest_vci.display()));
+    crate::quiet_flag_helper(&format!(
+        "  Files:  {wsl_managed_dir} (in WSL distro '{distro}')"
+    ));
     Ok(())
 }
 
