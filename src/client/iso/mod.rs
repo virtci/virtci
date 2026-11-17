@@ -225,12 +225,7 @@ pub fn inspect_iso(file: &Path) {
         str::from_utf8_unchecked(&sector.bytes[40..72])
     });
 
-    let root_record = unsafe {
-        filesystem::FileSystemRecord::parse_from_directory_entry_start(
-            sector.bytes.as_ptr().byte_add(156),
-        )
-        .expect("huh")
-    };
+    let root_record = filesystem::FileSystemRecord::parse(&sector.bytes[156..]).expect("huh");
     println!("");
     println!("Root Directory Entry {root_record:?}");
     println!("");
