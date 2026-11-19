@@ -5,7 +5,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 use anyhow::Context;
 
-use crate::client::iso::{BYTES_PER_SECTOR, filesystem::AbsoluteSector};
+use crate::client::iso::{
+    BYTES_PER_SECTOR,
+    filesystem::{AbsoluteSector, Extent},
+};
 
 /// https://wiki.osdev.org/UDF
 
@@ -269,16 +272,6 @@ impl DescriptorTag {
 
         Ok(())
     }
-}
-
-/// ECMA-167 3/7.1 `extent_ad`. Only used in the volume layer (AVDP, volume descriptors), where
-/// locations are absolute. File data uses `short_ad` / `long_ad`, which are partition relative.
-#[repr(C)]
-pub struct Extent {
-    /// How many bytes is the data.
-    pub len: u32,
-    /// The sector index of the data relative to the beginning of the volume.
-    pub location_sector: AbsoluteSector,
 }
 
 /// Block index relative to the start of a UDF partition.

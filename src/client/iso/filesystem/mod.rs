@@ -2,11 +2,14 @@ use std::io::{Read, Seek, SeekFrom};
 
 use crate::client::iso::{BYTES_PER_SECTOR, Iso9660SectorType, IsoSector, IsoStandardIdentifier};
 
+pub mod entry;
 pub mod image;
 pub mod udf;
 
 pub const PRIMARY_VOLUME_DESCRIPTOR_START_LOOKING_SECTOR_OFFSET: AbsoluteSector =
     AbsoluteSector(16);
+
+pub const PRIMARY_VOLUME_DESCRIPTOR_ROOT_RECORD_OFFSET: usize = 156;
 
 /// Absolute 2048-byte sector index from the start of the image.
 /// ISO9660 calls this a logical block address (LBA).
@@ -20,6 +23,17 @@ impl AbsoluteSector {
     pub fn byte_offset(self) -> u64 {
         self.0 as u64 * BYTES_PER_SECTOR as u64
     }
+}
+
+/// ECMA-167 3/7.1 `extent_ad`. Only used in the volume layer (AVDP, volume descriptors), where
+/// locations are absolute. File data uses `short_ad` / `long_ad`, which are partition relative.
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct Extent {
+    /// How many bytes is the data.
+    pub len: u32,
+    /// The sector index of the data relative to the beginning of the volume.
+    pub location_sector: AbsoluteSector,
 }
 
 #[derive(Debug)]
@@ -300,7 +314,7 @@ impl FileSystemRecord {
     /// [`FileSystemRecord::len`] bytes are read.
     ///
     /// For the root directory record in the Primary Volume Descriptor, pass the sector bytes from
-    /// offset `156` onwards.
+    /// offset [`PRIMARY_VOLUME_DESCRIPTOR_ROOT_RECORD_OFFSET`] onwards.
     pub fn parse(bytes: &[u8]) -> Result<Self, FileSystemRecordParseError> {
         let Some(&len) = bytes.first() else {
             return Err(FileSystemRecordParseError::BufferTooShort);
@@ -356,6 +370,14 @@ impl FileSystemRecord {
 
     pub fn is_file(&self) -> bool {
         return self.file_flags & (FileBitFlags::IsDirectory as u8) == 0;
+    }
+
+    pub fn is_final_record(&self) -> bool {
+        return self.file_flags & (FileBitFlags::NotFinalDirectoryRecord as u8) == 0;
+    }
+
+    pub fn is_associated_file(&self) -> bool {
+        return self.file_flags & (FileBitFlags::IsAssociatedFile as u8) != 0;
     }
 
     /// Get all of the records for a directory. Will contain files, other directories, etc.
