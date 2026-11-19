@@ -3,10 +3,12 @@
 
 use std::{path::Path, str::FromStr};
 
+use anyhow::Context;
+
 use crate::{
     client::iso::{
-        extract::FoundCpuArch,
-        filesystem::{VolumeDescriptorSet, udf::UdfSectorType},
+        extract::efi_boot_arch,
+        filesystem::{image::IsoImage, udf::UdfSectorType},
     },
     util::cpu_arch::Arch,
 };
@@ -158,158 +160,22 @@ impl FromStr for IsoStandardIdentifier {
     }
 }
 
-pub fn inspect_iso(file: &Path) {
-    let mut opened_file = std::fs::File::open(file).unwrap();
+pub fn inspect_iso(file: &Path) -> anyhow::Result<()> {
+    let opened_file =
+        std::fs::File::open(file).with_context(|| format!("Failed to open {}", file.display()))?;
+    let mut iso = IsoImage::new(opened_file)?;
 
-    use std::io::{Read, Seek, SeekFrom};
+    println!("Descriptors: {:?}", iso.descriptors());
+    println!("Volume ID: {}", iso.volume().volume_id);
+    println!("Name encoding: {:?}", iso.encoding());
 
-    println!(
-        "ISO Type: {:?}",
-        VolumeDescriptorSet::from_stream(&mut opened_file)
-    );
-
-    // ignore the first 16 sectors, so the first 32768 bytes.
-    let _ = opened_file.seek(SeekFrom::Start(16 * 2048));
-
-    let mut sector = IsoSector::default();
-
-    let _ = opened_file.read_exact(&mut sector.bytes);
-
-    let _ = opened_file.seek(SeekFrom::Start(17 * 2048));
-    let mut sector17 = IsoSector::default();
-    let _ = opened_file.read_exact(&mut sector17.bytes);
-
-    let _ = opened_file.seek(SeekFrom::Start(18 * 2048));
-    let mut sector18 = IsoSector::default();
-    let _ = opened_file.read_exact(&mut sector18.bytes);
-
-    let _ = opened_file.seek(SeekFrom::Start(19 * 2048));
-    let mut sector19 = IsoSector::default();
-    let _ = opened_file.read_exact(&mut sector19.bytes);
-
-    let _ = opened_file.seek(SeekFrom::Start(20 * 2048));
-    let mut sector20 = IsoSector::default();
-    let _ = opened_file.read_exact(&mut sector20.bytes);
-
-    println!(
-        "Sector 16... Type: {:?}, Standard Identifier: {:?}",
-        sector.iso_9660_sector_type().unwrap(),
-        sector.standard_identifier()
-    );
-    println!(
-        "Sector 17... Type: {:?}, Standard Identifier: {:?}",
-        sector17.iso_9660_sector_type().unwrap(),
-        sector17.standard_identifier()
-    );
-    println!(
-        "Sector 18... Type: {:?}, Standard Identifier: {:?}",
-        sector18.iso_9660_sector_type().unwrap(),
-        sector18.standard_identifier()
-    );
-    println!(
-        "Sector 19... Type: {:?}, Standard Identifier: {:?}",
-        sector19.iso_9660_sector_type().unwrap(),
-        sector19.standard_identifier()
-    );
-    println!(
-        "Sector 20... Type: {:?}, Standard Identifier: {:?}",
-        sector20.iso_9660_sector_type().unwrap(),
-        sector20.standard_identifier()
-    );
-
-    println!("System Identifier {}", unsafe {
-        str::from_utf8_unchecked(&sector.bytes[8..40])
-    });
-
-    println!("Volume Identifier {}", unsafe {
-        str::from_utf8_unchecked(&sector.bytes[40..72])
-    });
-
-    let root_record = filesystem::FileSystemRecord::parse(&sector.bytes[156..]).expect("huh");
-    println!("");
-    println!("Root Directory Entry {root_record:?}");
-    println!("");
-
-    let entries = root_record
-        .directory_records(&mut opened_file.try_clone().expect("hmm"))
-        .expect("yeah");
-
-    for entry in entries {
-        println!("New FS Entry {entry:?}");
-        match entry.file_identifier.clone() {
-            filesystem::FileSystemRecordIdentifier::FileOrDir(items) => {
-                println!(
-                    "Entry Name as UTF8: {}, is file? {}, is directory? {}",
-                    std::str::from_utf8(items.as_slice()).expect("holy"),
-                    entry.is_file(),
-                    entry.is_directory()
-                )
-            }
-            _ => (),
-        }
+    let root = iso.root();
+    println!("Root directory:");
+    for entry in iso.read_dir(&root)? {
+        let size: u64 = entry.extents.iter().map(|e| u64::from(e.len)).sum();
+        println!("  {:?} {} ({size} bytes)", entry.kind, entry.name);
     }
 
-    println!(
-        "Read CPU arch: {:?}",
-        FoundCpuArch::get_cpu_arch_from_efi_boot(
-            &root_record,
-            &mut opened_file.try_clone().expect("hmm")
-        )
-    );
-
-    // let efi_boot_record = root_record
-    //     .record_for("efi/boot", &mut opened_file.try_clone().expect("hmm"))
-    //     .unwrap()
-    //     .unwrap();
-
-    // let efi_boot_entries = efi_boot_record
-    //     .directory_records(&mut opened_file.try_clone().expect("hmm"))
-    //     .expect("yeah");
-
-    // for entry in efi_boot_entries {
-    //     println!("");
-    //     println!("EFI/BOOT FS Entry {entry:?}");
-    //     match entry.file_identifier.clone() {
-    //         filesystem::FileSystemRecordIdentifier::FileOrDir(items) => {
-    //             let name = std::str::from_utf8(items.as_slice())
-    //                 .expect("holy")
-    //                 .trim_end_matches(";1");
-    //             println!(
-    //                 "Entry Name as UTF8 (with ';1' trimmed if present): {name}, is file? {}, is directory? {}",
-    //                 entry.is_file(),
-    //                 entry.is_directory()
-    //             );
-    //             if !name.starts_with("BOOT") || !name.ends_with(".EFI") {
-    //                 continue;
-    //             }
-
-    //             let _ = opened_file.seek(SeekFrom::Start(entry.location_of_extent as u64 * 2048));
-    //             let bytes_to_read = usize::min(entry.data_length as usize, 4096);
-    //             let mut maybe_elf_bytes = Vec::<u8>::with_capacity(bytes_to_read);
-    //             maybe_elf_bytes.resize(bytes_to_read, 0);
-
-    //             let _ = opened_file.read_exact(&mut maybe_elf_bytes);
-
-    //             let arch_from_elf = Arch::from_elf_header(&maybe_elf_bytes);
-    //             println!("Parsed ELF Arch: {arch_from_elf:?}");
-    //             let pe_offset = u32::from_le_bytes(
-    //                 maybe_elf_bytes[0x3c as usize..0x3c as usize + 4]
-    //                     .try_into()
-    //                     .expect("slice length mismatch"),
-    //             );
-
-    //             println!(
-    //                 "At pe_offset: {:x?}",
-    //                 &maybe_elf_bytes[pe_offset as usize..pe_offset as usize + 8]
-    //             );
-
-    //             // println!("Actual bytes trying to parse ELF arch: {maybe_elf_bytes:?}");
-    //             println!(
-    //                 "At 0x12: {:?}",
-    //                 &maybe_elf_bytes[0x12 as usize..0x12 as usize + 12]
-    //             );
-    //         }
-    //         _ => (),
-    //     }
-    // }
+    println!("EFI boot arch: {:?}", efi_boot_arch(&mut iso)?);
+    Ok(())
 }

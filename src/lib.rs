@@ -156,7 +156,10 @@ fn run_virtci(paths: &VciGlobalPaths, args: cli::Args) {
             println!("soon!");
         }
         Some(cli::Command::InspectIso(iso_args)) => {
-            client::iso::inspect_iso(&iso_args.file);
+            if let Err(e) = client::iso::inspect_iso(&iso_args.file) {
+                eprintln!("Failed to inspect ISO: {e:#}");
+                std::process::exit(1);
+            }
         }
     }
 }

@@ -82,30 +82,15 @@ impl std::error::Error for IsoError {
     }
 }
 
-/// Runs `f`, then restores the stream position to where it was before, EVEN if `f` failed,
-/// since the stream is shared even on clones of it.
-fn with_restored_position<T: Seek, U>(
-    stream: &mut T,
-    f: impl FnOnce(&mut T) -> Result<U, IsoError>,
-) -> Result<U, IsoError> {
-    let old_seek = stream.stream_position()?;
-    let result = f(stream);
-    stream.seek(SeekFrom::Start(old_seek))?;
-    result
-}
-
-/// Seeks to `lba`, reads the whole sector, and restores the old seek position since the stream
-/// is shared.
+/// Seeks to `lba` and reads the whole sector.
 pub fn read_sector<T: Seek + Read>(
     stream: &mut T,
     lba: AbsoluteSector,
 ) -> Result<[u8; BYTES_PER_SECTOR], IsoError> {
-    with_restored_position(stream, |stream| {
-        let mut buffer: [u8; BYTES_PER_SECTOR] = [0u8; BYTES_PER_SECTOR];
-        stream.seek(SeekFrom::Start(lba.byte_offset()))?;
-        stream.read_exact(&mut buffer)?;
-        Ok(buffer)
-    })
+    let mut buffer: [u8; BYTES_PER_SECTOR] = [0u8; BYTES_PER_SECTOR];
+    stream.seek(SeekFrom::Start(lba.byte_offset()))?;
+    stream.read_exact(&mut buffer)?;
+    Ok(buffer)
 }
 
 #[derive(Debug, Clone)]
@@ -129,10 +114,6 @@ impl VolumeDescriptorSet {
     /// - [`IsoError::Malformed`] if a descriptor appears more than once where it must be unique.
     /// - [`IsoError::Io`] on any other read failure.
     pub fn from_stream<T: Seek + Read>(stream: &mut T) -> Result<Self, IsoError> {
-        with_restored_position(stream, Self::from_stream_helper)
-    }
-
-    fn from_stream_helper<T: Seek + Read>(stream: &mut T) -> Result<Self, IsoError> {
         let mut found_identifiers: Vec<(AbsoluteSector, IsoStandardIdentifier)> = Vec::new();
 
         let mut primary_sector = None;
@@ -379,156 +360,6 @@ impl FileSystemRecord {
     pub fn is_associated_file(&self) -> bool {
         return self.file_flags & (FileBitFlags::IsAssociatedFile as u8) != 0;
     }
-
-    /// Get all of the records for a directory. Will contain files, other directories, etc.
-    /// It's technically more optimal to just read on demand rather than reading all entries and
-    /// filtering from there, but this works fine for now. Will revisit if performance is a concern.
-    ///
-    /// # Arguments
-    ///
-    /// - `stream` any stream that can be seeked. This can be [`std::fs::File`], so you could do
-    /// [`std::fs::File::try_clone()`]. Since the stream cursor is shared, it will store the one
-    /// when this function is invoked, and then restore it before returning.
-    ///
-    /// # Debug Asserts
-    ///
-    /// `self.is_directory()`
-    pub fn directory_records<T: Seek + Read>(
-        &self,
-        stream: &mut T,
-    ) -> Result<Vec<FileSystemRecord>, IsoError> {
-        if !self.is_directory() {
-            return Err(IsoError::NotADirectory);
-        }
-
-        // The list of records in a directory are contigous over one or more blocks.
-        let mut entries_bytes = vec![0u8; self.data_length as usize];
-
-        with_restored_position(stream, |stream| {
-            stream.seek(SeekFrom::Start(self.location_of_extent.byte_offset()))?;
-            stream.read_exact(&mut entries_bytes)?;
-            Ok(())
-        })?;
-
-        // Which absolute sector a byte offset into this directory's extent lives in. Only used
-        // for error reporting, so saturate rather than panic on a malformed image.
-        let sector_at = |offset: usize| {
-            let sectors_in = u32::try_from(offset / BYTES_PER_SECTOR).unwrap_or(u32::MAX);
-            AbsoluteSector(self.location_of_extent.0.saturating_add(sectors_in))
-        };
-        let data_length = self.data_length as usize;
-        let mut entries = Vec::<FileSystemRecord>::default();
-
-        let mut offset = 0usize;
-        while offset < data_length {
-            let sector_end = (offset / BYTES_PER_SECTOR + 1) * BYTES_PER_SECTOR;
-
-            if entries_bytes[offset] == 0 {
-                // In fedora ISO and probably others, it can span multiple sectors,
-                // and the sectors are zero padded, so jump to the next.
-                offset = sector_end;
-                continue;
-            }
-
-            // Records never cross a sector boundary, so only give the parser the rest of this
-            // sector OR the rest of the extent, if that's shorter.
-            let entry =
-                FileSystemRecord::parse(&entries_bytes[offset..sector_end.min(data_length)])
-                    .map_err(|e| e.at_sector(sector_at(offset)))?;
-
-            offset += entry.len as usize;
-            entries.push(entry);
-        }
-
-        Ok(entries)
-    }
-
-    /// Ignores trailing ";1" from the file / directory names that are actually found.
-    pub fn record_for<T: Seek + Read>(
-        &self,
-        path_case_insensitive: &str,
-        stream: &mut T,
-    ) -> Result<Option<Self>, IsoError> {
-        if !self.is_directory() {
-            return Err(IsoError::NotADirectory);
-        }
-
-        let mut current_record = self.clone();
-
-        for path_entry in path_case_insensitive.split('/') {
-            if path_entry == "." {
-                // just this directory
-                continue;
-            }
-
-            let records_in_this_dir = current_record.directory_records(stream)?;
-
-            let mut found = false;
-            for record in records_in_this_dir.clone() {
-                match record.file_identifier {
-                    FileSystemRecordIdentifier::SelfDir => continue,
-                    FileSystemRecordIdentifier::ParentDir => {
-                        if path_entry == ".." {
-                            current_record = record.clone();
-                            found = true;
-                        } else {
-                            continue;
-                        }
-                    }
-                    FileSystemRecordIdentifier::FileOrDir(ref identifier_name_bytes) => {
-                        // TODO utf16? maybe not relevant here, as here may just be ASCII.
-                        let identifier_name = std::str::from_utf8(identifier_name_bytes.as_slice())
-                            .map_err(|_| IsoError::Malformed {
-                                sector: current_record.location_of_extent,
-                                what: "Directory record file identifier is not valid UTF-8",
-                            })?;
-                        if path_entry.eq_ignore_ascii_case(identifier_name.trim_end_matches(";1")) {
-                            current_record = record.clone();
-                            found = true;
-                        } else {
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            if !found {
-                return Ok(None);
-            }
-        }
-
-        Ok(Some(current_record))
-    }
-
-    pub fn read_file_bytes<T: Seek + Read>(
-        &self,
-        stream: &mut T,
-        max_bytes: Option<usize>,
-    ) -> Result<Vec<u8>, IsoError> {
-        if !self.is_file() {
-            return Err(IsoError::NotAFile);
-        }
-        if self.file_flags & (FileBitFlags::NotFinalDirectoryRecord as u8) != 0 {
-            return Err(IsoError::Unsupported(
-                "Multi-extent files (over 4 GiB) are not supported",
-            ));
-        }
-
-        let bytes_to_read = match max_bytes {
-            Some(amount) => usize::min(amount, self.data_length as usize),
-            None => self.data_length as usize,
-        };
-
-        let mut bytes_out = vec![0u8; bytes_to_read];
-
-        with_restored_position(stream, |stream| {
-            stream.seek(SeekFrom::Start(self.location_of_extent.byte_offset()))?;
-            stream.read_exact(&mut bytes_out)?;
-            Ok(())
-        })?;
-
-        Ok(bytes_out)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -651,10 +482,10 @@ impl FileSystemDateTime {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn record_bytes(
+    pub(crate) fn record_bytes(
         name: &[u8],
         flags: u8,
         extent: u32,

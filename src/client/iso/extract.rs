@@ -1,9 +1,9 @@
-use std::{
-    collections::HashSet,
-    io::{Read, Seek},
-};
+use std::io::{Read, Seek};
 
-use crate::{client::iso::filesystem::FileSystemRecord, util::cpu_arch::Arch};
+use crate::{
+    client::iso::filesystem::{IsoError, entry::EntryKind, image::IsoImage},
+    util::cpu_arch::Arch,
+};
 
 /// How many bytes of a PE file to read when looking for its header. The PE header offset is
 /// almost always a lot under this.
@@ -72,79 +72,108 @@ pub fn pe_machine_field(bytes: &[u8]) -> Result<u16, PeHeaderError> {
     Ok(u16::from_le_bytes([machine[0], machine[1]]))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FoundCpuArch {
     Arch(Arch),
+    /// Several different architectures, deduplicated, in the order they were found.
     Many(Vec<Arch>),
+    /// `EFI/BOOT` exists, but no `BOOT*.EFI` in it has a supported machine type.
     None,
     NoEfiBoot,
 }
 
-impl FoundCpuArch {
-    /// Returns a result. If `Ok`, it was able to read through the records successfully, and stored the
-    /// found value in the inner Option. If that inner Option contains `Some`, a singular architecture
-    /// was successfully parsed. If it contains `None`, however, it was unable to find the architecture.
-    /// This could be because there were a few conflicting ones found.
-    pub fn get_cpu_arch_from_efi_boot<T: Seek + Read>(
-        root_record: &FileSystemRecord,
-        stream: &mut T,
-    ) -> anyhow::Result<Self> {
-        let efi_boot_record = {
-            let r = root_record.record_for("efi/boot", stream)?;
-            if r.is_none() {
-                return Ok(Self::NoEfiBoot);
-            }
-            r.expect("has some here")
-        };
+#[derive(Debug)]
+pub enum EfiBootArchError {
+    Iso(IsoError),
+    /// A `BOOT*.EFI` file in `EFI/BOOT` is not a valid PE image.
+    InvalidPe {
+        file: String,
+        error: PeHeaderError,
+    },
+}
 
-        let efi_boot_entries = efi_boot_record.directory_records(stream)?;
+impl From<IsoError> for EfiBootArchError {
+    fn from(e: IsoError) -> Self {
+        Self::Iso(e)
+    }
+}
 
-        let mut found_architectures = Vec::<Arch>::default();
+impl From<std::io::Error> for EfiBootArchError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Iso(IsoError::Io(e))
+    }
+}
 
-        // Should be PE32 or PE32+
-        for entry in efi_boot_entries {
-            match entry.file_identifier.clone() {
-                super::filesystem::FileSystemRecordIdentifier::FileOrDir(items) => {
-                    let name = std::str::from_utf8(items.as_slice())?.trim_end_matches(";1");
-                    println!(
-                        "Entry Name as UTF8 (with ';1' trimmed if present): {name}, is file? {}, is directory? {}",
-                        entry.is_file(),
-                        entry.is_directory()
-                    );
-                    if !name.starts_with("BOOT") || !name.ends_with(".EFI") {
-                        continue;
-                    }
-
-                    let file_bytes = entry.read_file_bytes(stream, Some(PE_HEADER_READ_LIMIT))?;
-                    let machine_arch_value = pe_machine_field(&file_bytes)?;
-
-                    if let Some(arch) = Arch::from_pe32_machine_field(machine_arch_value) {
-                        found_architectures.push(arch);
-                    }
-                }
-                _ => (),
-            }
-        }
-
-        let Some(first) = found_architectures.first() else {
-            return Ok(Self::None);
-        };
-
-        if found_architectures.iter().all(|x| *x == *first) {
-            return Ok(Self::Arch(found_architectures[0]));
-        } else {
-            let mut unique = HashSet::new();
-
-            // TODO obviously don't print out here but get something useful?
-            println!(
-                "[VirtCI] Found mismatching architectures in EFI/BOOT/: {:?}",
-                found_architectures
-            );
-
-            found_architectures.retain(|x| unique.insert(*x));
-            return Ok(Self::Many(found_architectures));
+impl std::fmt::Display for EfiBootArchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Iso(e) => e.fmt(f),
+            Self::InvalidPe { file, error } => write!(f, "EFI/BOOT/{file}: {error}"),
         }
     }
+}
+
+impl std::error::Error for EfiBootArchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Iso(e) => Some(e),
+            Self::InvalidPe { error, .. } => Some(error),
+        }
+    }
+}
+
+/// If `name` starts with `BOOT` and ends with `.EFI`, such as `BOOTX64.EFI`.
+fn is_efi_boot_loader_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() >= 8
+        && bytes[..4].eq_ignore_ascii_case(b"BOOT")
+        && bytes[bytes.len() - 4..].eq_ignore_ascii_case(b".EFI")
+}
+
+fn summarize_architectures(found: Vec<Arch>) -> FoundCpuArch {
+    let mut unique = Vec::new();
+    for arch in found {
+        if !unique.contains(&arch) {
+            unique.push(arch);
+        }
+    }
+    match unique.as_slice() {
+        [] => FoundCpuArch::None,
+        [single] => FoundCpuArch::Arch(*single),
+        _ => FoundCpuArch::Many(unique),
+    }
+}
+
+/// Detects the CPU architecture from the PE machine field of each `EFI/BOOT/BOOT*.EFI` file.
+pub fn efi_boot_arch<R: Read + Seek>(
+    iso: &mut IsoImage<R>,
+) -> Result<FoundCpuArch, EfiBootArchError> {
+    let root = iso.root();
+    let Some(efi_boot) = iso.find_entry(&root, "efi/boot")? else {
+        return Ok(FoundCpuArch::NoEfiBoot);
+    };
+    if efi_boot.kind != EntryKind::Directory {
+        return Ok(FoundCpuArch::NoEfiBoot);
+    }
+
+    let mut found = Vec::new();
+    for entry in iso.read_dir(&efi_boot)? {
+        if entry.kind != EntryKind::File || !is_efi_boot_loader_name(&entry.name) {
+            continue;
+        }
+        let mut header = Vec::with_capacity(PE_HEADER_READ_LIMIT);
+        iso.open_file(&entry)?
+            .take(PE_HEADER_READ_LIMIT as u64)
+            .read_to_end(&mut header)?;
+        let machine = pe_machine_field(&header).map_err(|error| EfiBootArchError::InvalidPe {
+            file: entry.name.clone(),
+            error,
+        })?;
+        if let Some(arch) = Arch::from_pe32_machine_field(machine) {
+            found.push(arch);
+        }
+    }
+    Ok(summarize_architectures(found))
 }
 
 #[cfg(test)]
@@ -160,6 +189,31 @@ mod tests {
         bytes[start..start + 4].copy_from_slice(b"PE\0\0");
         bytes[start + 4..start + 6].copy_from_slice(&machine.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn efi_boot_loader_names() {
+        assert!(is_efi_boot_loader_name("BOOTX64.EFI"));
+        assert!(is_efi_boot_loader_name("bootaa64.efi"));
+        assert!(is_efi_boot_loader_name("BOOTRISCV64.EFI"));
+        assert!(!is_efi_boot_loader_name("grubx64.efi"));
+        assert!(!is_efi_boot_loader_name("mmx64.efi"));
+        assert!(!is_efi_boot_loader_name("BOOTX64.EFI.bak"));
+        assert!(!is_efi_boot_loader_name("BOOTEFI"));
+        assert!(!is_efi_boot_loader_name(""));
+    }
+
+    #[test]
+    fn summarize_architectures_cases() {
+        assert_eq!(summarize_architectures(vec![]), FoundCpuArch::None);
+        assert_eq!(
+            summarize_architectures(vec![Arch::X64, Arch::X64]),
+            FoundCpuArch::Arch(Arch::X64)
+        );
+        assert_eq!(
+            summarize_architectures(vec![Arch::ARM64, Arch::X64, Arch::ARM64]),
+            FoundCpuArch::Many(vec![Arch::ARM64, Arch::X64])
+        );
     }
 
     #[test]
